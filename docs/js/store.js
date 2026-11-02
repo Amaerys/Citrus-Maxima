@@ -37,7 +37,7 @@ function defaults() {
     plan: {},                 // dateKey -> [{id, goalId, start, end, status, reason, eventId}]
     prefs: {},                // learned: `${goalId}|${slotTag}` -> score
     notes: {},                // dateKey -> text
-    settings: { clientId: '', calendarIds: ['primary'], shiftCalendarId: '', pushShifts: false, driveFolder: 'My Apps', theme: 'dark' },
+    settings: { clientId: '753489712404-ra7ahu34gjl305b4ss1765idmqg7am5s.apps.googleusercontent.com', calendarIds: ['primary'], shiftCalendarId: '', pushShifts: false, driveFolder: 'My Apps', theme: 'dark' },
     google: { email: '', lastSync: 0 },
     apps: {},                 // other apps' status files from Drive: name -> json
   };
@@ -53,6 +53,7 @@ function load() {
     const s = JSON.parse(raw);
     const st = { ...defaults(), ...s, rules: { ...DEFAULT_RULES, ...(s.rules || {}) }, settings: { ...defaults().settings, ...(s.settings || {}) } };
     if (st.settings.driveFolder === 'Citrus Maxima') st.settings.driveFolder = 'My Apps'; // layout shared with Orange & Mephisto
+    if (!st.settings.clientId) st.settings.clientId = defaults().settings.clientId;
     return st;
   } catch { return defaults(); }
 }
