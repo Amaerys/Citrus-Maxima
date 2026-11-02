@@ -102,8 +102,18 @@ async function refreshAll(manual) {
     if (!S().google.email) { try { const u = await G.userInfo(); store.update(s => ({ ...s, google: { ...s.google, email: u.email } }), { remote: false }); } catch {} }
     // 3. rota files in Drive
     try { await pullRotasFromDrive(); } catch (e) { problems.push('rotas: ' + e.message); }
-    // 4. app statuses
-    try { const apps = await G.listAppStatus(S().settings.driveFolder); store.update(s => ({ ...s, apps }), { remote: false, silent: true }); } catch (e) { problems.push('apps: ' + e.message); }
+    // 4. app statuses: Drive copies + same-device localStorage copies; newer local ones are mirrored up to Drive
+    try {
+      const drive = await G.listAppStatus(S().settings.driveFolder);
+      const local = localAppStatuses();
+      for (const [name, st] of Object.entries(local)) {
+        const d = drive[name];
+        if (!d || (st.updatedAt || '') > (d.updatedAt || '')) {
+          try { await G.uploadAppStatus(S().settings.driveFolder, name, st); drive[name] = st; } catch (e) { console.warn('mirror', name, e.message); }
+        }
+      }
+      store.update(s => ({ ...s, apps: drive }), { remote: false, silent: true });
+    } catch (e) { problems.push('apps: ' + e.message); }
     // 5. calendars + events for current + next month
     try {
       rt.calendars = await G.listCalendars();
@@ -185,6 +195,25 @@ async function pushShiftsToCalendar() {
     }
     await G.syncTaggedEvents(calId, 'shift', from, to, wanted);
   }
+}
+
+// Other apps on this origin publish `citrus.status.<app>` in localStorage (see citrus-bridge in each app)
+function localAppStatuses() {
+  const out = {};
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k || !k.startsWith('citrus.status.')) continue;
+      try { const st = JSON.parse(localStorage.getItem(k)); if (st && typeof st === 'object') out[st.title || st.app || k.slice(14)] = st; } catch {}
+    }
+  } catch {}
+  return out;
+}
+// Drive copies merged with fresher same-device copies
+function mergedApps() {
+  const apps = { ...(S().apps || {}) };
+  for (const [name, st] of Object.entries(localAppStatuses())) if (!apps[name] || (st.updatedAt || '') > (apps[name].updatedAt || '')) apps[name] = st;
+  return apps;
 }
 
 function autoPickMe() {
@@ -319,7 +348,7 @@ function renderToday() {
   // plan today
   out.push(planCard(now));
   // apps
-  if (Object.keys(s.apps || {}).length) out.push(appsCard());
+  if (Object.keys(mergedApps()).length) out.push(appsCard());
   // notes
   out.push(noteCard(now));
   return out;
@@ -471,11 +500,14 @@ function moveBlock(k, b, isSuggestion = false) {
 }
 
 function appsCard() {
-  const apps = S().apps || {};
+  const apps = mergedApps();
+  const age = (iso) => { if (!iso) return ''; const m = Math.round((Date.now() - new Date(iso)) / 60000); return m < 2 ? 'just now' : m < 60 ? `${m} min ago` : m < 48 * 60 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`; };
   return h('div', { class: 'card' }, h('div', { class: 'title' }, 'Your apps'),
-    h('div', { class: 'list' }, ...Object.entries(apps).map(([name, st]) => h('div', { class: 'item' },
+    h('div', { class: 'list' }, ...Object.entries(apps).sort((a, b) => (b[1].due || 0) - (a[1].due || 0)).map(([name, st]) => h('div', { class: 'item' },
       h('div', { class: 'avatar', style: st.color ? { background: st.color + '33', color: st.color } : {} }, (st.icon || name[0]).slice(0, 2)),
-      h('div', { class: 'grow' }, h('div', { class: 'name' }, st.title || name), h('div', { class: 'meta' }, st.summary || [st.due != null ? `${st.due} due` : '', st.streak != null ? `${st.streak}-day streak` : '', st.nextDue ? `next: ${st.nextDue}` : ''].filter(Boolean).join(' · ') || 'no summary')),
+      h('div', { class: 'grow' }, h('div', { class: 'name row' }, st.title || name, st.estimatedMinutes ? h('span', { class: 'chip', style: { padding: '1px 7px', fontSize: '10px' } }, `~${st.estimatedMinutes} min`) : null),
+        h('div', { class: 'meta' }, st.summary || [st.due != null ? `${st.due} due` : '', st.streak != null ? `${st.streak}-day streak` : '', st.nextDue ? `next: ${st.nextDue}` : ''].filter(Boolean).join(' · ') || 'no summary'),
+        h('div', { class: 'tiny dim' }, age(st.updatedAt))),
       st.url ? h('a', { class: 'btn sm', href: st.url, target: '_blank', rel: 'noopener' }, 'Open') : null))));
 }
 
@@ -619,7 +651,7 @@ function renderTeam() {
 function regenerate() {
   const s = S();
   const from = rt.planFrom || startOfDay(new Date());
-  rt.suggestions = suggest(s, from, 10, rt.events, s.apps);
+  rt.suggestions = suggest(s, from, 10, rt.events, mergedApps());
 }
 function renderPlan() {
   const s = S();
@@ -756,7 +788,7 @@ function renderMore() {
   "url": "https://amaerys.github.io/Yuzu/",
   "updatedAt": "2026-11-02T12:00:00Z"
 }`),
-    Object.keys(s.apps || {}).length ? h('div', { class: 'small', style: { marginTop: '8px' } }, 'Seen: ', Object.keys(s.apps).join(', ')) : null));
+    Object.keys(mergedApps()).length ? h('div', { class: 'small', style: { marginTop: '8px' } }, 'Seen: ', Object.keys(mergedApps()).join(', ')) : null));
   // Appearance + backup
   out.push(h('div', { class: 'card' }, h('div', { class: 'title' }, 'App'),
     toggleRow('Light theme', s.settings.theme === 'light', (on) => { store.update(x => ({ ...x, settings: { ...x.settings, theme: on ? 'light' : 'dark' } }), { silent: true }); applyTheme(); }),

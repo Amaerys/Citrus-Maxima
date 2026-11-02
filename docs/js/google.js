@@ -192,6 +192,21 @@ export async function listAppStatus(rootFolderName) {
   return out;
 }
 
+// Write/replace <root>/Apps/<name>.status.json (used to mirror same-device app statuses to other devices)
+export async function uploadAppStatus(rootFolderName, name, obj) {
+  const root = await ensureFolder(rootFolderName);
+  const apps = await ensureFolder('Apps', root);
+  const fname = `${name}.status.json`;
+  const q = `'${apps}' in parents and trashed=false and name='${fname.replace(/'/g, "\\'")}'`;
+  const j = await authFetch(`${DRIVE}/files?q=${encodeURIComponent(q)}&fields=files(id)`);
+  const existing = j.files?.[0];
+  const boundary = 'citrus' + Date.now();
+  const meta = existing ? { name: fname } : { name: fname, parents: [apps] };
+  const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(obj)}\r\n--${boundary}--`;
+  const url = existing ? `${UPLOAD}/files/${existing.id}?uploadType=multipart` : `${UPLOAD}/files?uploadType=multipart`;
+  await authFetch(url, { method: existing ? 'PATCH' : 'POST', headers: { 'Content-Type': `multipart/related; boundary=${boundary}` }, body });
+}
+
 // App state in the hidden appDataFolder
 const STATE_NAME = 'citrus-maxima-state.json';
 async function findStateFile() {
