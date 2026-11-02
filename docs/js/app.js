@@ -1,9 +1,10 @@
 import * as store from './store.js';
+import { mergeStates } from './store.js';
 import * as G from './google.js';
 import { parseRotaFile, serializeRota } from './rota-parser.js';
 import { dayInfo, myDay, allPeople, isMe, sharedShifts, monthSummary, shiftWindow, UNIT_LABEL } from './model.js';
 import { suggest, dayBusy, learn, weekStartOf, weekProgress } from './planner.js';
-import { h, toast, keyOf, fromKey, addDays, startOfDay, fmtDate, fmtDateShort, fmtTime, fmtMin, fmtDur, relDay, pad2, DAY_SHORT, DAY_NAMES, MONTHS, telLink, firstName, atMin, minsOf, uid } from './util.js';
+import { h, toast, keyOf, fromKey, addDays, startOfDay, sameDay, fmtDate, fmtDateShort, fmtTime, fmtMin, fmtDur, relDay, pad2, DAY_SHORT, DAY_NAMES, MONTHS, telLink, firstName, atMin, minsOf, uid } from './util.js';
 
 // ---------------- runtime state (not persisted) ----------------
 const rt = {
@@ -28,21 +29,44 @@ async function boot() {
   rt.rotaMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
   for (const b of document.querySelectorAll('nav.tabs button')) b.addEventListener('click', () => show(b.dataset.view));
   $('#btnRefresh').addEventListener('click', () => refreshAll(true));
-  window.addEventListener('online', () => { rt.online = true; renderSync(); });
+  $('#btnMore').addEventListener('click', () => show('more'));
+  $('#btnSearch').addEventListener('click', () => openSearch());
+  document.addEventListener('keydown', (e) => {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '') || document.activeElement?.isContentEditable;
+    if (e.key === 'Escape') { document.querySelector('.search')?.remove(); document.querySelector('.sheet-bg')?.remove(); return; }
+    if (typing) return;
+    const tabs = ['today', 'rota', 'team', 'plan', 'apps'];
+    if (/^[1-5]$/.test(e.key)) { show(tabs[+e.key - 1]); e.preventDefault(); }
+    else if (e.key === '/') { openSearch(); e.preventDefault(); }
+    else if (e.key === 'r') refreshAll(true);
+    else if (e.key === ',') show('more');
+  });
+  window.addEventListener('online', () => { rt.online = true; renderSync(); flushOutbox().then(render).catch(() => {}); });
   window.addEventListener('offline', () => { rt.online = false; renderSync(); });
   store.subscribe(() => render());
   store.onRemoteSync(scheduleRemoteSave);
   loadCachedEvents();
+  if (S().me && Object.keys(S().rotas).length) regenerate();
   show(location.hash.replace('#', '') || 'today');
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
   const cid = S().settings.clientId;
   if (cid && rt.online) {
     try { await G.init(cid); } catch (e) { console.warn(e); }
     if (G.isSignedIn()) refreshAll(false);
-    else G.signIn({ silent: true }).then(() => refreshAll(false)).catch(() => {});
+    else if (G.wasSignedIn()) G.signIn({ silent: true }).then(() => refreshAll(false)).catch(() => { G.auth.needsSignIn = true; render(); });
   }
   G.onAuthChange(() => { renderSync(); render(); });
+  // keep fresh: re-sync when the app comes back to the foreground after a while
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && G.isSignedIn() && Date.now() - (S().google.lastSync || 0) > 10 * 60000) refreshAll(false); });
   renderSync();
+}
+
+// Shown at the top of every screen when the Google session needs a tap to come back
+function authBanner() {
+  if (!G.auth.needsSignIn || !rt.online) return null;
+  return h('div', { class: 'banner' }, h('span', { class: 'grow' }, 'Google sign-in expired — your calendar and Drive are paused.'),
+    h('button', { class: 'btn sm primary', onClick: async () => { try { await G.signIn(); refreshAll(true); } catch (e) { toast(e.message, 'err'); } } }, 'Sign in'));
 }
 
 function show(view) {
@@ -55,9 +79,9 @@ function show(view) {
 }
 
 function render() {
-  const fn = { today: renderToday, rota: renderRota, team: renderTeam, plan: renderPlan, more: renderMore }[rt.view];
+  const fn = { today: renderToday, rota: renderRota, team: renderTeam, plan: renderPlan, apps: renderApps, more: renderMore }[rt.view] || renderToday;
   const el = $(`#view-${rt.view}`);
-  el.replaceChildren(...[fn()].flat());
+  el.replaceChildren(...[authBanner(), fn()].flat().filter(Boolean));
 }
 
 function applyTheme() { document.documentElement.dataset.theme = S().settings.theme || 'dark'; }
@@ -81,7 +105,7 @@ function scheduleRemoteSave() {
 function stripForRemote(s) { return { ...s, apps: undefined }; }
 
 async function refreshAll(manual) {
-  if (!G.isSignedIn()) { if (manual) toast(S().settings.clientId ? 'Sign in to Google in More' : 'Add your Google client ID in More'); render(); return; }
+  if (!G.isSignedIn()) { if (manual) toast(S().settings.clientId ? 'Sign in to Google in Settings' : 'Add your Google client ID in Settings'); render(); return; }
   if (!rt.online) { if (manual) toast('You are offline'); return; }
   rt.syncing = true; renderSync();
   const problems = [];
@@ -89,43 +113,41 @@ async function refreshAll(manual) {
     // 1. remote state (newer wins, rotas merged)
     try {
       const remote = await G.loadRemoteState(S().settings.driveFolder);
-      const local = S();
-      if (remote && remote.updatedAt > local.updatedAt + 1000) {
-        const merged = { ...remote, rotas: { ...(local.rotas || {}), ...(remote.rotas || {}) }, settings: { ...remote.settings, clientId: local.settings.clientId || remote.settings?.clientId } };
+      if (remote && remote.updatedAt !== S().updatedAt) {
+        const merged = mergeStates(S(), remote);
+        merged.updatedAt = Math.max(S().updatedAt, remote.updatedAt);
         store.replaceState(merged);
-      } else if (remote) {
-        const rotas = { ...(remote.rotas || {}), ...(local.rotas || {}) };
-        if (Object.keys(rotas).length !== Object.keys(local.rotas).length) store.update(s => ({ ...s, rotas }), { remote: false });
-      }
+        if (remote.updatedAt < S().updatedAt) scheduleRemoteSave();
+      } else if (!remote) scheduleRemoteSave();
     } catch (e) { problems.push('state: ' + e.message); }
-    // 2. user email
-    if (!S().google.email) { try { const u = await G.userInfo(); store.update(s => ({ ...s, google: { ...s.google, email: u.email } }), { remote: false }); } catch {} }
-    // 3. rota files in Drive
-    try { await pullRotasFromDrive(); } catch (e) { problems.push('rotas: ' + e.message); }
-    // 4. app statuses: Drive copies + same-device localStorage copies; newer local ones are mirrored up to Drive
-    try {
-      const drive = await G.listAppStatus(S().settings.driveFolder);
-      const local = localAppStatuses();
-      for (const [name, st] of Object.entries(local)) {
-        const d = drive[name];
-        if (!d || (st.updatedAt || '') > (d.updatedAt || '')) {
-          try { await G.uploadAppStatus(S().settings.driveFolder, name, st); drive[name] = st; } catch (e) { console.warn('mirror', name, e.message); }
+    // 2–5 run in parallel: email, rota files, app statuses, calendars
+    const step = async (label, fn) => { try { await fn(); } catch (e) { problems.push(`${label}: ${e.message}`); } };
+    await Promise.all([
+      step('account', async () => { if (!S().google.email) { const u = await G.userInfo(); store.update(s => ({ ...s, google: { ...s.google, email: u.email } }), { remote: false, silent: true }); } }),
+      step('rotas', pullRotasFromDrive),
+      step('apps', async () => {
+        const drive = await G.listAppStatus(S().settings.driveFolder);
+        const local = localAppStatuses();
+        for (const [name, st] of Object.entries(local)) {
+          const d = drive[name];
+          if (!d || (st.updatedAt || '') > (d.updatedAt || '')) { try { await G.uploadAppStatus(S().settings.driveFolder, name, st); drive[name] = st; } catch (e) { console.warn('mirror', name, e.message); } }
         }
-      }
-      store.update(s => ({ ...s, apps: drive }), { remote: false, silent: true });
-    } catch (e) { problems.push('apps: ' + e.message); }
-    // 5. calendars + events for current + next month
-    try {
-      rt.calendars = await G.listCalendars();
-      const now = new Date();
-      await loadEvents(new Date(now.getFullYear(), now.getMonth(), 1), true);
-      await loadEvents(new Date(now.getFullYear(), now.getMonth() + 1, 1), true);
-    } catch (e) { problems.push('calendar: ' + e.message); }
+        store.update(s => ({ ...s, apps: drive }), { remote: false, silent: true });
+      }),
+      step('calendar', async () => {
+        rt.calendars = await G.listCalendars();
+        const now = new Date();
+        await Promise.all([loadEvents(new Date(now.getFullYear(), now.getMonth(), 1), true), loadEvents(new Date(now.getFullYear(), now.getMonth() + 1, 1), true)]);
+      }),
+    ]);
+    // 5b. queued calendar writes
+    try { await flushOutbox(); } catch (e) { problems.push('outbox: ' + e.message); }
     // 6. push shifts
     if (S().settings.pushShifts) { try { await pushShiftsToCalendar(); } catch (e) { problems.push('shift push: ' + e.message); } }
     store.update(s => ({ ...s, google: { ...s.google, lastSync: Date.now() } }), { remote: false, silent: true });
     regenerate();
-    if (manual) toast(problems.length ? 'Synced with issues: ' + problems.join('; ') : 'Synced', problems.length ? 'err' : 'ok');
+    rt.lastProblems = problems; rt.lastSyncAt = Date.now();
+    if (manual) toast(problems.length ? 'Synced with issues — see More › Diagnostics' : 'Synced', problems.length ? 'err' : 'ok');
     else if (problems.length) console.warn(problems);
   } finally { rt.syncing = false; renderSync(); render(); }
 }
@@ -173,7 +195,7 @@ async function pullRotasFromDrive() {
       added++;
     } catch (e) { console.warn('rota parse failed', f.name, e.message); toast(`Could not read ${f.name}: ${e.message}`, 'err'); }
   }
-  if (added) { toast(`Imported ${added} rota file${added > 1 ? 's' : ''} from Drive`, 'ok'); autoPickMe(); }
+  if (added) { toast(`Imported ${added} rota file${added > 1 ? 's' : ''} from Drive`, 'ok'); autoPickMe(); regenerate(); }
 }
 
 async function pushShiftsToCalendar() {
@@ -217,6 +239,27 @@ function mergedApps() {
   return apps;
 }
 
+// Calendar writes that could not be sent are kept and retried on the next sync / when back online
+async function calendarCreate(calendarId, payload, meta = {}) {
+  if (!rt.online || !G.isSignedIn()) { queueOutbox({ type: 'create', calendarId, payload, meta }); return null; }
+  try { return await G.createEvent(calendarId, payload); }
+  catch (e) { if (/network|expired|not signed/i.test(e.message)) { queueOutbox({ type: 'create', calendarId, payload, meta }); return null; } throw e; }
+}
+function queueOutbox(op) { store.update(s => ({ ...s, outbox: [...(s.outbox || []), { ...op, id: uid(), at: Date.now() }] }), { silent: true, remote: false }); toast('Saved — will reach your calendar when online'); }
+async function flushOutbox() {
+  const ops = S().outbox || []; if (!ops.length || !G.isSignedIn() || !rt.online) return;
+  const left = [];
+  for (const op of ops) {
+    try {
+      if (op.type === 'create') {
+        const ev = await G.createEvent(op.calendarId, { ...op.payload, start: new Date(op.payload.start), end: new Date(op.payload.end) });
+        if (op.meta?.blockId && op.meta?.dateKey) store.update(s => ({ ...s, plan: { ...s.plan, [op.meta.dateKey]: (s.plan[op.meta.dateKey] || []).map(p => p.id === op.meta.blockId ? { ...p, eventId: ev.id, calendarId: ev.calendarId } : p) } }), { silent: true });
+      } else if (op.type === 'delete') await G.deleteEvent(op.calendarId, op.eventId);
+    } catch (e) { if (!/404|410/.test(e.message)) left.push(op); }
+  }
+  store.update(s => ({ ...s, outbox: left }), { silent: true });
+}
+
 function autoPickMe() {
   if (S().me) return;
   const people = allPeople(S()).filter(p => p.units.includes('gp'));
@@ -234,7 +277,7 @@ async function importFiles(fileList) {
       ok++;
     } catch (e) { toast(`${f.name}: ${e.message}`, 'err'); }
   }
-  if (ok) { toast(`Imported ${ok} rota${ok > 1 ? 's' : ''}`, 'ok'); autoPickMe(); render(); }
+  if (ok) { toast(`Imported ${ok} rota${ok > 1 ? 's' : ''}`, 'ok'); autoPickMe(); regenerate(); render(); }
 }
 
 function importButton(label = 'Import rota files') {
@@ -313,46 +356,127 @@ function interpretFor(rota, code) { return interpretCode(code, rota.legend, rota
 function renderToday() {
   const s = S();
   const now = new Date();
-  const out = [];
-  if (!Object.keys(s.rotas).length) out.push(onboardingCard());
+  const main = [], side = [];
+  if (!Object.keys(s.rotas).length) main.push(onboardingCard());
   const { info, today, overnightTail, afterNight } = myDay(s, now);
   const tomorrow = myDay(s, addDays(now, 1));
 
-  // hero
-  const hero = h('div', { class: 'card hero', style: today?.shift.type === 'N' ? { '--accent-soft': 'var(--night-soft)' } : {} });
-  hero.append(h('div', { class: 'title' }, `${DAY_NAMES[now.getDay()]} · ${fmtDate(now)}`));
-  if (!info.hasRota) hero.append(h('div', { class: 'big' }, 'No rota for this month'), h('div', { class: 'sub' }, 'Import the Excel files below or drop them in Drive › Citrus Maxima › Rotas'));
-  else if (!s.me) hero.append(h('div', { class: 'big' }, 'Who are you?'), h('div', { class: 'sub' }, 'Pick yourself in More › Me'));
+  // hero: words on the left, the day dial on the right
+  const hero = h('div', { class: 'card hero', style: today?.shift.type === 'N' ? { '--accent-soft': 'var(--night-soft)' } : afterNight ? { '--accent-soft': 'var(--night-soft)' } : {} });
+  const words = h('div', {});
+  words.append(h('div', { class: 'title' }, `${DAY_NAMES[now.getDay()]} ${fmtDate(now)}`));
+  if (!info.hasRota) words.append(h('div', { class: 'big' }, 'No rota for this month'), h('div', { class: 'sub' }, 'Import the Excel files, or drop them in Drive › My Apps › Rotas.'));
+  else if (!s.me) words.append(h('div', { class: 'big' }, 'Who are you?'), h('div', { class: 'sub' }, 'Pick your row in Settings › Me.'));
   else if (today) {
     const w = today.window;
-    hero.append(h('div', { class: 'big' }, today.shift.label),
-      h('div', { class: 'sub' }, `${fmtTime(w.start)} – ${fmtTime(w.end)}${today.shift.hours.overnight ? ' (overnight)' : ''} · ${fmtDur(today.shift.hours.durationMin)} · code ${today.code}`),
+    words.append(h('div', { class: 'big' }, today.shift.label),
+      h('div', { class: 'sub' }, `${fmtTime(w.start)}–${fmtTime(w.end)}${today.shift.hours.overnight ? ', overnight' : ''} · ${fmtDur(today.shift.hours.durationMin)} · ${today.code}`),
       countdown(w),
-      today.mci ? mciBadge() : null);
-  } else if (info.mine && info.mine.shift.kind === 'leave') hero.append(h('div', { class: 'big' }, info.mine.shift.label), h('div', { class: 'sub' }, 'Enjoy it.'));
-  else hero.append(h('div', { class: 'big' }, afterNight ? 'Off (post-night)' : 'Day off'), h('div', { class: 'sub' }, afterNight ? `Your night ends ${fmtTime(overnightTail.window.end)} — recover first, plan light.` : 'A free day. The planner has ideas below.'));
-  if (overnightTail && today) hero.append(h('div', { class: 'small muted', style: { marginTop: '6px' } }, `⚠ Night from yesterday ends ${fmtTime(overnightTail.window.end)}`));
-  if (tomorrow.today) hero.append(h('div', { class: 'small', style: { marginTop: '10px' } }, h('span', { class: 'muted' }, 'Tomorrow: '), `${tomorrow.today.shift.label} ${fmtMin(tomorrow.today.shift.hours.start)}–${fmtMin(tomorrow.today.shift.hours.end)}`));
-  else if (info.hasRota && s.me) hero.append(h('div', { class: 'small', style: { marginTop: '10px' } }, h('span', { class: 'muted' }, 'Tomorrow: '), tomorrow.info.mine?.shift.kind === 'leave' ? tomorrow.info.mine.shift.label : 'off'));
-  out.push(hero);
+      today.mci ? h('div', { style: { marginTop: '8px' } }, mciBadge()) : null);
+  } else if (info.mine && info.mine.shift.kind === 'leave') words.append(h('div', { class: 'big' }, info.mine.shift.label), h('div', { class: 'sub' }, 'Enjoy it.'));
+  else words.append(h('div', { class: 'big' }, afterNight ? 'Off, after a night' : 'Day off'), h('div', { class: 'sub' }, afterNight ? `Your night ends ${fmtTime(overnightTail.window.end)}. Recover first; the plan stays light.` : 'A free day. The planner has ideas below.'));
+  if (overnightTail && today) words.append(h('div', { class: 'small muted', style: { marginTop: '6px' } }, `Night from yesterday ends ${fmtTime(overnightTail.window.end)}`));
+  const tmr = tomorrow.today ? `${tomorrow.today.shift.label} ${fmtMin(tomorrow.today.shift.hours.start)}–${fmtMin(tomorrow.today.shift.hours.end)}` : tomorrow.info.mine?.shift.kind === 'leave' ? tomorrow.info.mine.shift.label : (info.hasRota && s.me ? 'off' : '');
+  if (tmr) words.append(h('div', { class: 'small', style: { marginTop: '10px' } }, h('span', { class: 'muted' }, 'Tomorrow '), tmr));
+  hero.append(h('div', { class: 'hero-grid' }, words, info.hasRota && s.me ? dayDial(now) : null));
+  hero.append(weekStrip(now));
+  main.push(hero);
 
-  // with me
   if (today) {
-    out.push(h('div', { class: 'card' }, h('div', { class: 'title' }, `With you at ${today.shift.site || 'your site'}`),
-      info.withMe.length ? h('div', { class: 'people' }, ...info.withMe.map(e => personPill(e))) : h('div', { class: 'muted small' }, 'Nobody else on your shift (per GP rota)'),
+    main.push(h('div', { class: 'card' }, h('div', { class: 'title' }, `With you at ${today.shift.site || 'your site'}`),
+      info.withMe.length ? h('div', { class: 'people' }, ...info.withMe.map(e => personPill(e))) : h('div', { class: 'muted small' }, 'Nobody else on your shift, per the GP rota.'),
       info.alsoAtSite.length ? h('div', { style: { marginTop: '10px' } }, h('div', { class: 'tiny dim', style: { marginBottom: '4px' } }, 'Other shift at the same site (handover)'), h('div', { class: 'people' }, ...info.alsoAtSite.map(e => personPill(e)))) : null));
   }
-  // on call
-  if (info.hasRota) out.push(onCallCard(info));
-  // calendar
-  out.push(eventsCard(now));
-  // plan today
-  out.push(planCard(now));
-  // apps
-  if (Object.keys(mergedApps()).length) out.push(appsCard());
-  // notes
-  out.push(noteCard(now));
-  return out;
+  if (info.hasRota) main.push(onCallCard(info));
+  main.push(planCard(now));
+  side.push(eventsCard(now));
+  if (Object.keys(mergedApps()).length) side.push(appsCard());
+  side.push(briefCard(now));
+  side.push(noteCard(now));
+  return h('div', { class: 'cols' }, h('div', {}, ...main), h('div', {}, ...side));
+}
+
+// ---- the day dial: 24 hours around a ring; shift, commute, sleep, calendar and plan drawn as arcs ----
+function dayDial(date) {
+  const s = S();
+  const k = keyOf(date);
+  const { busy, today, overnightTail } = dayBusy(s, date, rt.events[k] || []);
+  const R = 100, C = 110, rOuter = 92, w = 14;
+  const ang = (min) => (min / 1440) * 2 * Math.PI - Math.PI / 2;
+  const pt = (r, min) => [C + r * Math.cos(ang(min)), C + r * Math.sin(ang(min))];
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const el = (tag, attrs = {}, ...kids) => { const e = document.createElementNS(svgNS, tag); for (const [k2, v] of Object.entries(attrs)) if (v != null) e.setAttribute(k2, v); for (const c of kids.flat()) if (c) e.append(c); return e; };
+  const arc = (r, a, b, cls, extra = {}) => {
+    a = Math.max(0, Math.min(1440, a)); b = Math.max(0, Math.min(1440, b)); if (b - a < 2) return null;
+    if (b - a >= 1439) return el('circle', { cx: C, cy: C, r, fill: 'none', 'stroke-width': w, ...extra });
+    const [x1, y1] = pt(r, a), [x2, y2] = pt(r, b);
+    const large = b - a > 720 ? 1 : 0;
+    return el('path', { d: `M${x1.toFixed(1)},${y1.toFixed(1)} A${r},${r} 0 ${large} 1 ${x2.toFixed(1)},${y2.toFixed(1)}`, fill: 'none', 'stroke-width': w, 'stroke-linecap': 'butt', ...extra });
+  };
+  const paths = [];
+  const push = (r, a, b, stroke, extra = {}) => { const p = arc(r, a, b, '', extra); if (p) { p.setAttribute('stroke', stroke); paths.push(p); } };
+  // base ring
+  paths.push(el('circle', { cx: C, cy: C, r: rOuter, fill: 'none', stroke: 'var(--line)', 'stroke-width': w }));
+  for (const b of busy) {
+    const color = b.kind === 'shift' ? (today?.shift.type === 'N' || overnightTail && b.start === 0 ? 'var(--night)' : 'var(--day)') : b.kind === 'sleep' ? 'var(--line2)' : b.kind === 'event' ? 'var(--blue)' : b.kind === 'protected' ? 'var(--dim)' : 'var(--orange)';
+    push(rOuter, b.start, Math.min(1440, b.end), color, b.kind === 'sleep' ? { 'stroke-dasharray': '2 3' } : {});
+  }
+  // commute = thin inner marks around shift
+  for (const p of [...(rt.suggestions[k] || [])]) push(rOuter - w - 4, p.start, p.end, p.color || 'var(--orange)', { 'stroke-width': 5, 'stroke-dasharray': '3 2' });
+  for (const p of (s.plan[k] || []).filter(x => x.status === 'accepted' || x.status === 'done')) push(rOuter - w - 4, p.start, p.end, s.goals.find(g => g.id === p.goalId)?.color || p.color || 'var(--orange)', { 'stroke-width': 5 });
+  // hour ticks
+  const ticks = [];
+  for (let hh = 0; hh < 24; hh += 3) { const [x1, y1] = pt(rOuter + w / 2 + 3, hh * 60), [x2, y2] = pt(rOuter + w / 2 + (hh % 6 ? 6 : 9), hh * 60); ticks.push(el('line', { x1, y1, x2, y2, stroke: 'var(--dim)', 'stroke-width': 1.5 })); }
+  const labels = [0, 6, 12, 18].map(hh => { const [x, y] = pt(rOuter - w - 16, hh * 60); return el('text', { x, y: y + 3.5, 'text-anchor': 'middle', 'font-size': 9, fill: 'var(--dim)' }, String(hh)); });
+  // now marker
+  const nowMin = sameDay(date, new Date()) ? minsOf(new Date()) : null;
+  const marker = nowMin == null ? null : (() => { const [x1, y1] = pt(rOuter - w / 2 - 3, nowMin), [x2, y2] = pt(rOuter + w / 2 + 3, nowMin); return el('line', { x1, y1, x2, y2, stroke: 'var(--orange)', 'stroke-width': 3, 'stroke-linecap': 'round', class: 'now' }); })();
+  const centre = today ? [el('text', { x: C, y: C - 4, 'text-anchor': 'middle', 'font-size': 20, 'font-weight': 800, fill: 'var(--text)' }, today.code), el('text', { x: C, y: C + 14, 'text-anchor': 'middle', 'font-size': 10, fill: 'var(--muted)' }, `${fmtMin(today.shift.hours.start)}–${fmtMin(today.shift.hours.end)}`)]
+    : [el('text', { x: C, y: C + 5, 'text-anchor': 'middle', 'font-size': 14, 'font-weight': 700, fill: 'var(--muted)' }, overnightTail ? 'post-night' : 'free')];
+  const svg = el('svg', { viewBox: `0 0 ${2 * C} ${2 * C}`, class: 'dial', role: 'img', 'aria-label': 'Your day as a 24-hour ring' }, ...paths, ...ticks, ...labels, marker, ...centre);
+  if (today?.mci) svg.append(el('circle', { cx: C, cy: C, r: rOuter + w / 2 + 2, fill: 'none', stroke: 'var(--cyan)', 'stroke-width': 1.5, opacity: .8 }));
+  return svg;
+}
+
+// next 7 days at a glance
+function weekStrip(from) {
+  const s = S();
+  const strip = h('div', { class: 'week', style: { marginTop: '14px' } });
+  for (let i = 0; i < 7; i++) {
+    const d = addDays(from, i); const info = dayInfo(s, d); const sh = info.mine?.shift;
+    const cls = !sh || sh.kind === 'off' ? 'off' : sh.kind === 'leave' ? 'leave' : (/^[DNE]$/.test(sh.type) ? sh.type : 'other');
+    strip.append(h('div', { class: `wd ${i === 0 ? 'today' : ''}`, onClick: () => { rt.rotaSel = d; daySheet(d); } },
+      h('div', { class: 'd' }, DAY_SHORT[d.getDay()]), h('div', { class: 'n' }, d.getDate()),
+      h('span', { class: `code ${cls}`, style: cls === 'off' ? { color: 'var(--dim)' } : {} }, !info.mine || sh.kind === 'off' ? '·' : sh.kind === 'leave' ? 'L' : info.mine.code)));
+  }
+  return strip;
+}
+
+// a plain-language brief you can copy or share (also what a morning notification would say)
+function briefText(date) {
+  const s = S();
+  const { info, today, overnightTail } = myDay(s, date);
+  const lines = [`${DAY_NAMES[date.getDay()]} ${fmtDate(date)}`];
+  if (today) {
+    lines.push(`${today.shift.label}, ${fmtTime(today.window.start)}–${fmtTime(today.window.end)} (${today.code})${today.mci ? ' — MCI 2nd physician' : ''}`);
+    if (info.withMe.length) lines.push(`With you: ${info.withMe.map(e => firstName(e.person.name)).join(', ')}`);
+  } else if (overnightTail) lines.push(`Off after your night (ends ${fmtTime(overnightTail.window.end)})`);
+  else if (info.mine?.shift.kind === 'leave') lines.push(info.mine.shift.label);
+  else if (info.hasRota) lines.push('Day off');
+  const fsed = info.fsed.map(e => `${firstName(e.person.name)} ${e.code}`).join(', '); if (fsed) lines.push(`FSED: ${fsed}`);
+  const uv = info.uv.map(e => firstName(e.person.name)).join(', '); if (uv) lines.push(`Upper Village specialist: ${uv}`);
+  const evs = (rt.events[keyOf(date)] || []).sort((a, b) => a.start - b.start).map(e => `${e.allDay ? 'all day' : fmtTime(e.start)} ${e.title}`); if (evs.length) lines.push(`Calendar: ${evs.join('; ')}`);
+  const plan = [...(s.plan[keyOf(date)] || []).filter(p => p.status === 'accepted' || p.status === 'done'), ...(rt.suggestions[keyOf(date)] || [])].sort((a, b) => a.start - b.start).map(p => `${fmtMin(p.start)} ${p.title}${p.status === 'suggested' ? ' (suggested)' : ''}`);
+  if (plan.length) lines.push(`Plan: ${plan.join('; ')}`);
+  const tmr = myDay(s, addDays(date, 1)); if (tmr.today) lines.push(`Tomorrow: ${tmr.today.shift.label} ${fmtMin(tmr.today.shift.hours.start)}`);
+  return lines.join('\n');
+}
+function briefCard(date) {
+  const text = briefText(date);
+  return h('div', { class: 'card' }, h('div', { class: 'row' }, h('div', { class: 'title grow' }, 'Brief'),
+      navigator.share ? h('button', { class: 'btn sm ghost', onClick: () => navigator.share({ title: 'Today', text }).catch(() => {}) }, 'Share') : null,
+      h('button', { class: 'btn sm ghost', onClick: async () => { try { await navigator.clipboard.writeText(text); toast('Copied', 'ok'); } catch { toast('Could not copy'); } } }, 'Copy')),
+    h('div', { class: 'brief muted' }, text));
 }
 
 function mciBadge(short = false) {
@@ -371,7 +495,7 @@ function onboardingCard() {
   dz.addEventListener('dragleave', () => dz.classList.remove('over'));
   dz.addEventListener('drop', e => { e.preventDefault(); dz.classList.remove('over'); importFiles([...e.dataTransfer.files]); });
   return h('div', { class: 'card' }, h('div', { class: 'title' }, 'Get started'), dz,
-    h('div', { class: 'small muted', style: { marginTop: '10px' } }, 'Or sign in with Google in More and put the files in Drive › Citrus Maxima › Rotas — they import automatically.'));
+    h('div', { class: 'small muted', style: { marginTop: '10px' } }, 'Or sign in with Google in Settings and put the files in Drive › My Apps › Rotas — they import automatically.'));
 }
 
 function onCallCard(info) {
@@ -392,7 +516,7 @@ function eventsCard(date) {
   const quick = h('form', { class: 'row', style: { marginTop: '8px' }, onSubmit: async (e) => {
     e.preventDefault(); const v = quick.q.value.trim(); if (!v) return;
     const parsed = parseQuick(v, date);
-    if (!G.isSignedIn()) return toast('Sign in to Google to add events');
+    if (!G.isSignedIn()) return toast('Sign in to Google (Settings) to add events');
     try { const ev = await G.createEvent(S().settings.calendarIds?.[0] || 'primary', { ...parsed, tag: 'quick' }); (rt.events[keyOf(ev.start)] ||= []).push(ev); cacheEvents(); quick.reset(); toast('Added to calendar', 'ok'); render(); }
     catch (err) { toast(err.message, 'err'); }
   } }, h('input', { name: 'q', placeholder: 'Quick add: "Dentist Tue 3pm 1h"', style: { flex: 1, background: 'var(--bg2)', border: '1px solid var(--line)', borderRadius: '10px', padding: '9px 12px' } }), h('button', { class: 'btn sm primary' }, '+'));
@@ -401,7 +525,7 @@ function eventsCard(date) {
       h('div', { class: 'col', style: { minWidth: '52px' } }, h('b', { class: 'small' }, ev.allDay ? 'all day' : fmtTime(ev.start)), ev.allDay ? null : h('span', { class: 'tiny dim' }, fmtTime(ev.end))),
       h('div', { class: 'grow' }, h('div', { class: 'name ellipsis' }, ev.title), ev.location ? h('div', { class: 'meta ellipsis' }, ev.location) : null),
       ev.htmlLink ? h('a', { href: ev.htmlLink, target: '_blank', class: 'btn sm ghost' }, '↗') : null)))
-      : h('div', { class: 'muted small' }, G.isSignedIn() ? 'Nothing in your calendar' : 'Sign in to Google (More) to see your calendar here'),
+      : h('div', { class: 'muted small' }, G.isSignedIn() ? 'Nothing in your calendar' : 'Sign in to Google (Settings) to see your calendar here'),
     quick);
 }
 
@@ -457,26 +581,26 @@ function blockRow(b, date) {
 }
 
 async function acceptBlock(k, b, { silent = false } = {}) {
-  const block = { ...b, status: 'accepted' }; delete block._acc;
+  const block = { ...b, status: 'accepted', at: Date.now() }; delete block._acc;
   store.update(s => ({ ...s, plan: { ...s.plan, [k]: [...(s.plan[k] || []).filter(p => p.id !== b.id), block] }, prefs: learn(s, b, +1) }), { silent: true });
   rt.suggestions[k] = (rt.suggestions[k] || []).filter(x => x.id !== b.id);
   if (G.isSignedIn() && S().settings.pushPlan !== false) {
     try {
       const date = fromKey(k);
-      const ev = await G.createEvent(S().settings.calendarIds?.[0] || 'primary', { title: b.title, start: atMin(date, b.start), end: atMin(date, b.end), description: b.reason, tag: 'plan' });
-      store.update(s => ({ ...s, plan: { ...s.plan, [k]: (s.plan[k] || []).map(p => p.id === b.id ? { ...p, eventId: ev.id, calendarId: ev.calendarId } : p) } }), { silent: true });
+      const ev = await calendarCreate(S().settings.calendarIds?.[0] || 'primary', { title: b.title, start: atMin(date, b.start), end: atMin(date, b.end), description: b.reason, tag: 'plan' }, { blockId: b.id, dateKey: k });
+      if (ev) store.update(s => ({ ...s, plan: { ...s.plan, [k]: (s.plan[k] || []).map(p => p.id === b.id ? { ...p, eventId: ev.id, calendarId: ev.calendarId } : p) } }), { silent: true });
     } catch (e) { if (!silent) toast('Saved locally; calendar: ' + e.message, 'err'); }
   }
   publishPlanSoon();
   if (!silent) { toast(`${b.title} planned`, 'ok'); render(); }
 }
 async function rejectBlock(k, b) {
-  store.update(s => ({ ...s, plan: { ...s.plan, [k]: [...(s.plan[k] || []).filter(p => p.id !== b.id), { ...b, status: 'rejected' }] }, prefs: learn(s, b, -2) }), { silent: true });
+  store.update(s => ({ ...s, plan: { ...s.plan, [k]: [...(s.plan[k] || []).filter(p => p.id !== b.id), { ...b, status: 'rejected', at: Date.now() }] }, prefs: learn(s, b, -2) }), { silent: true });
   rt.suggestions[k] = (rt.suggestions[k] || []).filter(x => x.id !== b.id);
   regenerate(); render();
 }
 async function removeBlock(k, b) {
-  if (b.eventId && G.isSignedIn()) { try { await G.deleteEvent(b.calendarId || 'primary', b.eventId); } catch {} }
+  if (b.eventId) { try { if (!rt.online) throw new Error('network'); await G.deleteEvent(b.calendarId || 'primary', b.eventId); } catch (e) { if (/network|expired/i.test(e.message)) queueOutbox({ type: 'delete', calendarId: b.calendarId || 'primary', eventId: b.eventId }); } }
   store.update(s => ({ ...s, plan: { ...s.plan, [k]: (s.plan[k] || []).filter(p => p.id !== b.id) } }));
   publishPlanSoon();
 }
@@ -577,9 +701,10 @@ function renderRota() {
     const cls = !shift ? 'off' : shift.kind === 'leave' ? 'leave' : shift.kind === 'off' ? 'off' : (/^[DNE]$/.test(shift.type) ? shift.type : 'other');
     const evs = rt.events[keyOf(date)] || [];
     const plan = (s.plan[keyOf(date)] || []).filter(p => p.status === 'accepted');
-    const cell = h('div', { class: `day ${keyOf(date) === today ? 'today' : ''} ${[5, 6].includes(date.getDay()) ? 'weekend' : ''} ${rt.rotaSel && keyOf(rt.rotaSel) === keyOf(date) ? 'sel' : ''} ${mine?.mci ? 'mci' : ''}`, onClick: () => { rt.rotaSel = date; daySheet(date); } },
+    const cell = h('div', { class: `day ${keyOf(date) === today ? 'today' : ''} ${[5, 6].includes(date.getDay()) ? 'weekend' : ''} ${rt.rotaSel && keyOf(rt.rotaSel) === keyOf(date) ? 'sel' : ''} ${mine?.mci ? 'mci' : ''} ${mine?.swap ? 'swap' : ''}`, onClick: () => { rt.rotaSel = date; daySheet(date); } },
       h('span', { class: 'n' }, d),
       h('span', { class: `code ${cls}` }, !mine ? '·' : shift.kind === 'off' ? '·' : shift.kind === 'leave' ? 'L' : mine.code),
+      mine && shift.kind === 'work' && info.withMe.length ? h('span', { class: 'tiny dim with' }, `+${info.withMe.length}`) : null,
       (evs.length || plan.length) ? h('span', { class: 'dots' }, ...Array.from({ length: Math.min(3, evs.length + plan.length) }, () => h('i'))) : null);
     grid.append(cell);
   }
@@ -595,7 +720,8 @@ function renderRota() {
     h('div', { class: 'row', style: { marginTop: '10px' } }, importButton('Import / update files'), G.isSignedIn() ? h('button', { class: 'btn', onClick: () => refreshAll(true) }, '☁ Pull from Drive') : null)));
   const gp = rotas.find(r => r.unitKind === 'gp');
   if (gp) out.push(h('div', { class: 'card' }, h('div', { class: 'title' }, 'Shift codes'), h('div', { class: 'kv' }, ...gp.legendList.filter(e => e.code).flatMap(e => [h('b', {}, e.code), h('span', {}, [e.desc, e.hoursText].filter(Boolean).join(' · '))]))));
-  return out;
+  // desktop: month grid on the left, everything else on the right
+  return [head, h('div', { class: 'cols' }, h('div', {}, out[1]), h('div', {}, ...out.slice(2)))];
 }
 function stat(v, l) { return h('div', { class: 'stat' }, h('b', {}, v), h('span', {}, l)); }
 
@@ -626,8 +752,10 @@ function daySheet(date) {
   if (evs.length || plan.length) content.push(h('div', { class: 'card' }, h('div', { class: 'title' }, 'Calendar & plan'),
     ...evs.map(ev => h('div', { class: 'row small', style: { padding: '4px 0' } }, h('b', {}, ev.allDay ? 'all day' : fmtTime(ev.start)), h('span', {}, ev.title))),
     ...plan.map(p => h('div', { class: 'row small', style: { padding: '4px 0' } }, h('b', {}, fmtMin(p.start)), h('span', { style: { color: s.goals.find(g => g.id === p.goalId)?.color } }, p.title), p.status === 'done' ? '✓' : null))));
-  content.push(h('div', { class: 'row' }, h('button', { class: 'btn grow', onClick: () => { document.querySelector('.sheet-bg')?.remove(); rt.planFrom = startOfDay(date); regenerate(); show('plan'); } }, 'Plan this day'),
-    h('button', { class: 'btn grow', onClick: () => { document.querySelector('.sheet-bg')?.remove(); swapHelper(date); } }, 'Who could cover?')));
+  if (info.mine?.swap) content.splice(1, 0, h('div', { class: 'row small', style: { margin: '6px 0 10px' } }, h('span', { class: 'chip swap' }, 'corrected'), h('span', { class: 'muted' }, [info.mine.swap.with ? `swapped with ${info.mine.swap.with}` : '', info.mine.swap.note].filter(Boolean).join(' · '))));
+  content.push(h('div', { class: 'row wrap' }, h('button', { class: 'btn grow', onClick: () => { document.querySelector('.sheet-bg')?.remove(); rt.planFrom = startOfDay(date); regenerate(); show('plan'); } }, 'Plan this day'),
+    h('button', { class: 'btn grow', onClick: () => { document.querySelector('.sheet-bg')?.remove(); swapHelper(date); } }, 'Who could cover?'),
+    h('button', { class: 'btn grow', onClick: () => { document.querySelector('.sheet-bg')?.remove(); swapSheet(date); } }, info.mine?.swap ? 'Edit correction' : 'Correct this day')));
   sheet(content);
 }
 
@@ -712,7 +840,8 @@ function renderPlan() {
   const prog = weekProgress(s, ws);
   out.push(h('div', { class: 'card' }, h('div', { class: 'row' }, h('div', { class: 'title grow' }, `This week · ${fmtDateShort(ws)} – ${fmtDateShort(addDays(ws, 6))}`), h('button', { class: 'btn sm ghost', onClick: goalsSheet }, 'Edit goals')),
     ...s.goals.map(g => { const have = prog[g.id] || 0, target = g.hoursPerWeek * 60; return h('div', { style: { margin: '8px 0' } }, h('div', { class: 'row small' }, h('span', { class: 'grow', style: { fontWeight: 600 } }, g.name), h('span', { class: 'muted' }, `${fmtDur(have)} / ${fmtDur(target)}`)), h('div', { class: 'progress' }, h('i', { style: { width: `${Math.min(100, Math.round(have / target * 100))}%`, '--c': g.color } }))); }),
-    h('div', { class: 'row', style: { marginTop: '10px' } }, h('button', { class: 'btn sm', onClick: rulesSheet }, '⚙ Rules'), h('button', { class: 'btn sm', onClick: acceptAllVisible }, '✓ Accept all suggestions'))));
+    h('div', { class: 'row', style: { marginTop: '10px' } }, h('button', { class: 'btn sm', onClick: rulesSheet }, 'Rules'), h('button', { class: 'btn sm', onClick: acceptAllVisible }, 'Accept all suggestions'))));
+  const rv = reviewCard(); if (rv) out.push(rv);
   // days
   for (let i = 0; i < 10; i++) {
     const date = addDays(from, i); const k = keyOf(date);
@@ -798,9 +927,37 @@ function rulesSheet() {
 }
 
 // ---------------- MORE / SETTINGS ----------------
+function renderApps() {
+  const apps = mergedApps();
+  const known = Object.keys(APP_META);
+  const names = [...new Set([...Object.keys(apps), ...known])];
+  const today = keyOf(new Date());
+  const tiles = names.map(name => {
+    const st = apps[name] || apps[name.toLowerCase()] || {};
+    const meta = appMeta(name, st);
+    const ageMin = st.updatedAt ? Math.round((Date.now() - new Date(st.updatedAt)) / 60000) : null;
+    const stale = ageMin == null || ageMin > 36 * 60;
+    const asksToday = (st.asks || []).filter(x => x.date === today);
+    const badge = asksToday.length ? Math.round(asksToday.reduce((x, y) => x + (+y.minutes || 0), 0)) : st.due || 0;
+    const open = meta.url ? `${meta.url}${meta.url.includes('?') ? '&' : '?'}from=citrus` : '';
+    return h(open ? 'a' : 'div', { class: `app-tile ${stale ? 'stale' : ''}`, href: open || null, target: open ? '_blank' : null, rel: 'noopener', style: { '--c': meta.color, '--c-soft': meta.color + '33' } },
+      badge ? h('span', { class: 'badge' }, badge > 999 ? '999+' : badge) : null,
+      h('div', { class: 'ic' }, meta.icon), h('div', { class: 'nm' }, meta.title),
+      h('div', { class: 'sm' }, st.summary || st.next?.title || (stale ? 'Not reporting yet — open it and sign in with Google.' : '')),
+      h('div', { class: 'st' }, ageMin == null ? 'no status' : st.today?.done ? 'done today' : ageMin < 60 ? `updated ${ageMin} min ago` : ageMin < 48 * 60 ? `updated ${Math.round(ageMin / 60)} h ago` : `updated ${Math.round(ageMin / 1440)} d ago`));
+  });
+  const pending = Object.entries(apps).flatMap(([n, st]) => (st.pending || []).slice(0, 3).map(p => ({ app: appMeta(n, st), text: p })));
+  return [h('h1', {}, 'Apps'), h('p', { class: 'muted small', style: { margin: '6px 0 14px' } }, 'Everything reports into Drive › My Apps › hub. Tap a tile to open the app; badges are minutes asked for today or items due.'),
+    h('div', { class: 'apps-grid' }, ...tiles),
+    pending.length ? h('div', { class: 'card', style: { marginTop: '14px' } }, h('div', { class: 'title' }, 'Waiting on you'), h('div', { class: 'list' }, ...pending.map(p => h('div', { class: 'item' }, h('div', { class: 'avatar', style: { background: p.app.color + '33', color: p.app.color, fontSize: '18px' } }, p.app.icon), h('div', { class: 'grow' }, h('div', { class: 'name' }, p.text), h('div', { class: 'meta' }, p.app.title)))))) : null,
+    h('div', { class: 'card', style: { marginTop: '14px' } }, h('div', { class: 'title' }, 'How the apps talk to Citrus'),
+      h('div', { class: 'small muted' }, 'Each app writes hub/<app>/status.json (summary, what it needs today as “asks”, pending items). Citrus places the asks in your plan around shifts and writes hub/citrus/plan.json back, which the apps read to show when their block is. Statuses older than 36 h are shown greyed.')),
+  ];
+}
+
 function renderMore() {
   const s = S();
-  const out = [h('h1', {}, 'More')];
+  const out = [h('h1', {}, 'Settings')];
   // Google
   const signed = G.isSignedIn();
   const cid = h('input', { type: 'text', value: s.settings.clientId, placeholder: '1234567890-xxxx.apps.googleusercontent.com', spellcheck: false });
@@ -838,6 +995,7 @@ function renderMore() {
   "extra": { "streak": 14, "url": "https://yuzu-cards.github.io/Yuzu/" }
 }`),
     Object.keys(mergedApps()).length ? h('div', { class: 'small', style: { marginTop: '8px' } }, 'Seen: ', Object.keys(mergedApps()).join(', ')) : null));
+  out.push(diagnosticsCard());
   // Appearance + backup
   out.push(h('div', { class: 'card' }, h('div', { class: 'title' }, 'App'),
     toggleRow('Light theme', s.settings.theme === 'light', (on) => { store.update(x => ({ ...x, settings: { ...x.settings, theme: on ? 'light' : 'dark' } }), { silent: true }); applyTheme(); }),
@@ -851,6 +1009,79 @@ function renderMore() {
 function toggleRow(label, on, cb) {
   const t = h('button', { class: `toggle ${on ? 'on' : ''}`, onClick: () => { on = !on; t.classList.toggle('on', on); cb(on); } });
   return h('div', { class: 'switch' }, h('span', { class: 'small' }, label), t);
+}
+
+// ---------------- search (people, days, apps, goals) ----------------
+function openSearch() {
+  document.querySelector('.search')?.remove();
+  const s = S();
+  const input = h('input', { placeholder: 'Search people, a date (21/11), an app, a goal…', autofocus: true });
+  const res = h('div', { class: 'res' });
+  const wrap = h('div', { class: 'search', onClick: (e) => { if (e.target === wrap) wrap.remove(); } }, h('div', { class: 'box' }, input, res));
+  let items = [];
+  const build = (q) => {
+    q = q.trim().toLowerCase(); items = [];
+    if (!q) { res.replaceChildren(); return; }
+    const dm = /^(\d{1,2})[\/\-.](\d{1,2})(?:[\/\-.](\d{2,4}))?$/.exec(q);
+    if (dm) { const y = dm[3] ? (+dm[3] < 100 ? 2000 + +dm[3] : +dm[3]) : new Date().getFullYear(); const d = new Date(y, +dm[2] - 1, +dm[1]); if (!isNaN(d)) items.push({ label: `${DAY_NAMES[d.getDay()]} ${fmtDate(d)}`, meta: dayInfo(s, d).mine?.shift.label || 'day', run: () => { rt.rotaSel = d; rt.rotaMonth = new Date(d.getFullYear(), d.getMonth(), 1); show('rota'); daySheet(d); } }); }
+    for (const p of allPeople(s)) if (p.name.toLowerCase().includes(q) || (p.title || '').toLowerCase().includes(q)) items.push({ label: p.name, meta: p.title, run: () => personSheet(p) });
+    for (const [name, st] of Object.entries(mergedApps())) { const m = appMeta(name, st); if (m.title.toLowerCase().includes(q)) items.push({ label: `${m.icon} ${m.title}`, meta: st.summary || 'open', run: () => { if (m.url) window.open(m.url, '_blank'); } }); }
+    for (const g of s.goals) if (g.name.toLowerCase().includes(q)) items.push({ label: g.name, meta: `${g.hoursPerWeek} h/week`, run: () => { show('plan'); goalsSheet(); } });
+    for (const [k, t] of Object.entries(s.notes || {})) if (t && t.toLowerCase().includes(q)) items.push({ label: t.slice(0, 60), meta: `note · ${fmtDate(fromKey(k))}`, run: () => { rt.rotaSel = fromKey(k); show('rota'); daySheet(fromKey(k)); } });
+    items = items.slice(0, 12);
+    res.replaceChildren(...items.map((it, i) => h('div', { class: `item ${i === 0 ? 'hl' : ''}`, onClick: () => { wrap.remove(); it.run(); } }, h('div', { class: 'grow' }, h('div', { class: 'name' }, it.label), it.meta ? h('div', { class: 'meta' }, it.meta) : null))));
+  };
+  input.addEventListener('input', () => build(input.value));
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && items[0]) { wrap.remove(); items[0].run(); } });
+  document.body.append(wrap); input.focus();
+}
+
+// ---------------- swaps: your own corrections on top of the imported rota ----------------
+function swapSheet(date) {
+  const s = S(); const k = keyOf(date);
+  const info = dayInfo(s, date);
+  const gp = info.rotas.find(r => r.unitKind === 'gp');
+  const codes = gp ? [...new Set(gp.legendList.map(e => e.code).flatMap(c => c.split(/\s*[\\\/]\s*/)).filter(c => c && c.length <= 4))] : ['D1', 'D2', 'N1', 'N2'];
+  const cur = s.swaps?.[k];
+  const code = h('select', {}, h('option', { value: '' }, 'Off (no shift)'), ...codes.map(c => h('option', { value: c, selected: cur ? cur.code === c : info.mine?.code === c }, c)));
+  const people = allPeople(s).filter(p => p.units.includes('gp') && !isMe(s, p));
+  const withSel = h('select', {}, h('option', { value: '' }, '— nobody / not a swap —'), ...people.map(p => h('option', { value: p.name, selected: cur?.with === p.name }, p.name)));
+  const note = h('input', { placeholder: 'Note (optional)', value: cur?.note || '' });
+  const { close } = sheet([h('h2', {}, `Correct ${fmtDateShort(date)}`), h('p', { class: 'small muted' }, `The rota says ${info.mine?.code || 'off'}. Record what actually happens — a swap, a cover, a cancelled shift. Imports never overwrite this.`),
+    h('div', { class: 'field' }, h('label', {}, 'Your shift that day'), code),
+    h('div', { class: 'field' }, h('label', {}, 'Swapped with'), withSel),
+    h('div', { class: 'field' }, h('label', {}, 'Note'), note),
+    h('div', { class: 'row' },
+      h('button', { class: 'btn primary grow', onClick: () => { store.update(x => ({ ...x, swaps: { ...(x.swaps || {}), [k]: { code: code.value, with: withSel.value, note: note.value.trim(), at: Date.now() } } })); regenerate(); close(); toast('Saved', 'ok'); render(); } }, 'Save'),
+      cur ? h('button', { class: 'btn danger', onClick: () => { store.update(x => { const swaps = { ...(x.swaps || {}) }; delete swaps[k]; return { ...x, swaps }; }); regenerate(); close(); render(); } }, 'Remove') : null)]);
+}
+
+// ---------------- weekly review ----------------
+function reviewCard() {
+  const s = S();
+  const ws = weekStartOf(addDays(new Date(), -7)), we = addDays(ws, 6);
+  const rows = s.goals.map(g => { let planned = 0, done = 0; for (let i = 0; i < 7; i++) for (const p of s.plan[keyOf(addDays(ws, i))] || []) if (p.goalId === g.id) { if (p.status === 'accepted' || p.status === 'done') planned += p.end - p.start; if (p.status === 'done') done += p.end - p.start; } return { g, planned, done, target: g.hoursPerWeek * 60 }; });
+  if (!rows.some(r => r.planned)) return null;
+  return h('div', { class: 'card' }, h('div', { class: 'title' }, `Last week · ${fmtDateShort(ws)} – ${fmtDateShort(we)}`),
+    ...rows.map(r => h('div', { style: { margin: '8px 0' } }, h('div', { class: 'row small' }, h('span', { class: 'grow', style: { fontWeight: 600 } }, r.g.name), h('span', { class: 'muted' }, `${fmtDur(r.done)} done of ${fmtDur(r.planned)} planned · target ${fmtDur(r.target)}`)),
+      h('div', { class: 'progress' }, h('i', { style: { width: `${Math.min(100, Math.round(r.done / Math.max(1, r.target) * 100))}%`, '--c': r.g.color } })))));
+}
+
+// ---------------- diagnostics ----------------
+function diagnosticsCard() {
+  const s = S();
+  const rows = [
+    ['Google', G.isSignedIn() ? `signed in as ${G.accountEmail() || s.google.email || '?'}` : G.wasSignedIn() ? 'session expired — tap Sign in' : 'not signed in'],
+    ['Last sync', s.google.lastSync ? new Date(s.google.lastSync).toLocaleString('en-GB') : 'never'],
+    ['Sync issues', (rt.lastProblems || []).length ? rt.lastProblems.join(' · ') : 'none'],
+    ['Queued calendar writes', String((s.outbox || []).length)],
+    ['Rotas loaded', Object.keys(s.rotas).length ? Object.values(s.rotas).map(r => `${UNIT_LABEL[r.unitKind]} ${MONTHS[r.month - 1].slice(0, 3)}`).join(', ') : 'none'],
+    ['Apps reporting', Object.keys(mergedApps()).join(', ') || 'none'],
+    ['Online', rt.online ? 'yes' : 'no'],
+    ['Installed', window.matchMedia('(display-mode: standalone)').matches ? 'yes (home screen)' : 'browser tab'],
+  ];
+  return h('div', { class: 'card' }, h('div', { class: 'title' }, 'Diagnostics'), h('div', { class: 'kv' }, ...rows.flatMap(([a, b]) => [h('b', {}, a), h('span', {}, b)])),
+    h('div', { class: 'row', style: { marginTop: '10px' } }, h('button', { class: 'btn sm', onClick: () => refreshAll(true) }, 'Sync now'), h('button', { class: 'btn sm', onClick: async () => { const regs = await navigator.serviceWorker?.getRegistrations?.() || []; for (const r of regs) await r.unregister(); const ks = await caches.keys(); for (const k of ks) await caches.delete(k); location.reload(); } }, 'Reinstall app files')));
 }
 
 boot();

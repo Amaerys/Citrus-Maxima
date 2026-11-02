@@ -43,6 +43,13 @@ export function dayInfo(state, date) {
   const entries = [];
   for (const r of rotas) for (const p of r.people) entries.push(assignment(r, p, d));
   const mine = entries.find(e => e.rota.unitKind === 'gp' && isMe(state, e.person)) || entries.find(e => isMe(state, e.person)) || null;
+  // your own correction (swap / cover / cancelled) wins over the imported rota
+  const swap = state.swaps?.[keyOf(date)];
+  if (swap && mine) {
+    const other = swap.with ? entries.find(e => e.rota === mine.rota && e.person.name === swap.with) : null;
+    if (other && swap.code && other.code && other.code !== swap.code) { const oc = other.code; other.code = mine.code; other.shift = interpretCode(other.code, other.rota.legend, other.rota.unitKind); other.swap = swap; mine.code = oc; }
+    mine.code = swap.code || ''; mine.shift = interpretCode(mine.code, mine.rota.legend, mine.rota.unitKind); mine.swap = swap;
+  }
   const working = entries.filter(e => e.shift.kind === 'work');
   const gp = working.filter(e => e.rota.unitKind === 'gp');
   const bySite = {};

@@ -75,9 +75,22 @@ await page.click('#view-plan button:has-text("Rules")'); await page.waitForTimeo
 await page.screenshot({ path: `${out}/09-rules.png` });
 await page.click('.sheet-bg', { position: { x: 10, y: 10 } });
 
-await page.click('nav.tabs button[data-view=more]');
+await page.click('nav.tabs button[data-view=apps]'); await page.waitForTimeout(300); await page.screenshot({ path: `${out}/09b-apps.png`, fullPage: true }); await page.click('#btnMore');
 await page.waitForTimeout(300);
 await page.screenshot({ path: `${out}/10-more.png`, fullPage: true });
+
+// desktop pass
+const dctx = await browser.newContext({ viewport: { width: 1366, height: 860 }, deviceScaleFactor: 1 });
+const dp = await dctx.newPage(); dp.on('pageerror', e => errors.push('desktop pageerror: ' + e.message));
+await dp.addInitScript(() => { const fixed = new Date(2026, 10, 4, 10, 30); const _D = Date; class D extends _D { constructor(...a) { super(...(a.length ? a : [fixed.getTime()])); } static now() { return fixed.getTime(); } } window.Date = D; });
+await dp.goto(`http://localhost:${port}/index.html`); await dp.waitForTimeout(500);
+await dp.setInputFiles('#view-today input[type=file]', files); await dp.waitForTimeout(800);
+await dp.screenshot({ path: `${out}/20-desktop-today.png` });
+await dp.click('nav.tabs button[data-view=plan]'); await dp.waitForTimeout(400); await dp.screenshot({ path: `${out}/21-desktop-plan.png` });
+await dp.click('nav.tabs button[data-view=apps]'); await dp.waitForTimeout(300); await dp.screenshot({ path: `${out}/22-desktop-apps.png` });
+await dp.click('nav.tabs button[data-view=rota]'); await dp.waitForTimeout(300); await dp.screenshot({ path: `${out}/23-desktop-rota.png` });
+await dp.keyboard.press('/'); await dp.waitForTimeout(200); await dp.keyboard.type('mal'); await dp.waitForTimeout(200); await dp.screenshot({ path: `${out}/24-desktop-search.png` }); await dp.keyboard.press('Escape');
+await dctx.close();
 
 // reload persists?
 await page.reload(); await page.waitForTimeout(600);

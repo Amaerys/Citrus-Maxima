@@ -10,26 +10,31 @@ const SCOPES = [
   'https://www.googleapis.com/auth/userinfo.email',
 ].join(' ');
 
-const TOKEN_KEY = 'citrus.token';
+const TOKEN_KEY = 'citrus.google';   // {access_token, exp, email, hint} — survives reloads; only an access token, never a secret
 let tokenClient = null;
 let token = loadToken();
 let clientId = '';
+let silentInFlight = null;
 const authListeners = new Set();
+export const auth = { needsSignIn: false, lastError: '' };
 
-function loadToken() {
-  try { const t = JSON.parse(sessionStorage.getItem(TOKEN_KEY) || 'null'); return t && t.exp > Date.now() ? t : null; } catch { return null; }
+function loadToken() { try { return JSON.parse(localStorage.getItem(TOKEN_KEY) || 'null'); } catch { return null; } }
+function saveToken(t) {
+  token = t ? { ...(token || {}), ...t } : null;
+  try { token ? localStorage.setItem(TOKEN_KEY, JSON.stringify(token)) : localStorage.removeItem(TOKEN_KEY); } catch {}
+  for (const fn of authListeners) fn(isSignedIn());
 }
-function saveToken(t) { token = t; try { t ? sessionStorage.setItem(TOKEN_KEY, JSON.stringify(t)) : sessionStorage.removeItem(TOKEN_KEY); } catch {} for (const fn of authListeners) fn(!!t); }
-
 export function onAuthChange(fn) { authListeners.add(fn); return () => authListeners.delete(fn); }
-export function isSignedIn() { return !!(token && token.exp > Date.now()); }
+export function isSignedIn() { return !!(token && token.access_token && token.exp > Date.now()); }
+export function wasSignedIn() { return !!(token && token.email); }   // we had a session before (silent refresh is worth trying)
+export function accountEmail() { return token?.email || ''; }
 
 function loadGis() {
   if (window.google?.accounts?.oauth2) return Promise.resolve();
   return new Promise((res, rej) => {
     const s = document.createElement('script');
     s.src = 'https://accounts.google.com/gsi/client'; s.async = true; s.defer = true;
-    s.onload = () => res(); s.onerror = () => rej(new Error('Could not load Google sign-in (offline?)'));
+    s.onload = () => res(); s.onerror = () => rej(new Error('Google sign-in script did not load (offline?)'));
     document.head.append(s);
   });
 }
@@ -38,41 +43,57 @@ export async function init(id) {
   clientId = id;
   if (!clientId) return false;
   await loadGis();
-  tokenClient = window.google.accounts.oauth2.initTokenClient({
-    client_id: clientId, scope: SCOPES, prompt: '',
-    callback: () => {}, // replaced per request
-  });
+  tokenClient = window.google.accounts.oauth2.initTokenClient({ client_id: clientId, scope: SCOPES, prompt: '', callback: () => {} });
   return true;
 }
 
 export function signIn({ silent = false } = {}) {
-  return new Promise(async (res, rej) => {
-    if (!tokenClient) { if (!clientId) return rej(new Error('Add your Google client ID in Settings first')); await init(clientId); }
-    tokenClient.callback = (resp) => {
-      if (resp.error) return rej(new Error(resp.error_description || resp.error));
+  if (silent && silentInFlight) return silentInFlight;
+  const p = new Promise(async (res, rej) => {
+    try {
+      if (!tokenClient) { if (!clientId) return rej(new Error('Add your Google client ID in Settings first')); await init(clientId); }
+    } catch (e) { return rej(e); }
+    const timer = setTimeout(() => rej(new Error(silent ? 'silent_timeout' : 'Sign-in timed out')), silent ? 15000 : 120000);
+    tokenClient.callback = async (resp) => {
+      clearTimeout(timer);
+      if (resp.error) { auth.lastError = resp.error_description || resp.error; return rej(new Error(auth.lastError)); }
       saveToken({ access_token: resp.access_token, exp: Date.now() + (resp.expires_in - 60) * 1000 });
+      auth.needsSignIn = false; auth.lastError = '';
+      if (!token.email) { try { const u = await userInfo(); saveToken({ email: u.email || '' }); } catch {} }
       res(token);
     };
-    tokenClient.error_callback = (e) => rej(new Error(e.type || 'Sign-in cancelled'));
-    tokenClient.requestAccessToken({ prompt: silent ? '' : 'consent' });
+    tokenClient.error_callback = (e) => { clearTimeout(timer); rej(new Error(e?.type === 'popup_closed' ? 'Sign-in cancelled' : e?.type || 'Sign-in failed')); };
+    tokenClient.requestAccessToken({ prompt: silent ? '' : 'consent', ...(token?.email ? { hint: token.email } : {}) });
   });
+  if (silent) { silentInFlight = p.finally(() => { silentInFlight = null; }); return silentInFlight; }
+  return p;
 }
 
 export function signOut() {
-  if (token && window.google?.accounts?.oauth2) try { window.google.accounts.oauth2.revoke(token.access_token, () => {}); } catch {}
-  saveToken(null);
+  if (token?.access_token && window.google?.accounts?.oauth2) try { window.google.accounts.oauth2.revoke(token.access_token, () => {}); } catch {}
+  saveToken(null); auth.needsSignIn = false;
 }
 
-async function authFetch(url, opts = {}, retry = true) {
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+async function authFetch(url, opts = {}, attempt = 0) {
   if (!isSignedIn()) {
-    try { await signIn({ silent: true }); } catch (e) { throw new Error('Not signed in to Google'); }
+    if (!wasSignedIn()) throw new Error('Not signed in to Google');
+    try { await signIn({ silent: true }); }
+    catch (e) { auth.needsSignIn = true; for (const fn of authListeners) fn(false); throw new Error('Google sign-in expired — tap Sign in'); }
   }
-  const r = await fetch(url, { ...opts, headers: { ...(opts.headers || {}), Authorization: `Bearer ${token.access_token}` } });
-  if (r.status === 401 && retry) { saveToken(null); return authFetch(url, opts, false); }
+  let r;
+  try { r = await fetch(url, { ...opts, headers: { ...(opts.headers || {}), Authorization: `Bearer ${token.access_token}` } }); }
+  catch (e) { if (attempt < 2) { await sleep(600 * (attempt + 1)); return authFetch(url, opts, attempt + 1); } throw new Error('Network error'); }
+  if (r.status === 401 && attempt < 2) { saveToken({ exp: 0 }); return authFetch(url, opts, attempt + 1); }
+  if ((r.status === 429 || r.status >= 500 || r.status === 403) && attempt < 3) {
+    let rate = r.status !== 403;
+    if (r.status === 403) { try { const j = await r.clone().json(); rate = /rate|quota/i.test(j.error?.message || ''); } catch {} }
+    if (rate) { await sleep(800 * Math.pow(2, attempt)); return authFetch(url, opts, attempt + 1); }
+  }
   if (!r.ok) {
     let msg = `${r.status} ${r.statusText}`;
     try { const j = await r.json(); msg = j.error?.message || msg; } catch {}
-    throw new Error(msg);
+    const e = new Error(msg); e.status = r.status; throw e;
   }
   if (r.status === 204) return null;
   const ct = r.headers.get('content-type') || '';

@@ -37,6 +37,8 @@ function defaults() {
     plan: {},                 // dateKey -> [{id, goalId, start, end, status, reason, eventId}]
     prefs: {},                // learned: `${goalId}|${slotTag}` -> score
     notes: {},                // dateKey -> text
+    swaps: {},                // dateKey -> {code, with, note, at}  (overrides the imported rota)
+    outbox: [],               // calendar writes waiting for the network
     settings: { clientId: '753489712404-ra7ahu34gjl305b4ss1765idmqg7am5s.apps.googleusercontent.com', calendarIds: ['primary'], shiftCalendarId: '', pushShifts: false, driveFolder: 'My Apps', theme: 'dark' },
     google: { email: '', lastSync: 0 },
     apps: {},                 // other apps' status files from Drive: name -> json
@@ -83,3 +85,24 @@ export function replaceState(s) {
 export function exportJSON() { return JSON.stringify(state, null, 2); }
 
 export function newId(prefix = '') { return prefix + uid(); }
+
+// Merge two copies of the state (this device vs Drive). Collections merge key-by-key; scalars follow the newer copy.
+export function mergeStates(a, b) {
+  if (!a) return b; if (!b) return a;
+  const [older, newer] = a.updatedAt > b.updatedAt ? [b, a] : [a, b];
+  const out = { ...older, ...newer };
+  out.rotas = { ...(older.rotas || {}), ...(newer.rotas || {}) };
+  for (const [id, r] of Object.entries(older.rotas || {})) if (newer.rotas?.[id] && (r.importedAt || '') > (newer.rotas[id].importedAt || '')) out.rotas[id] = r;
+  out.plan = { ...(older.plan || {}) };
+  for (const [k, list] of Object.entries(newer.plan || {})) {
+    const byId = new Map((out.plan[k] || []).map(p => [p.id, p]));
+    for (const p of list) { const cur = byId.get(p.id); if (!cur || (p.at || 0) >= (cur.at || 0)) byId.set(p.id, p); }
+    out.plan[k] = [...byId.values()];
+  }
+  out.notes = { ...(older.notes || {}), ...(newer.notes || {}) };
+  out.swaps = { ...(older.swaps || {}), ...(newer.swaps || {}) };
+  out.prefs = { ...(older.prefs || {}), ...(newer.prefs || {}) };
+  out.settings = { ...(older.settings || {}), ...(newer.settings || {}), clientId: newer.settings?.clientId || older.settings?.clientId || '' };
+  out.apps = undefined;
+  return out;
+}
