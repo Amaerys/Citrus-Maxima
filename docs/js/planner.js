@@ -100,7 +100,7 @@ export function weekProgress(state, weekStart) {
 export function weekStartOf(d) { const x = startOfDay(d); x.setDate(x.getDate() - x.getDay()); return x; } // Sunday start
 
 // Main: suggest blocks for [from, from+days). eventsByDay: key -> events[]
-export function suggest(state, from, days, eventsByDay = {}, apps = {}) {
+export function suggest(state, from, days, eventsByDay = {}, apps = {}, metaFn = null) {
   const rules = state.rules;
   const goals = [...state.goals].filter(g => g.hoursPerWeek > 0).sort((a, b) => a.priority - b.priority);
   const suggestions = {};
@@ -125,8 +125,40 @@ export function suggest(state, from, days, eventsByDay = {}, apps = {}) {
     const dayList = [];
     const busy = [...ctx.busy];
     const daysLeftInWeek = 7 - date.getDay();
+    const askedApps = new Set();
+
+    // 1. Apps' own asks for this date (hub contract: status.asks[{date,title,minutes,slot}]) — they know their needs best
+    for (const [appName, st] of Object.entries(apps || {})) {
+      const appKey = String(st.app || appName).toLowerCase();
+      for (const ask of (st.asks || []).filter(a => a.date === key)) {
+        const minutes = Math.max(10, Math.min(180, Math.round(+ask.minutes || 30)));
+        const gid = `app:${appKey}`;
+        if (existing.some(p => p.goalId === gid)) { askedApps.add(appKey); continue; }
+        const slots = freeSlots(busy, ctx.today?.shift.hours?.overnight ? Math.max(rules.earliestPlan, 10 * 60) : rules.earliestPlan, rules.latestPlan, Math.min(minutes, 20));
+        if (!slots.length) continue;
+        let pick;
+        if (ask.slot === 'before' && ctx.today && !ctx.today.shift.hours.overnight) {
+          const shiftStart = ctx.today.shift.hours.start - commuteFor(rules, ctx.today.shift.site) - rules.preShiftBufferMin;
+          pick = slots.filter(x => x.end <= shiftStart).sort((x, y) => y.end - x.end)[0] || slots[0];
+        } else {
+          pick = slots.map(x => ({ s: x, score: scoreSlot(state, { id: gid, kind: 'study', maxBlock: minutes }, x, ctx, energy, date) })).sort((x, y) => y.score - x.score).find(x => !rejectedToday.has(`${gid}|${x.s.start}`))?.s;
+        }
+        if (!pick) continue;
+        const len = Math.min(minutes, pick.s ? pick.s.end - pick.s.start : pick.end - pick.start);
+        const slot = pick.s || pick;
+        const start = ask.slot === 'before' && ctx.today && slot.end <= (ctx.today.shift.hours.start) ? Math.max(slot.start, slot.end - len) : preferredStart({ kind: 'study' }, slot, len);
+        const meta = metaFn ? metaFn(appName, st) : { title: st.title || appName, color: st.color || '#9aa0b1' };
+        const block = { id: `${key}-${gid}-${start}`, goalId: gid, app: appKey, title: ask.title || meta.title, kind: 'app', color: meta.color, start, end: start + len, status: 'suggested', date: key, reason: `${meta.title} asked for ${fmtDur(minutes)}${ask.slot === 'before' ? (ctx.today && start + len <= ctx.today.shift.hours.start ? ' before your shift' : ' before your shift (no room — moved after)') : ''}${st.summary ? ' · ' + st.summary.slice(0, 80) : ''}`, tag: slotTag(ctx, { start }) };
+        dayList.push(block);
+        busy.push({ start: block.start, end: block.end + 20, label: block.title, kind: 'plan' }); busy.sort((x, y) => x.start - y.start);
+        askedApps.add(appKey);
+        if (!g_isHabit(st)) studyUsed += len;
+      }
+    }
 
     for (const g of goals) {
+      // an app that asked for time today replaces the goal named after it
+      if ([...askedApps].some(a => g.name.toLowerCase().includes(a) || (g.app || '').toLowerCase() === a)) continue;
       const target = Math.round(g.hoursPerWeek * 60);
       const have = weekly[ws]?.[g.id] || 0;
       const deficit = target - have;
@@ -169,6 +201,7 @@ export function suggest(state, from, days, eventsByDay = {}, apps = {}) {
   return suggestions;
 }
 
+function g_isHabit(st) { return /habit|review/i.test(st?.next?.title || ''); }
 function appHint(apps, goal) {
   const name = goal.name.toLowerCase();
   for (const [app, st] of Object.entries(apps || {})) {

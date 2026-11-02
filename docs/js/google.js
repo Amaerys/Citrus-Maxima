@@ -152,80 +152,118 @@ export async function syncTaggedEvents(calendarId, tag, from, to, wanted) {
 }
 
 // ---------------- Drive ----------------
+// Layout (shared by all apps):  <root>/Rotas/*.xlsx   <root>/hub/<app>/status.json|state.json   <root>/hub/citrus/plan.json
 const DRIVE = 'https://www.googleapis.com/drive/v3';
 const UPLOAD = 'https://www.googleapis.com/upload/drive/v3';
+const FOLDER = 'application/vnd.google-apps.folder';
+const IDS_KEY = 'citrus.drive.ids';
+const q = (s) => String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+let ids = {};
+try { ids = JSON.parse(localStorage.getItem(IDS_KEY) || '{}'); } catch {}
+function remember(key, id) { ids[key] = id; try { localStorage.setItem(IDS_KEY, JSON.stringify(ids)); } catch {} }
+function forget(prefix) { for (const k of Object.keys(ids)) if (k === prefix || k.startsWith(prefix + '/')) delete ids[k]; try { localStorage.setItem(IDS_KEY, JSON.stringify(ids)); } catch {} }
 
-async function findFolder(name, parentId = 'root') {
-  const q = `name='${name.replace(/'/g, "\\'")}' and mimeType='application/vnd.google-apps.folder' and '${parentId}' in parents and trashed=false`;
-  const j = await authFetch(`${DRIVE}/files?q=${encodeURIComponent(q)}&fields=files(id,name)`);
-  return j.files?.[0] || null;
+async function list(parentId, { name, folders, extra } = {}) {
+  const parts = ['trashed = false', `'${q(parentId)}' in parents`];
+  if (name) parts.push(`name = '${q(name)}'`);
+  if (folders) parts.push(`mimeType = '${FOLDER}'`);
+  if (extra) parts.push(extra);
+  const j = await authFetch(`${DRIVE}/files?q=${encodeURIComponent(parts.join(' and '))}&fields=files(id,name,mimeType,modifiedTime,size)&pageSize=100&orderBy=modifiedTime desc`);
+  return j.files || [];
 }
-export async function ensureFolder(name, parentId = 'root') {
-  const f = await findFolder(name, parentId);
-  if (f) return f.id;
-  const j = await authFetch(`${DRIVE}/files`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, mimeType: 'application/vnd.google-apps.folder', parents: [parentId] }) });
+async function mkdir(name, parentId) {
+  const j = await authFetch(`${DRIVE}/files?fields=id`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, mimeType: FOLDER, parents: [parentId] }) });
   return j.id;
 }
-
-// Lists .xlsx files in <root>/<folder>/Rotas (creates the folders if missing)
-export async function listRotaFiles(rootFolderName) {
-  const root = await ensureFolder(rootFolderName);
-  const rotas = await ensureFolder('Rotas', root);
-  const q = `'${rotas}' in parents and trashed=false and (mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' or name contains '.xlsx')`;
-  const j = await authFetch(`${DRIVE}/files?q=${encodeURIComponent(q)}&fields=files(id,name,modifiedTime,size)&orderBy=modifiedTime desc`);
-  return (j.files || []).map(f => ({ ...f, folderId: rotas }));
+// Folder id for a path like ['My Apps','hub','citrus'], creating what is missing. Ids are cached; a 404 clears the cache and retries once.
+export async function ensurePath(parts, { create = true } = {}) {
+  const run = async () => {
+    let parent = 'root', key = '';
+    for (const name of parts) {
+      key = key ? `${key}/${name}` : name;
+      let id = ids[key];
+      if (!id) {
+        const found = (await list(parent, { name, folders: true }))[0];
+        if (found) id = found.id;
+        else if (create) id = await mkdir(name, parent);
+        else return null;
+        remember(key, id);
+      }
+      parent = id;
+    }
+    return parent;
+  };
+  try { return await run(); }
+  catch (e) { if (/404|not found/i.test(e.message)) { forget(parts[0]); return run(); } throw e; }
 }
-export async function downloadFile(fileId) {
-  return authFetch(`${DRIVE}/files/${fileId}?alt=media`);
-}
-
-// Other apps drop `<App>.status.json` in <root>/Apps — the scheduler reads them.
-export async function listAppStatus(rootFolderName) {
-  const root = await ensureFolder(rootFolderName);
-  const apps = await ensureFolder('Apps', root);
-  const q = `'${apps}' in parents and trashed=false and name contains '.json'`;
-  const j = await authFetch(`${DRIVE}/files?q=${encodeURIComponent(q)}&fields=files(id,name,modifiedTime)`);
-  const out = {};
-  for (const f of j.files || []) {
-    try { const buf = await downloadFile(f.id); out[f.name.replace(/\.status\.json$|\.json$/, '')] = { ...JSON.parse(new TextDecoder().decode(buf)), _modified: f.modifiedTime }; } catch {}
-  }
-  return out;
-}
-
-// Write/replace <root>/Apps/<name>.status.json (used to mirror same-device app statuses to other devices)
-export async function uploadAppStatus(rootFolderName, name, obj) {
-  const root = await ensureFolder(rootFolderName);
-  const apps = await ensureFolder('Apps', root);
-  const fname = `${name}.status.json`;
-  const q = `'${apps}' in parents and trashed=false and name='${fname.replace(/'/g, "\\'")}'`;
-  const j = await authFetch(`${DRIVE}/files?q=${encodeURIComponent(q)}&fields=files(id)`);
-  const existing = j.files?.[0];
-  const boundary = 'citrus' + Date.now();
-  const meta = existing ? { name: fname } : { name: fname, parents: [apps] };
-  const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(obj)}\r\n--${boundary}--`;
-  const url = existing ? `${UPLOAD}/files/${existing.id}?uploadType=multipart` : `${UPLOAD}/files?uploadType=multipart`;
-  await authFetch(url, { method: existing ? 'PATCH' : 'POST', headers: { 'Content-Type': `multipart/related; boundary=${boundary}` }, body });
-}
-
-// App state in the hidden appDataFolder
-const STATE_NAME = 'citrus-maxima-state.json';
-async function findStateFile() {
-  const j = await authFetch(`${DRIVE}/files?spaces=appDataFolder&q=${encodeURIComponent(`name='${STATE_NAME}'`)}&fields=files(id,modifiedTime)`);
-  return j.files?.[0] || null;
-}
-export async function loadRemoteState() {
-  const f = await findStateFile();
+export async function downloadFile(fileId) { return authFetch(`${DRIVE}/files/${fileId}?alt=media`); }
+async function readJsonIn(folderId, name) {
+  const f = (await list(folderId, { name }))[0];
   if (!f) return null;
   const buf = await downloadFile(f.id);
-  try { return JSON.parse(new TextDecoder().decode(buf)); } catch { return null; }
+  try { return { data: JSON.parse(new TextDecoder().decode(buf)), modifiedTime: f.modifiedTime, id: f.id }; } catch { return null; }
 }
-export async function saveRemoteState(state) {
-  const f = await findStateFile();
-  const meta = { name: STATE_NAME, parents: f ? undefined : ['appDataFolder'] };
+async function writeJsonIn(folderId, name, obj, fileId = null) {
+  if (!fileId) fileId = (await list(folderId, { name }))[0]?.id || null;
   const boundary = 'citrus' + Date.now();
-  const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(state)}\r\n--${boundary}--`;
-  const url = f ? `${UPLOAD}/files/${f.id}?uploadType=multipart` : `${UPLOAD}/files?uploadType=multipart`;
-  await authFetch(url, { method: f ? 'PATCH' : 'POST', headers: { 'Content-Type': `multipart/related; boundary=${boundary}` }, body });
+  const meta = fileId ? { name } : { name, parents: [folderId] };
+  const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(obj)}\r\n--${boundary}--`;
+  const url = fileId ? `${UPLOAD}/files/${fileId}?uploadType=multipart&fields=id,modifiedTime` : `${UPLOAD}/files?uploadType=multipart&fields=id,modifiedTime`;
+  return authFetch(url, { method: fileId ? 'PATCH' : 'POST', headers: { 'Content-Type': `multipart/related; boundary=${boundary}` }, body });
+}
+export async function readJson(parts, name) { const id = await ensurePath(parts, { create: false }); return id ? readJsonIn(id, name) : null; }
+export async function writeJson(parts, name, obj) { const id = await ensurePath(parts); return writeJsonIn(id, name, obj); }
+
+// <root>/Rotas: every spreadsheet (Google Sheets are exported as xlsx)
+export async function listRotaFiles(root) {
+  const id = await ensurePath([root, 'Rotas']);
+  const files = await list(id, { extra: `(mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' or mimeType='application/vnd.google-apps.spreadsheet' or name contains '.xlsx')` });
+  return files.map(f => ({ ...f, folderId: id }));
+}
+export async function downloadRota(f) {
+  if (f.mimeType === 'application/vnd.google-apps.spreadsheet') return authFetch(`${DRIVE}/files/${f.id}/export?mimeType=${encodeURIComponent('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')}`);
+  return downloadFile(f.id);
+}
+
+// <root>/hub/<app>/status.json for every app folder (read in parallel)
+export async function listAppStatus(root) {
+  const hub = await ensurePath([root, 'hub']);
+  const folders = await list(hub, { folders: true });
+  const out = {};
+  await Promise.all(folders.filter(f => f.name !== 'citrus').map(async (f) => {
+    remember(`${root}/hub/${f.name}`, f.id);
+    try { const r = await readJsonIn(f.id, 'status.json'); if (r?.data) out[f.name] = { ...r.data, _modified: r.modifiedTime, _folder: f.name }; } catch (e) { console.warn('status', f.name, e.message); }
+  }));
+  // legacy location used by early Sinus builds
+  try {
+    const legacy = await ensurePath(['Citrus Maxima', 'Apps'], { create: false });
+    if (legacy) for (const f of await list(legacy, { extra: `name contains '.status.json'` })) {
+      const app = f.name.replace(/\.status\.json$/, '').toLowerCase();
+      if (out[app]) continue;
+      try { const buf = await downloadFile(f.id); out[app] = { ...JSON.parse(new TextDecoder().decode(buf)), _modified: f.modifiedTime, _legacy: true }; } catch {}
+    }
+  } catch {}
+  return out;
+}
+export async function uploadAppStatus(root, app, obj) { return writeJson([root, 'hub', app.toLowerCase()], 'status.json', obj); }
+export async function writePlan(root, plan) { return writeJson([root, 'hub', 'citrus'], 'plan.json', plan); }
+
+// Citrus's own state: <root>/hub/citrus/state.json (older builds kept it in the hidden appDataFolder — read once as a fallback)
+export async function loadRemoteState(root) {
+  const r = await readJson([root, 'hub', 'citrus'], 'state.json');
+  if (r) return r.data;
+  try {
+    const j = await authFetch(`${DRIVE}/files?spaces=appDataFolder&q=${encodeURIComponent(`name='citrus-maxima-state.json'`)}&fields=files(id)`);
+    const f = j.files?.[0];
+    if (f) { const buf = await downloadFile(f.id); return JSON.parse(new TextDecoder().decode(buf)); }
+  } catch {}
+  return null;
+}
+let stateFileId = null;
+export async function saveRemoteState(root, state) {
+  const id = await ensurePath([root, 'hub', 'citrus']);
+  const r = await writeJsonIn(id, 'state.json', state, stateFileId);
+  stateFileId = r?.id || stateFileId;
 }
 
 export const dateKeyOf = keyOf;

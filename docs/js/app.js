@@ -75,7 +75,7 @@ function scheduleRemoteSave() {
   if (!G.isSignedIn() || !rt.online) return;
   clearTimeout(saveTimer);
   saveTimer = setTimeout(async () => {
-    try { await G.saveRemoteState(stripForRemote(S())); } catch (e) { console.warn('remote save failed', e.message); }
+    try { await G.saveRemoteState(S().settings.driveFolder, stripForRemote(S())); } catch (e) { console.warn('remote save failed', e.message); }
   }, 2500);
 }
 function stripForRemote(s) { return { ...s, apps: undefined }; }
@@ -88,7 +88,7 @@ async function refreshAll(manual) {
   try {
     // 1. remote state (newer wins, rotas merged)
     try {
-      const remote = await G.loadRemoteState();
+      const remote = await G.loadRemoteState(S().settings.driveFolder);
       const local = S();
       if (remote && remote.updatedAt > local.updatedAt + 1000) {
         const merged = { ...remote, rotas: { ...(local.rotas || {}), ...(remote.rotas || {}) }, settings: { ...remote.settings, clientId: local.settings.clientId || remote.settings?.clientId } };
@@ -124,6 +124,7 @@ async function refreshAll(manual) {
     // 6. push shifts
     if (S().settings.pushShifts) { try { await pushShiftsToCalendar(); } catch (e) { problems.push('shift push: ' + e.message); } }
     store.update(s => ({ ...s, google: { ...s.google, lastSync: Date.now() } }), { remote: false, silent: true });
+    regenerate();
     if (manual) toast(problems.length ? 'Synced with issues: ' + problems.join('; ') : 'Synced', problems.length ? 'err' : 'ok');
     else if (problems.length) console.warn(problems);
   } finally { rt.syncing = false; renderSync(); render(); }
@@ -165,7 +166,7 @@ async function pullRotasFromDrive() {
     const already = Object.values(known).find(r => r.driveId === f.id && r.driveModified === f.modifiedTime);
     if (already) continue;
     try {
-      const buf = await G.downloadFile(f.id);
+      const buf = await G.downloadRota(f);
       const rota = serializeRota(await parseRotaFile(buf, f.name));
       rota.driveId = f.id; rota.driveModified = f.modifiedTime;
       store.update(s => ({ ...s, rotas: { ...s.rotas, [rota.id]: rota } }), { silent: true });
@@ -466,6 +467,7 @@ async function acceptBlock(k, b, { silent = false } = {}) {
       store.update(s => ({ ...s, plan: { ...s.plan, [k]: (s.plan[k] || []).map(p => p.id === b.id ? { ...p, eventId: ev.id, calendarId: ev.calendarId } : p) } }), { silent: true });
     } catch (e) { if (!silent) toast('Saved locally; calendar: ' + e.message, 'err'); }
   }
+  publishPlanSoon();
   if (!silent) { toast(`${b.title} planned`, 'ok'); render(); }
 }
 async function rejectBlock(k, b) {
@@ -476,6 +478,7 @@ async function rejectBlock(k, b) {
 async function removeBlock(k, b) {
   if (b.eventId && G.isSignedIn()) { try { await G.deleteEvent(b.calendarId || 'primary', b.eventId); } catch {} }
   store.update(s => ({ ...s, plan: { ...s.plan, [k]: (s.plan[k] || []).filter(p => p.id !== b.id) } }));
+  publishPlanSoon();
 }
 function setBlockStatus(k, b, status) {
   store.update(s => ({ ...s, plan: { ...s.plan, [k]: (s.plan[k] || []).map(p => p.id === b.id ? { ...p, status } : p) } }));
@@ -499,16 +502,40 @@ function moveBlock(k, b, isSuggestion = false) {
   ]);
 }
 
+// Known apps: display defaults when a status file does not carry them
+const APP_META = {
+  yuzu: { title: 'Yuzu', icon: '🍋', color: '#f2d34b', url: 'https://yuzu-cards.github.io/Yuzu/' },
+  mephisto: { title: 'Mephisto', icon: '🇩🇪', color: '#c58cff', url: 'https://mephisto-deutsch.github.io/Mephisto/' },
+  orange: { title: 'Orange', icon: '🍊', color: '#ff7a1a', url: 'https://orange-fitness.github.io/Orange/' },
+  sinus: { title: 'Sinus', icon: '💓', color: '#ff5f6d', url: 'https://sinus-ekg.github.io/Sinus-EKG/' },
+};
+export function appMeta(name, st = {}) {
+  const key = String(st.app || name || '').toLowerCase();
+  const m = APP_META[key] || {};
+  return { key, title: st.title || m.title || name, icon: st.icon || m.icon || (name[0] || '?').toUpperCase(), color: st.color || m.color || '#9aa0b1', url: st.url || st.extra?.url || m.url || '' };
+}
 function appsCard() {
   const apps = mergedApps();
   const age = (iso) => { if (!iso) return ''; const m = Math.round((Date.now() - new Date(iso)) / 60000); return m < 2 ? 'just now' : m < 60 ? `${m} min ago` : m < 48 * 60 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`; };
+  const today = keyOf(new Date());
+  const rows = Object.entries(apps).map(([name, st]) => {
+    const meta = appMeta(name, st);
+    const asksToday = (st.asks || []).filter(a => a.date === today);
+    const minutes = asksToday.reduce((a, x) => a + (+x.minutes || 0), 0) || st.next?.minutes || st.estimatedMinutes || 0;
+    const pending = (st.pending || []).slice(0, 2);
+    const done = st.today?.done;
+    return { name, st, meta, minutes, pending, done, asksToday };
+  }).sort((a, b) => (a.done ? 1 : 0) - (b.done ? 1 : 0) || b.minutes - a.minutes);
   return h('div', { class: 'card' }, h('div', { class: 'title' }, 'Your apps'),
-    h('div', { class: 'list' }, ...Object.entries(apps).sort((a, b) => (b[1].due || 0) - (a[1].due || 0)).map(([name, st]) => h('div', { class: 'item' },
-      h('div', { class: 'avatar', style: st.color ? { background: st.color + '33', color: st.color } : {} }, (st.icon || name[0]).slice(0, 2)),
-      h('div', { class: 'grow' }, h('div', { class: 'name row' }, st.title || name, st.estimatedMinutes ? h('span', { class: 'chip', style: { padding: '1px 7px', fontSize: '10px' } }, `~${st.estimatedMinutes} min`) : null),
-        h('div', { class: 'meta' }, st.summary || [st.due != null ? `${st.due} due` : '', st.streak != null ? `${st.streak}-day streak` : '', st.nextDue ? `next: ${st.nextDue}` : ''].filter(Boolean).join(' · ') || 'no summary'),
-        h('div', { class: 'tiny dim' }, age(st.updatedAt))),
-      st.url ? h('a', { class: 'btn sm', href: st.url, target: '_blank', rel: 'noopener' }, 'Open') : null))));
+    h('div', { class: 'list' }, ...rows.map(({ name, st, meta, minutes, pending, done, asksToday }) => h('div', { class: 'item' },
+      h('div', { class: 'avatar', style: { background: meta.color + '33', color: meta.color } }, meta.icon),
+      h('div', { class: 'grow' },
+        h('div', { class: 'name row' }, meta.title,
+          done ? h('span', { class: 'chip off', style: { padding: '1px 7px', fontSize: '10px' } }, 'done today') : minutes ? h('span', { class: 'chip', style: { padding: '1px 7px', fontSize: '10px' } }, `~${minutes} min`) : null),
+        h('div', { class: 'meta' }, st.summary || st.next?.title || 'no summary'),
+        pending.length ? h('div', { class: 'tiny', style: { color: meta.color } }, pending.join(' · ')) : null,
+        h('div', { class: 'tiny dim' }, [age(st.updatedAt), asksToday.length ? `asks for ${asksToday.map(a => a.slot === 'before' ? 'time before your shift' : fmtDur(+a.minutes || 0)).join(', ')}` : ''].filter(Boolean).join(' · '))),
+      meta.url ? h('a', { class: 'btn sm', href: meta.url, target: '_blank', rel: 'noopener' }, 'Open') : null))));
 }
 
 function noteCard(date) {
@@ -651,8 +678,30 @@ function renderTeam() {
 function regenerate() {
   const s = S();
   const from = rt.planFrom || startOfDay(new Date());
-  rt.suggestions = suggest(s, from, 10, rt.events, mergedApps());
+  rt.suggestions = suggest(s, from, 10, rt.events, mergedApps(), appMeta);
+  publishPlanSoon();
 }
+// hub/citrus/plan.json: what Citrus planned for the next days, per app, plus your shifts — read by Mephisto & co.
+let planTimer = null;
+function publishPlanSoon() { clearTimeout(planTimer); planTimer = setTimeout(publishPlan, 4000); }
+async function publishPlan() {
+  if (!G.isSignedIn() || !rt.online) return;
+  const s = S();
+  const from = startOfDay(new Date());
+  const days = {}, blocks = [];
+  for (let i = 0; i < 10; i++) {
+    const date = addDays(from, i); const k = keyOf(date);
+    const { today } = myDay(s, date);
+    const shift = today ? { code: today.code, label: today.shift.label, site: today.shift.site, start: fmtMin(today.shift.hours.start), end: fmtMin(today.shift.hours.end), overnight: !!today.shift.hours.overnight, mci: !!today.mci } : null;
+    const list = [...(s.plan[k] || []).filter(p => p.status === 'accepted' || p.status === 'done'), ...(rt.suggestions[k] || [])].sort((a, b) => a.start - b.start)
+      .map(p => ({ app: p.app || guessApp(p.title), title: p.title, date: k, start: fmtMin(p.start), end: fmtMin(p.end), minutes: p.end - p.start, status: p.status, goalId: p.goalId }));
+    days[k] = { shift, blocks: list };
+    blocks.push(...list);
+  }
+  try { await G.writePlan(s.settings.driveFolder, { app: 'citrus', updatedAt: new Date().toISOString(), from: keyOf(from), days, blocks }); } catch (e) { console.warn('plan.json', e.message); }
+}
+function guessApp(title) { const t = String(title || '').toLowerCase(); for (const k of Object.keys(APP_META)) if (t.includes(k)) return k; if (/german|deutsch/.test(t)) return 'mephisto'; if (/gym|workout|lift/.test(t)) return 'orange'; if (/ecg|ekg/.test(t)) return 'sinus'; if (/card|review|anki/.test(t)) return 'yuzu'; return ''; }
+
 function renderPlan() {
   const s = S();
   const from = rt.planFrom || startOfDay(new Date());
@@ -769,7 +818,7 @@ function renderMore() {
       h('div', { class: 'divider' }),
       toggleRow('Mirror my shifts into a "Citrus Maxima Shifts" calendar', !!s.settings.pushShifts, (on) => { store.update(x => ({ ...x, settings: { ...x.settings, pushShifts: on } })); if (on) refreshAll(true); }),
       toggleRow('Add accepted plan blocks to my calendar', s.settings.pushPlan !== false, (on) => store.update(x => ({ ...x, settings: { ...x.settings, pushPlan: on } }))),
-      h('div', { class: 'field', style: { marginTop: '10px' } }, h('label', {}, 'Drive folder'), h('input', { value: s.settings.driveFolder, onChange: (e) => store.update(x => ({ ...x, settings: { ...x.settings, driveFolder: e.target.value.trim() || 'Citrus Maxima' } })) }), h('div', { class: 'tiny dim' }, 'Rotas go in <folder>/Rotas, app status files in <folder>/Apps.'))));
+      h('div', { class: 'field', style: { marginTop: '10px' } }, h('label', {}, 'Drive folder'), h('input', { value: s.settings.driveFolder, onChange: (e) => store.update(x => ({ ...x, settings: { ...x.settings, driveFolder: e.target.value.trim() || 'My Apps' } })) }), h('div', { class: 'tiny dim' }, 'Rotas go in <folder>/Rotas; every app keeps its files in <folder>/hub/<app>/.'))));
   }
   // Me
   const people = allPeople(s).filter(p => p.units.includes('gp'));
@@ -778,15 +827,15 @@ function renderMore() {
       h('option', { value: '' }, '— choose —'), ...people.map(p => h('option', { value: p.key, selected: isMe(s, p) }, `${p.name}${p.title ? ' · ' + p.title : ''}`)))) : h('div', { class: 'muted small' }, 'Import a rota first')));
   // Apps protocol
   out.push(h('div', { class: 'card' }, h('div', { class: 'title' }, 'Connected apps'),
-    h('div', { class: 'small muted' }, 'Each app writes a small JSON file to Drive › ', s.settings.driveFolder, ' › Apps. Citrus Maxima shows it on Today and the planner uses it.'),
-    h('pre', { class: 'tiny', style: { background: 'var(--bg2)', padding: '10px', borderRadius: '10px', overflow: 'auto', marginTop: '8px' } }, `Yuzu.status.json
+    h('div', { class: 'small muted' }, 'Each app writes hub/<app>/status.json under Drive › ', s.settings.driveFolder, '. Citrus shows it on Today, places the asks in your plan, and writes hub/citrus/plan.json back for the apps.'),
+    h('pre', { class: 'tiny', style: { background: 'var(--bg2)', padding: '10px', borderRadius: '10px', overflow: 'auto', marginTop: '8px' } }, `hub/yuzu/status.json
 {
-  "title": "Yuzu", "icon": "🍋", "color": "#f2c14e",
+  "app": "yuzu", "updatedAt": "2026-11-02T12:00:00Z",
   "summary": "120 cards due · 14-day streak",
-  "due": 120, "estimatedMinutes": 25,
-  "streak": 14, "nextDue": "tonight",
-  "url": "https://amaerys.github.io/Yuzu/",
-  "updatedAt": "2026-11-02T12:00:00Z"
+  "next": { "title": "Review 120 cards", "minutes": 25 },
+  "asks": [{ "date": "2026-11-02", "title": "Yuzu: reviews", "minutes": 25, "slot": "free" }],
+  "pending": ["120 cards due"],
+  "extra": { "streak": 14, "url": "https://yuzu-cards.github.io/Yuzu/" }
 }`),
     Object.keys(mergedApps()).length ? h('div', { class: 'small', style: { marginTop: '8px' } }, 'Seen: ', Object.keys(mergedApps()).join(', ')) : null));
   // Appearance + backup
