@@ -9,10 +9,13 @@ One Google Cloud OAuth client for all of them: `753489712404-ra7ahu34gjl305b4ss1
 ```
 My Apps/                      ← the only root. Never create "Citrus Maxima/", "Apps/" or app folders at Drive root.
 ├── Rotas/                    ← monthly rota spreadsheets, named "YYYY-MM Unit.xlsx" (GP rota, FSED, Upper Village)
+├── <App>/                    ← an app's own large data (e.g. Yuzu/collection, Yuzu/media). The app owns and repairs it;
+│                               Citrus only lists it. Small, shared things still go in hub/.
 └── hub/
     ├── citrus/
-    │   ├── state.json        ← Citrus's own synced state (rotas, plan, swaps, goals)
-    │   └── plan.json         ← what Citrus planned for the next 10 days, per app (apps READ this)
+    │   ├── state.json        ← Citrus's own synced state (rotas, plan, swaps, goals, notes)
+    │   ├── plan.json         ← what Citrus planned for the next 10 days, per app (apps READ this)
+    │   └── backups/          ← state-YYYY-MM-DD.json, one per day, newest 14 kept
     ├── <app>/                ← lowercase app id: yuzu, mephisto, orange, sinus, kumquat, embergine
     │   ├── status.json       ← the app's summary (Citrus READS this) — exactly one file with this name
     │   ├── state.json        ← optional: the app's own backup (single file)
@@ -26,6 +29,15 @@ My Apps/                      ← the only root. Never create "Citrus Maxima/", 
 3. **Update in place.** Write `status.json` / `state.json` by PATCHing the existing file id. Never POST a new file when one with that name exists.
 4. **Serialize writes to the same file.** Queue them; don't fire two uploads of the same file in parallel.
 5. **Download contents as bytes.** Drive returns `.json` files with a JSON content type; read the body yourself (`arrayBuffer`/`json`) rather than relying on a helper that guesses.
+6. **A lost answer is not a failure to create.** If a create (POST) drops its connection, look the file up before sending it again — it may already exist.
+7. **Newest wins, the rest go to the trash.** If twins exist anyway, read the newest by `modifiedTime` and trash the others (folders: keep the oldest, move the twins' contents into it).
+8. **Fingerprint what you write.** Put a content hash in `appProperties.h`. Skip uploads whose hash hasn't changed; other apps can tell what changed from the changes feed without downloading.
+9. **Check before overwriting shared state.** Store a revision in `appProperties.rev`; before writing, compare it with the one you read. If it moved, pull, merge, then write.
+10. **Ask Drive what changed.** Use `changes/startPageToken` + `changes?pageToken=` (one request when nothing moved) instead of re-listing folders on every sync. Do a full pass every ~12 h anyway.
+11. **Retry only what's safe.** GET/PATCH/DELETE retry on dropped connections; 429, 5xx and rate-limit 403s retry with jittered backoff; offline fails fast.
+12. **Token renewal needs a tap on phones.** Renew the one-hour token (`prompt: ''`) from a tap, never from a timer.
+
+All apps use the same client with the full `drive` scope (plus `calendar` where needed), so any app can tidy files another app created.
 
 ## status.json
 

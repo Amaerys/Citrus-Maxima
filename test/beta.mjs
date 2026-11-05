@@ -182,15 +182,18 @@ console.log('\nS5 — 500s, 401, expired session');
 {
   const g = createFakeGoogle(); g.seed({ rotaFiles: ROTAS });
   const d = await device(g, { at: T(4, 9), signedIn: 'expired', label: 'expired' });
-  await waitSynced(d.page); await sleep(800);
+  await sleep(1200);
+  const before = await d.page.locator('.banner').count();
+  (before ? ok : (a, b) => note('P1', a, b))('expired', before ? 'expired token → "tap to reconnect" banner, no window opened on its own' : 'expired token but no banner');
+  await d.page.mouse.click(5, 300); await sleep(300); await waitSynced(d.page); await sleep(800);   // any tap renews (no screen)
   const st = await state(d.page);
-  (st?.google?.lastSync ? ok : (a, b) => note('P1', a, b))('silent refresh', 'expired token renewed without a prompt on open');
+  (st?.google?.lastSync && !(await d.page.locator('.banner').count()) ? ok : (a, b) => note('P1', a, b))('tap renew', 'the next tap anywhere renewed the session and synced');
   await d.ctx.close();
   const g2 = createFakeGoogle(); g2.faults.gisFail = true;
   const d2 = await device(g2, { at: T(4, 9), signedIn: 'expired', label: 'expired-fail' });
-  await sleep(1500);
+  await sleep(1200); await d2.page.mouse.click(5, 300); await sleep(1500);
   const banner = await d2.page.locator('.banner').count();
-  (banner ? ok : (a, b) => note('P1', a, b))('expired', banner ? 'silent refresh fails → "Sign in" banner shown' : 'silent refresh failed but no banner — user would not know sync stopped');
+  (banner ? ok : (a, b) => note('P1', a, b))('expired', banner ? 'renewal refused → reconnect banner stays' : 'renewal failed but no banner — user would not know sync stopped');
   await shot(d2.page, 's5-expired-banner', false);
   errorsOf(d2.page, 'S5b'); await d2.ctx.close();
 }

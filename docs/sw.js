@@ -1,4 +1,4 @@
-const CACHE = 'citrus-maxima-cf4f29fc51';
+const CACHE = 'citrus-maxima-f96c11c3b7';
 const ASSETS = ['./', './index.html', './css/app.css', './js/app.js', './js/store.js', './js/google.js', './js/model.js', './js/planner.js', './js/util.js', './js/rota-parser.js', './js/xlsx-lite.js', './manifest.webmanifest', './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())); });

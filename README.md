@@ -32,7 +32,8 @@ docs/                 the site (GitHub Pages serves /docs)
   index.html, sw.js, manifest.webmanifest, icons/
   css/app.css         one stylesheet; phone first, rail + two columns from 900px
   js/app.js           screens, sync orchestration, outbox
-  js/google.js        sign-in, Calendar, Drive (cached folder ids, de-duplicated lookups, serialized writes, retries)
+  js/google.js        sign-in (tap-to-renew), Calendar, Drive: changes feed, fingerprinted writes, revision-checked
+                      state, lost-answer recovery, twin healing, daily backups, Check Drive (scan & repair)
   js/store.js         state, localStorage, merge between devices (tombstones for deletions)
   js/model.js         rota → who / where / when, swaps
   js/planner.js       free slots, rules, suggestions
@@ -41,9 +42,10 @@ docs/                 the site (GitHub Pages serves /docs)
   js/util.js          dates (dd/mm/yyyy), DOM helper, safe URLs
 test/
   parse.test.mjs      parser against the real November files
+  drive.mjs           Drive hardening: changes feed, two-device conflicts, lost answers, twins, deleted folders, backups
   e2e.mjs             phone + desktop walkthrough with screenshots
   beta.mjs            simulated beta: 11 scenarios against a fake Google (fake-google.mjs)
 scripts-bump.sh       bump the service-worker cache name before a release
 ```
 
-Run tests: `node test/parse.test.mjs`, `node test/e2e.mjs`, `node test/beta.mjs` (test/data/ holds the rota files; not committed).
+Run tests: `node test/parse.test.mjs`, `node test/e2e.mjs`, `node test/beta.mjs`, `node test/drive.mjs` (test/data/ holds the rota files; not committed).

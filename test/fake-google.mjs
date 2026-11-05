@@ -8,13 +8,17 @@ export function createFakeGoogle({ email = 'tester@example.com' } = {}) {
   const files = new Map(); // id -> {id,name,mimeType,parents,content:Buffer,modifiedTime,appData}
   const calendars = new Map([['primary', { id: 'primary', summary: email, primary: true, events: new Map() }]]);
   const log = [];
-  const faults = { status500: 0, status401: 0, offline: false, gisFail: false };
+  const changes = [];   // Drive changes feed: [{seq, fileId}]
+  let changeSeq = 1;
+  const touch = (f) => { f.modifiedTime = now(); changes.push({ seq: ++changeSeq, fileId: f.id }); return f; };
+  const meta = (f) => ({ id: f.id, name: f.name, mimeType: f.mimeType, modifiedTime: f.modifiedTime, createdTime: f.createdTime, size: String(f.content.length), parents: f.parents, trashed: !!f.trashed, appProperties: f.appProperties || {} });
+  const faults = { status500: 0, status401: 0, offline: false, gisFail: false, dropNextCreate: 0 };
   const now = () => new Date().toISOString();
   const FOLDER = 'application/vnd.google-apps.folder';
 
   function put(name, parent, content, mimeType = 'application/json') {
-    const f = { id: id('f'), name, mimeType, parents: [parent], content: Buffer.isBuffer(content) ? content : Buffer.from(typeof content === 'string' ? content : JSON.stringify(content)), modifiedTime: now() };
-    files.set(f.id, f); return f;
+    const f = { id: id('f'), name, mimeType, parents: [parent], content: Buffer.isBuffer(content) ? content : Buffer.from(typeof content === 'string' ? content : JSON.stringify(content)), modifiedTime: now(), createdTime: now() };
+    files.set(f.id, f); return touch(f);
   }
   function mkdir(name, parent = 'root') { return put(name, parent, Buffer.alloc(0), FOLDER); }
   function find(name, parent) { return [...files.values()].find(f => f.name === name && f.parents.includes(parent) && !f.trashed); }
@@ -66,14 +70,31 @@ export function createFakeGoogle({ email = 'tester@example.com' } = {}) {
     if (p === '/drive/v3/files' && method === 'GET') {
       const q = url.searchParams.get('q') || ''; const spaces = url.searchParams.get('spaces');
       const list = [...files.values()].filter(f => matches(f, q, spaces)).sort((a, b) => b.modifiedTime.localeCompare(a.modifiedTime));
-      return json(route, 200, { files: list.map(f => ({ id: f.id, name: f.name, mimeType: f.mimeType, modifiedTime: f.modifiedTime, size: String(f.content.length) })) });
+      return json(route, 200, { files: list.map(meta) });
+    }
+    if (p === '/drive/v3/changes/startPageToken') return json(route, 200, { startPageToken: String(changeSeq) });
+    if (p === '/drive/v3/changes') {
+      const from = +url.searchParams.get('pageToken'); if (!(from > 0) || from > changeSeq) return json(route, 404, { error: { message: 'bad page token' } });
+      const seen = new Set(); const out = [];
+      for (const c of changes.filter(c => c.seq > from)) { if (seen.has(c.fileId)) continue; seen.add(c.fileId); const f = files.get(c.fileId); out.push(f ? { fileId: f.id, removed: false, file: meta(f) } : { fileId: c.fileId, removed: true }); }
+      return json(route, 200, { changes: out, newStartPageToken: String(changeSeq) });
     }
     if (p === '/drive/v3/files' && method === 'POST') { const m = JSON.parse(req.postData() || '{}'); const f = put(m.name, (m.parents || ['root'])[0], Buffer.alloc(0), m.mimeType || 'application/octet-stream'); return json(route, 200, { id: f.id }); }
     let m;
     if ((m = /^\/drive\/v3\/files\/([^/]+)$/.exec(p)) && method === 'GET') {
       const f = files.get(m[1]); if (!f || f.trashed) return json(route, 404, { error: { message: 'File not found' } });
       if (url.searchParams.get('alt') === 'media') return route.fulfill({ status: 200, contentType: f.mimeType, body: f.content });
-      return json(route, 200, { id: f.id, name: f.name, trashed: !!f.trashed });
+      return json(route, 200, meta(f));
+    }
+    if ((m = /^\/drive\/v3\/files\/([^/]+)$/.exec(p)) && method === 'PATCH') {
+      const f = files.get(m[1]); if (!f) return json(route, 404, { error: { message: 'File not found' } });
+      const b = JSON.parse(req.postData() || '{}');
+      if ('trashed' in b) f.trashed = !!b.trashed;
+      const add = url.searchParams.get('addParents'), rem = url.searchParams.get('removeParents');
+      if (rem) f.parents = f.parents.filter(x => !rem.split(',').includes(x));
+      if (add) f.parents.push(...add.split(','));
+      if (b.name) f.name = b.name;
+      touch(f); return json(route, 200, { id: f.id });
     }
     if ((m = /^\/drive\/v3\/files\/([^/]+)\/export$/.exec(p))) { const f = files.get(m[1]); return f ? route.fulfill({ status: 200, body: f.content }) : json(route, 404, {}); }
     if (p === '/upload/drive/v3/files' && method === 'POST') {
@@ -81,12 +102,14 @@ export function createFakeGoogle({ email = 'tester@example.com' } = {}) {
       const parent = (meta.parents || ['root'])[0];
       const f = put(meta.name, parent === 'appDataFolder' ? 'appDataFolder' : parent, content, meta.mimeType || 'application/json');
       if (parent === 'appDataFolder') f.appData = true;
+      if (meta.appProperties) f.appProperties = { ...meta.appProperties };
+      if (faults.dropNextCreate > 0) { faults.dropNextCreate--; log.push('  ↳ created, answer dropped'); return route.abort('connectionreset'); }
       return json(route, 200, { id: f.id, modifiedTime: f.modifiedTime });
     }
     if ((m = /^\/upload\/drive\/v3\/files\/([^/]+)$/.exec(p)) && method === 'PATCH') {
       const f = files.get(m[1]); if (!f || f.trashed) return json(route, 404, { error: { message: 'File not found' } });
       const { meta, content } = parseMultipart(req.postDataBuffer(), req.headers()['content-type']);
-      f.content = content; if (meta.name) f.name = meta.name; f.modifiedTime = now();
+      f.content = content; if (meta.name) f.name = meta.name; if (meta.appProperties) f.appProperties = { ...(f.appProperties || {}), ...meta.appProperties }; touch(f);
       return json(route, 200, { id: f.id, modifiedTime: f.modifiedTime });
     }
     // ---- Calendar ----
@@ -96,7 +119,8 @@ export function createFakeGoogle({ email = 'tester@example.com' } = {}) {
       const cal = calendars.get(decodeURIComponent(m[1])); if (!cal) return json(route, 404, { error: { message: 'Not Found' } });
       if (method === 'GET') {
         const a = new Date(url.searchParams.get('timeMin')), b = new Date(url.searchParams.get('timeMax'));
-        return json(route, 200, { items: [...cal.events.values()].filter(e => new Date(e.end.dateTime || e.end.date) > a && new Date(e.start.dateTime || e.start.date) < b) });
+        const pk = /^key=(.*)$/.exec(url.searchParams.get('privateExtendedProperty') || '');
+        return json(route, 200, { items: [...cal.events.values()].filter(e => new Date(e.end.dateTime || e.end.date) > a && new Date(e.start.dateTime || e.start.date) < b && (!pk || e.extendedProperties?.private?.key === pk[1])) });
       }
       if (method === 'POST') { const e = { ...JSON.parse(req.postData()), id: id('ev'), status: 'confirmed', htmlLink: 'https://calendar.google.com/x' }; cal.events.set(e.id, e); return json(route, 200, e); }
     }
@@ -129,5 +153,5 @@ export function createFakeGoogle({ email = 'tester@example.com' } = {}) {
     for (const e of events) { const ev = { id: id('ev'), status: 'confirmed', ...e }; calendars.get('primary').events.set(ev.id, ev); }
   }
 
-  return { attach, seed, files, calendars, log, faults, tree, readJsonAt, path };
+  return { attach, seed, files, calendars, log, faults, tree, readJsonAt, path, put, touch, find };
 }

@@ -51,26 +51,36 @@ async function boot() {
   show(location.hash.replace('#', '') || 'today');
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
   const cid = S().settings.clientId;
+  G.onAuthChange(() => { renderSync(); render(); });
+  G.renewOnTap(() => { render(); refreshAll(false); });   // the hourly token renews on your next tap (phones only allow Google's window inside a tap)
   if (cid && rt.online) {
     try { await G.init(cid); } catch (e) { console.warn(e); }
     if (G.isSignedIn()) refreshAll(false);
-    else if (G.wasSignedIn()) G.signIn({ silent: true }).then(() => refreshAll(false)).catch(() => { G.auth.needsSignIn = true; render(); });
+    else if (G.wasSignedIn()) { G.auth.needsSignIn = true; render(); }
   }
-  G.onAuthChange(() => { renderSync(); render(); });
+  // ask the browser not to clear Citrus's storage under pressure (granted silently for installed apps)
+  navigator.storage?.persist?.().then(ok => { rt.storagePersisted = ok; }).catch(() => {});
+  navigator.storage?.estimate?.().then(e => { rt.storageEst = e; }).catch(() => {});
   setInterval(() => {
     const busy = document.querySelector('.sheet-bg, .search') || /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '');
     if (rt.view === 'today' && document.visibilityState === 'visible' && !busy) render();
   }, 60000);
-  // keep fresh: re-sync when the app comes back to the foreground after a while
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && G.isSignedIn() && Date.now() - (S().google.lastSync || 0) > 10 * 60000) refreshAll(false); });
+  // keep fresh: a cheap changes check when the app comes back to the foreground (one request if nothing moved),
+  // and every few minutes while it's open; save right away when it goes to the background
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') { flushRemoteSave(); return; }
+    if (G.isSignedIn() && Date.now() - (S().google.lastSync || 0) > 2 * 60000) refreshAll(false);
+  });
+  window.addEventListener('pagehide', flushRemoteSave);
+  setInterval(() => { if (document.visibilityState === 'visible' && G.isSignedIn() && rt.online && Date.now() - (S().google.lastSync || 0) > 5 * 60000) refreshAll(false); }, 60000);
   renderSync();
 }
 
 // Shown at the top of every screen when the Google session needs a tap to come back
 function authBanner() {
   if (!G.auth.needsSignIn || !rt.online) return null;
-  return h('div', { class: 'banner' }, h('span', { class: 'grow' }, 'Google sign-in expired — your calendar and Drive are paused.'),
-    h('button', { class: 'btn sm primary', onClick: async () => { try { await G.signIn(); refreshAll(true); } catch (e) { toast(e.message, 'err'); } } }, 'Sign in'));
+  return h('div', { class: 'banner' }, h('span', { class: 'grow' }, 'Google needs a tap to reconnect — nothing is lost, sync resumes after.'),
+    h('button', { class: 'btn sm primary', onClick: async () => { try { await G.signIn({ renew: G.wasSignedIn() }); refreshAll(true); } catch (e) { try { await G.signIn(); refreshAll(true); } catch (e2) { toast(e2.message, 'err'); } } } }, 'Reconnect'));
 }
 
 const VIEWS = ['today', 'rota', 'team', 'plan', 'apps', 'more'];
@@ -100,64 +110,190 @@ function renderSync() {
   txt.textContent = !rt.online ? 'offline' : rt.syncing ? 'syncing…' : signed ? (S().google.email || 'Google') : '';
 }
 
-let saveTimer = null;
+// ---------------- Drive sync ----------------
+// state.json is written at most every 2.5 s, only when its content changed, and only if no other device wrote it since we
+// read it — otherwise Citrus pulls, merges and writes the merged copy. Drive answers "anything new?" through its changes
+// feed, so a sync where nothing moved is a single request; only what changed is read again.
+let saveTimer = null, saving = null;
 function scheduleRemoteSave() {
-  if (!G.isSignedIn() || !rt.online) return;
+  if (!G.wasSignedIn()) return;
+  rt.saveDirty = true;
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(async () => {
-    try { await G.saveRemoteState(S().settings.driveFolder, stripForRemote(S())); } catch (e) { console.warn('remote save failed', e.message); }
-  }, 2500);
+  if (!G.isSignedIn() || !rt.online) return;   // stays dirty: the next sync saves it
+  saveTimer = setTimeout(() => saveStateNow().catch(e => console.warn('remote save failed', e.message)), 2500);
 }
-function stripForRemote(s) { return { ...s, apps: undefined }; }
+function flushRemoteSave() { if (rt.saveDirty && G.isSignedIn() && rt.online) { clearTimeout(saveTimer); saveStateNow().catch(() => {}); } }
+async function saveStateNow() {
+  if (saving) { await saving.catch(() => {}); if (!rt.saveDirty) return; }
+  saving = (async () => {
+    const root = S().settings.driveFolder;
+    rt.saveDirty = false;
+    try { await G.saveRemoteState(root, stripForRemote(S())); }
+    catch (e) {
+      if (!e.conflict) { rt.saveDirty = true; throw e; }
+      await pullState(true);                                   // someone else saved first: take theirs in, then write the union
+      try { await G.saveRemoteState(root, stripForRemote(S()), { force: true }); } catch (e2) { rt.saveDirty = true; throw e2; }
+    }
+    rt.lastSave = Date.now();
+  })().finally(() => { saving = null; });
+  return saving;
+}
+// what goes to Drive: everything except what belongs to this device (sync bookkeeping, calendar outbox, app cache)
+function stripForRemote(s) { const { apps, outbox, google, ...rest } = s; return rest; }
+const comparable = (s) => G.fingerprint(stripForRemote(s || {}), ['updatedAt']);
 
-async function refreshAll(manual) {
-  if (!G.isSignedIn()) { if (manual) toast(S().settings.clientId ? 'Sign in to Google in Settings' : 'Add your Google client ID in Settings'); render(); return; }
+/** Read state.json and merge it in. Writes back only if the merged copy holds something Drive doesn't. */
+async function pullState(fromConflict = false) {
+  const remote = await G.loadRemoteState(S().settings.driveFolder);
+  if (!remote) { scheduleRemoteSave(); return false; }
+  if (!remote.rotas || typeof remote.rotas !== 'object') throw new Error('state.json on Drive is unreadable — kept your copy (backups are in hub/citrus/backups)');
+  // same content, or the same edit time (this copy already holds that save; device-only tweaks don't bump the time,
+  // and two devices must never bounce those back and forth)
+  // (after a conflict the merge always runs: someone else's save is known to be missing here)
+  if ((!fromConflict && (remote.updatedAt || 0) === (S().updatedAt || 0)) || comparable(remote) === comparable(S())) return false;
+  const merged = mergeStates(S(), remote);
+  merged.updatedAt = Math.max(S().updatedAt || 0, remote.updatedAt || 0);
+  store.replaceState(merged);
+  if (comparable(merged) !== comparable(remote)) { if (fromConflict) rt.saveDirty = true; else scheduleRemoteSave(); }
+  rt.lastPull = Date.now();
+  return true;
+}
+
+// where Citrus listens in the changes feed (persisted, so the first sync after a reload can be incremental too)
+const WATCH_KEY = 'citrus.drive.watch';
+function loadWatch() { try { const w = JSON.parse(localStorage.getItem(WATCH_KEY) || 'null'); return w && w.root === S().settings.driveFolder ? w : null; } catch { return null; } }
+function saveWatch(w) { rt.watch = w; try { w ? localStorage.setItem(WATCH_KEY, JSON.stringify(w)) : localStorage.removeItem(WATCH_KEY); } catch {} }
+
+async function syncApps(only = null) {
+  const root = S().settings.driveFolder;
+  let drive = { ...(S().apps || {}) }, maps = null;
+  if (only) { for (const [fileId, app] of only) { const st = await G.readStatusFile(fileId, app); if (st) drive[app] = st; } }
+  else { const r = await G.listAppStatus(root); drive = r.apps; maps = { fileToApp: r.fileToApp, folderToApp: r.folderToApp }; }
+  const local = localAppStatuses();                 // apps on this site that can't reach Drive themselves: mirror them up
+  for (const [name, st] of Object.entries(local)) {
+    const d = drive[name];
+    if (!d || (st.updatedAt || '') > (d.updatedAt || '')) { try { await G.uploadAppStatus(root, name, st); drive[name] = st; } catch (e) { console.warn('mirror', name, e.message); } }
+  }
+  store.update(s => ({ ...s, apps: drive }), { remote: false, silent: true });
+  return maps;
+}
+async function syncCalendar(force) {
+  if (!force && Date.now() - (rt.calendarAt || 0) < 4 * 60000) return;   // calendar has no cheap "anything new?", so it's throttled
+  rt.calendars = await G.listCalendars();
+  const now = new Date();
+  await Promise.all([loadEvents(new Date(now.getFullYear(), now.getMonth(), 1), true), loadEvents(new Date(now.getFullYear(), now.getMonth() + 1, 1), true)]);
+  rt.calendarAt = Date.now();
+}
+
+async function refreshAll(manual, { full = false } = {}) {
+  if (!G.isSignedIn()) { if (manual) toast(G.wasSignedIn() ? 'Google needs a tap to reconnect' : S().settings.clientId ? 'Sign in to Google in Settings' : 'Add your Google client ID in Settings'); render(); return; }
   if (!rt.online) { if (manual) toast('You are offline'); return; }
-  if (rt.syncing) { if (manual) toast('Already syncing…'); return; }   // one sync at a time (r key, foreground, online can overlap)
+  if (rt.syncing) { if (manual) toast('Already syncing…'); return; }   // one sync at a time (r key, foreground, timer can overlap)
   rt.syncing = true; renderSync();
-  await G.validateCache(S().settings.driveFolder).catch(() => {});
+  const root = S().settings.driveFolder;
   const problems = [];
+  const step = async (label, fn) => { try { await fn(); } catch (e) { problems.push(`${label}: ${e.message}`); } };
+  const t0 = performance.now();
   try {
-    // 1. remote state (newer wins, rotas merged)
-    try {
-      const remote = await G.loadRemoteState(S().settings.driveFolder);
-      if (remote && remote.updatedAt !== S().updatedAt) {
-        const merged = mergeStates(S(), remote);
-        merged.updatedAt = Math.max(S().updatedAt, remote.updatedAt);
-        store.replaceState(merged);
-        if (remote.updatedAt < S().updatedAt) scheduleRemoteSave();
-      } else if (!remote) scheduleRemoteSave();
-    } catch (e) { problems.push('state: ' + e.message); }
-    // 2–5 run in parallel: email, rota files, app statuses, calendars
-    const step = async (label, fn) => { try { await fn(); } catch (e) { problems.push(`${label}: ${e.message}`); } };
+    // 1. what moved on Drive since last time?
+    let watch = loadWatch(), plan = null, newToken = '';
+    const stale = !watch?.token || Date.now() - (watch.fullAt || 0) > 12 * 3600000;   // a full pass at least twice a day, whatever the feed says
+    if (!full && !manual && !stale) {
+      try {
+        const ch = await G.changesSince(watch.token);
+        if (ch) { newToken = ch.token; plan = classifyChanges(ch.changes, watch); if (ch.more) plan = null; }
+      } catch (e) { if (e.auth) throw e; }
+    }
+    if (!plan) {   // full pass: mark "now" in the feed first so nothing that changes during the pass is missed
+      G.reverify();
+      newToken = await G.startToken().catch(() => '');
+      plan = { full: true, state: true, rotas: true, apps: true };
+    }
+    if (!G.seenStateRev() && !rt.stateLoaded) plan.state = true;   // read state.json once per app session at least
+    rt.syncMode = plan.full ? 'full' : plan.state || plan.rotas || plan.apps || plan.appFiles?.size ? 'changes' : 'nothing new';
+    // 2. state first (the merge decides what everything else shows), then the rest in parallel
+    if (plan.state) await step('state', async () => { await pullState(); rt.stateLoaded = true; });
+    let maps = null;
     await Promise.all([
       step('account', async () => { if (!S().google.email) { const u = await G.userInfo(); store.update(s => ({ ...s, google: { ...s.google, email: u.email } }), { remote: false, silent: true }); } }),
-      step('rotas', pullRotasFromDrive),
-      step('apps', async () => {
-        const drive = await G.listAppStatus(S().settings.driveFolder);
-        const local = localAppStatuses();
-        for (const [name, st] of Object.entries(local)) {
-          const d = drive[name];
-          if (!d || (st.updatedAt || '') > (d.updatedAt || '')) { try { await G.uploadAppStatus(S().settings.driveFolder, name, st); drive[name] = st; } catch (e) { console.warn('mirror', name, e.message); } }
-        }
-        store.update(s => ({ ...s, apps: drive }), { remote: false, silent: true });
-      }),
-      step('calendar', async () => {
-        rt.calendars = await G.listCalendars();
-        const now = new Date();
-        await Promise.all([loadEvents(new Date(now.getFullYear(), now.getMonth(), 1), true), loadEvents(new Date(now.getFullYear(), now.getMonth() + 1, 1), true)]);
-      }),
+      plan.rotas ? step('rotas', pullRotasFromDrive) : null,
+      plan.apps ? step('apps', async () => { maps = await syncApps(); }) : plan.appFiles?.size ? step('apps', () => syncApps(plan.appFiles)) : null,
+      step('calendar', () => syncCalendar(manual || plan.full)),
     ]);
-    // 5b. queued calendar writes
-    try { await flushOutbox(); } catch (e) { problems.push('outbox: ' + e.message); }
-    // 6. push shifts
-    if (S().settings.pushShifts) { try { await pushShiftsToCalendar(); } catch (e) { problems.push('shift push: ' + e.message); } }
+    // 3. queued calendar writes, unsaved local changes, shift mirror
+    await step('outbox', flushOutbox);
+    if (rt.saveDirty) await step('save', saveStateNow);
+    if (S().settings.pushShifts && (plan.full || plan.rotas || plan.state)) await step('shift push', pushShiftsToCalendar);
+    // 4. remember where we are in the feed — only when everything worked, so a failed step is retried next time
+    if (!problems.length && newToken) {
+      const next = { ...(watch || {}), root, token: newToken };
+      if (plan.full) { Object.assign(next, await G.watchedFolders(root).catch(() => ({})), { fullAt: Date.now() }); }
+      if (maps) Object.assign(next, maps);
+      saveWatch(next);
+    }
+    // 5. a daily snapshot of your state on Drive (14 kept) — the undo for a bad merge or a wrong tap
+    if (!problems.length) G.backupDaily(root, stripForRemote(S()), keyOf(new Date())).catch(e => console.warn('backup', e.message));
     store.update(s => ({ ...s, google: { ...s.google, lastSync: Date.now() } }), { remote: false, silent: true });
     regenerate();
-    rt.lastProblems = problems;
+    rt.lastProblems = problems; rt.lastSyncMs = Math.round(performance.now() - t0);
     if (manual) toast(problems.length ? 'Synced with issues — see Settings › Diagnostics' : 'Synced', problems.length ? 'err' : 'ok');
     else if (problems.length) console.warn(problems);
+  } catch (e) {
+    rt.lastProblems = [e.message];
+    if (manual) toast(e.message, 'err');
   } finally { rt.syncing = false; renderSync(); render(); }
+}
+
+/** Turn a page of Drive changes into the smallest sync that covers them. null = can't tell, do a full pass. */
+function classifyChanges(changes, w) {
+  const plan = { state: false, rotas: false, apps: false, appFiles: new Map() };
+  const roots = new Set([w.rotas, w.hub, w.citrus].filter(Boolean));
+  const knownRotas = new Set(Object.values(S().rotas).map(r => r.driveId).filter(Boolean));
+  for (const c of changes) {
+    if (roots.has(c.id) && (c.removed || c.trashed || !(c.parents || []).length)) { G.forgetFolders(); return null; }   // one of our folders vanished: rebuild
+    const par = c.parents || [];
+    if (par.includes(w.rotas) || knownRotas.has(c.id)) plan.rotas = true;
+    if (par.includes(w.citrus) && c.name === 'state.json' && (c.props?.rev || '') !== G.seenStateRev()) plan.state = true;
+    if (par.includes(w.hub) && c.mimeType === 'application/vnd.google-apps.folder' && c.id !== w.citrus && c.name !== 'citrus' && !w.folderToApp?.[c.id]) plan.apps = true;   // a new app joined
+    const app = par.map(p => w.folderToApp?.[p]).find(Boolean);
+    if (app && c.name === 'status.json') { if (c.trashed) plan.apps = true; else plan.appFiles.set(c.id, app); }
+    if (c.removed && w.fileToApp?.[c.id]) plan.apps = true;
+  }
+  return plan;
+}
+
+// ---------------- backups, scan & repair (Settings › Drive) ----------------
+async function backupsSheet() {
+  let list = [];
+  try { list = await G.listBackups(S().settings.driveFolder); } catch (e) { return toast(e.message, 'err'); }
+  const { close } = sheet([h('h2', {}, 'Restore a daily backup'),
+    h('p', { class: 'small muted' }, 'Citrus keeps one snapshot of your rotas, plan, swaps, goals and notes per day on Drive (hub/citrus/backups, newest 14). Restoring replaces this copy and syncs it to your other devices.'),
+    list.length ? h('div', { class: 'list' }, ...list.map(b => h('div', { class: 'item' }, h('div', { class: 'grow' }, h('div', { class: 'name' }, fmtDate(fromKey(b.date))), h('div', { class: 'meta' }, `${Math.max(1, Math.round(b.size / 1024))} KB`)),
+      h('button', { class: 'btn sm', onClick: async () => {
+        try {
+          const j = await G.readBackup(b.id); if (!j || !j.rotas) throw new Error('That backup is unreadable');
+          store.replaceState({ ...j, outbox: S().outbox, google: S().google, apps: S().apps }, { bump: true });
+          regenerate(); close(); toast(`Restored ${fmtDate(fromKey(b.date))}`, 'ok'); render();
+        } catch (e) { toast(e.message, 'err'); }
+      } }, 'Restore')))) : h('div', { class: 'muted small' }, 'No backups yet — the first is made after today\'s sync.')]);
+}
+async function repairSheet() {
+  const body = h('div', {}, h('div', { class: 'muted small' }, 'Looking through Drive › ' + S().settings.driveFolder + '…'));
+  const { close } = sheet([h('h2', {}, 'Check Drive'), body]);
+  let rep;
+  try { rep = await G.scanDrive(S().settings.driveFolder); } catch (e) { body.replaceChildren(h('div', { class: 'small' }, e.message)); return; }
+  const issues = [...rep.twinFolders, ...rep.twinFiles].filter(t => t.fixable).length;
+  body.replaceChildren(...[
+    h('div', { class: 'small' }, `${rep.folders} folders · ${rep.files} files · ${issues ? `${issues} duplicate${issues > 1 ? 's' : ''}` : 'no duplicates'}`),
+    ...rep.twinFolders.map(t => h('div', { class: 'small', style: { marginTop: '6px' } }, t.fixable ? `▸ ${t.path} ×${t.items.length} — contents will be merged into the oldest` : `▸ ${t.path} ×${t.items.length} — belongs to its own app; open that app to tidy it`)),
+    ...rep.twinFiles.filter(t => t.fixable).map(t => h('div', { class: 'small', style: { marginTop: '6px' } }, `· ${t.path} ×${t.items.length} — newest kept, others to the trash`)),
+    rep.strayRoots.length ? h('div', { class: 'small muted', style: { marginTop: '6px' } }, `Old folder “${rep.strayRoots.map(r => r.name).join(', ')}” is still in My Drive. Citrus no longer uses it — check it and delete it yourself if it's empty.`) : null,
+    h('pre', { class: 'tiny', style: { background: 'var(--bg2)', padding: '10px', borderRadius: '10px', overflow: 'auto', marginTop: '10px', maxHeight: '40vh' } }, rep.tree.join('\n') || '(empty)'),
+    issues ? h('button', { class: 'btn primary', style: { marginTop: '10px' }, onClick: async (e) => {
+      e.target.disabled = true; e.target.textContent = 'Fixing…';
+      try { const r = await G.repairDrive(rep); saveWatch(null); close(); toast(`Fixed: ${r.moved} moved, ${r.trashed} to the trash (restorable for 30 days)`, 'ok'); refreshAll(false, { full: true }); }
+      catch (err) { toast(err.message, 'err'); e.target.disabled = false; e.target.textContent = 'Fix duplicates'; }
+    } }, 'Fix duplicates') : null].filter(Boolean));
 }
 
 async function loadEvents(monthDate, force = false) {
@@ -285,7 +421,10 @@ async function flushOutboxOnce() {
   for (const op of ops) {
     try {
       if (op.type === 'create') {
-        const ev = await G.createEvent(op.calendarId, { ...op.payload, start: new Date(op.payload.start), end: new Date(op.payload.end) });
+        // a create whose answer was lost may already be in the calendar: look for it by its key before sending it again
+        const payload = { ...op.payload, start: new Date(op.payload.start), end: new Date(op.payload.end), key: op.id };
+        let ev = op.tried ? await G.findEventByKey(op.calendarId, op.id, addDays(payload.start, -1), addDays(payload.end, 1)).catch(() => null) : null;
+        if (!ev) { store.update(s => ({ ...s, outbox: (s.outbox || []).map(o => o.id === op.id ? { ...o, tried: true } : o) }), { silent: true, remote: false }); ev = await G.createEvent(op.calendarId, payload); }
         if (op.meta?.blockId && op.meta?.dateKey) store.update(s => ({ ...s, plan: { ...s.plan, [op.meta.dateKey]: (s.plan[op.meta.dateKey] || []).map(p => p.id === op.meta.blockId ? { ...p, eventId: ev.id, calendarId: ev.calendarId } : p) } }), { silent: true });
       } else if (op.type === 'delete') await G.deleteEvent(op.calendarId, op.eventId);
       done.add(op.id);
@@ -1033,7 +1172,7 @@ function renderMore() {
     h('div', { class: 'field' }, h('label', {}, 'OAuth client ID (from your Google Cloud project)'), cid, h('div', { class: 'tiny dim' }, 'Only the client ID — never the secret. Add this site to "Authorized JavaScript origins" in the Cloud console.')),
     h('div', { class: 'row wrap' },
       h('button', { class: 'btn', onClick: async () => { store.update(x => ({ ...x, settings: { ...x.settings, clientId: cid.value.trim() } }), { remote: false }); try { await G.init(cid.value.trim()); toast('Saved', 'ok'); } catch (e) { toast(e.message, 'err'); } } }, 'Save ID'),
-      signed ? h('button', { class: 'btn', onClick: () => { G.signOut(); render(); } }, 'Sign out') : h('button', { class: 'btn primary', onClick: async () => { try { if (!G.isSignedIn()) { store.update(x => ({ ...x, settings: { ...x.settings, clientId: cid.value.trim() } }), { remote: false }); await G.init(cid.value.trim()); } await G.signIn(); toast('Signed in', 'ok'); refreshAll(true); } catch (e) { toast(e.message, 'err'); } } }, 'Sign in with Google'),
+      signed ? h('button', { class: 'btn', onClick: () => { G.signOut(); saveWatch(null); render(); } }, 'Sign out') : h('button', { class: 'btn primary', onClick: async () => { try { if (cid.value.trim() !== s.settings.clientId) { store.update(x => ({ ...x, settings: { ...x.settings, clientId: cid.value.trim() } }), { remote: false }); await G.init(cid.value.trim()); } await G.signIn({ renew: G.wasSignedIn() }).catch(() => G.signIn()); toast('Signed in', 'ok'); refreshAll(true); } catch (e) { toast(e.message, 'err'); } } }, G.wasSignedIn() ? 'Reconnect Google' : 'Sign in with Google'),
       signed ? h('button', { class: 'btn', onClick: () => refreshAll(true) }, '↻ Sync now') : null),
     signed ? h('div', { class: 'small muted', style: { marginTop: '8px' } }, `${s.google.email || 'signed in'}${s.google.lastSync ? ` · last sync ${new Date(s.google.lastSync).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}` : ''}`) : null));
   if (signed) {
@@ -1043,7 +1182,10 @@ function renderMore() {
       h('div', { class: 'divider' }),
       toggleRow('Mirror my shifts into a "Citrus Maxima Shifts" calendar', !!s.settings.pushShifts, (on) => { store.update(x => ({ ...x, settings: { ...x.settings, pushShifts: on } })); if (on) refreshAll(true); }),
       toggleRow('Add accepted plan blocks to my calendar', s.settings.pushPlan !== false, (on) => store.update(x => ({ ...x, settings: { ...x.settings, pushPlan: on } }))),
-      h('div', { class: 'field', style: { marginTop: '10px' } }, h('label', {}, 'Drive folder'), h('input', { value: s.settings.driveFolder, onChange: (e) => store.update(x => ({ ...x, settings: { ...x.settings, driveFolder: e.target.value.trim() || 'My Apps' } })) }), h('div', { class: 'tiny dim' }, 'Rotas go in <folder>/Rotas; every app keeps its files in <folder>/hub/<app>/.'))));
+      h('div', { class: 'field', style: { marginTop: '10px' } }, h('label', {}, 'Drive folder'), h('input', { value: s.settings.driveFolder, onChange: (e) => store.update(x => ({ ...x, settings: { ...x.settings, driveFolder: e.target.value.trim() || 'My Apps' } })) }), h('div', { class: 'tiny dim' }, 'Rotas go in <folder>/Rotas; every app keeps its files in <folder>/hub/<app>/.')),
+      h('div', { class: 'row wrap', style: { marginTop: '10px' } },
+        h('button', { class: 'btn sm', onClick: backupsSheet }, '⟲ Daily backups'),
+        h('button', { class: 'btn sm', onClick: repairSheet }, '🩺 Check Drive'))));
   }
   // Me
   const people = allPeople(s).filter(p => p.units.includes('gp'));
@@ -1140,7 +1282,12 @@ function diagnosticsCard() {
   const s = S();
   const rows = [
     ['Google', G.isSignedIn() ? `signed in as ${G.accountEmail() || s.google.email || '?'}` : G.wasSignedIn() ? 'session expired — tap Sign in' : 'not signed in'],
-    ['Last sync', s.google.lastSync ? new Date(s.google.lastSync).toLocaleString('en-GB') : 'never'],
+    ['Session', G.isSignedIn() ? `${G.tokenMinutesLeft()} min left · renews on your next tap` : '—'],
+    ['Last sync', s.google.lastSync ? `${new Date(s.google.lastSync).toLocaleString('en-GB')}${rt.syncMode ? ` · ${rt.syncMode}` : ''}${rt.lastSyncMs ? ` · ${(rt.lastSyncMs / 1000).toFixed(1)} s` : ''}` : 'never'],
+    ['Drive requests', `${G.stats.requests} sent · ${G.stats.retries} retried · ${G.stats.errors} failed · ${G.stats.skippedWrites} unchanged writes skipped`],
+    ['Last Google error', G.stats.lastError ? `${G.stats.lastError} (${new Date(G.stats.lastErrorAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })})` : 'none'],
+    ['Unsaved to Drive', rt.saveDirty ? 'yes — saves on the next sync' : 'no'],
+    ['This device', `${store.persistence.ok ? 'saved' : '⚠ ' + store.persistence.lastError} · ${Math.round(store.persistence.bytes / 1024)} KB${rt.storagePersisted ? ' · protected from clean-up' : ''}${rt.storageEst ? ` · ${Math.round(rt.storageEst.usage / 1048576)} of ${Math.round(rt.storageEst.quota / 1048576)} MB used` : ''}`],
     ['Sync issues', (rt.lastProblems || []).length ? rt.lastProblems.join(' · ') : 'none'],
     ['Queued calendar writes', String((s.outbox || []).length)],
     ['Rotas loaded', Object.keys(s.rotas).length ? Object.values(s.rotas).map(r => `${UNIT_LABEL[r.unitKind]} ${MONTHS[r.month - 1].slice(0, 3)}`).join(', ') : 'none'],
@@ -1152,4 +1299,5 @@ function diagnosticsCard() {
     h('div', { class: 'row', style: { marginTop: '10px' } }, h('button', { class: 'btn sm', onClick: () => refreshAll(true) }, 'Sync now'), h('button', { class: 'btn sm', onClick: async () => { const regs = await navigator.serviceWorker?.getRegistrations?.() || []; for (const r of regs) await r.unregister(); const ks = await caches.keys(); for (const k of ks) await caches.delete(k); location.reload(); } }, 'Reinstall app files')));
 }
 
+window.__citrus = { refreshAll, publishPlan, saveStateNow, store, G, rt };   // for the console and the tests
 boot();

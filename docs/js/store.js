@@ -66,6 +66,21 @@ function load() {
   } catch { return defaults(); }
 }
 
+// Save to this device. When the browser's storage is full, drop what can be fetched again (the calendar cache) and retry.
+export const persistence = { ok: true, lastError: '', bytes: 0 };
+function persist() {
+  const raw = JSON.stringify(state);
+  persistence.bytes = raw.length * 2;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try { localStorage.setItem(KEY, raw); persistence.ok = true; persistence.lastError = ''; return true; }
+    catch (e) {
+      persistence.ok = false; persistence.lastError = e?.name === 'QuotaExceededError' || /quota/i.test(e?.message || '') ? 'This device\'s storage is full' : (e?.message || 'save failed');
+      if (attempt === 0) { try { localStorage.removeItem('citrus.events'); } catch {} } else console.warn('persist failed', e);
+    }
+  }
+  return false;
+}
+
 export function get() { return state; }
 export function subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); }
 
@@ -76,7 +91,7 @@ export function update(mutator, { silent = false, remote = true } = {}) {
   const next = typeof mutator === 'function' ? (mutator(state) || state) : { ...state, ...mutator };
   if (remote) next.updatedAt = Date.now();   // local-only bookkeeping (sync time, app cache, outbox) must not make this copy look newer
   state = next;
-  try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { console.warn('persist failed', e); }
+  persist();
   if (!silent) for (const fn of listeners) fn(state);
   if (remote && syncHook) syncHook(state);
   return state;
@@ -85,7 +100,7 @@ export function update(mutator, { silent = false, remote = true } = {}) {
 export function replaceState(s, { bump = false } = {}) {
   state = { ...defaults(), ...s, rules: { ...DEFAULT_RULES, ...(s.rules || {}) }, settings: { ...defaults().settings, ...(s.settings || {}) } };
   if (bump) { state.updatedAt = Date.now(); if (syncHook) syncHook(state); }
-  try { localStorage.setItem(KEY, JSON.stringify(state)); } catch {}
+  persist();
   for (const fn of listeners) fn(state);
 }
 
