@@ -4,7 +4,7 @@ import * as G from './google.js';
 import { parseRotaFile, serializeRota } from './rota-parser.js';
 import { dayInfo, myDay, allPeople, isMe, sharedShifts, monthSummary, shiftWindow, UNIT_LABEL } from './model.js';
 import { suggest, dayBusy, learn, weekStartOf, weekProgress } from './planner.js';
-import { h, toast, keyOf, fromKey, addDays, startOfDay, sameDay, fmtDate, fmtDateShort, fmtTime, fmtMin, fmtDur, relDay, pad2, DAY_SHORT, DAY_NAMES, MONTHS, telLink, firstName, atMin, minsOf, uid } from './util.js';
+import { h, toast, safeUrl, keyOf, fromKey, addDays, startOfDay, sameDay, fmtDate, fmtDateShort, fmtTime, fmtMin, fmtDur, relDay, pad2, DAY_SHORT, DAY_NAMES, MONTHS, telLink, firstName, atMin, minsOf, uid } from './util.js';
 
 // ---------------- runtime state (not persisted) ----------------
 const rt = {
@@ -57,6 +57,10 @@ async function boot() {
     else if (G.wasSignedIn()) G.signIn({ silent: true }).then(() => refreshAll(false)).catch(() => { G.auth.needsSignIn = true; render(); });
   }
   G.onAuthChange(() => { renderSync(); render(); });
+  setInterval(() => {
+    const busy = document.querySelector('.sheet-bg, .search') || /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '');
+    if (rt.view === 'today' && document.visibilityState === 'visible' && !busy) render();
+  }, 60000);
   // keep fresh: re-sync when the app comes back to the foreground after a while
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && G.isSignedIn() && Date.now() - (S().google.lastSync || 0) > 10 * 60000) refreshAll(false); });
   renderSync();
@@ -69,7 +73,9 @@ function authBanner() {
     h('button', { class: 'btn sm primary', onClick: async () => { try { await G.signIn(); refreshAll(true); } catch (e) { toast(e.message, 'err'); } } }, 'Sign in'));
 }
 
+const VIEWS = ['today', 'rota', 'team', 'plan', 'apps', 'more'];
 function show(view) {
+  if (!VIEWS.includes(view)) view = 'today';
   rt.view = view;
   for (const s of document.querySelectorAll('section.view')) s.classList.toggle('active', s.id === `view-${view}`);
   for (const b of document.querySelectorAll('nav.tabs button')) b.classList.toggle('active', b.dataset.view === view);
@@ -107,7 +113,9 @@ function stripForRemote(s) { return { ...s, apps: undefined }; }
 async function refreshAll(manual) {
   if (!G.isSignedIn()) { if (manual) toast(S().settings.clientId ? 'Sign in to Google in Settings' : 'Add your Google client ID in Settings'); render(); return; }
   if (!rt.online) { if (manual) toast('You are offline'); return; }
+  if (rt.syncing) { if (manual) toast('Already syncing…'); return; }   // one sync at a time (r key, foreground, online can overlap)
   rt.syncing = true; renderSync();
+  await G.validateCache(S().settings.driveFolder).catch(() => {});
   const problems = [];
   try {
     // 1. remote state (newer wins, rotas merged)
@@ -146,8 +154,8 @@ async function refreshAll(manual) {
     if (S().settings.pushShifts) { try { await pushShiftsToCalendar(); } catch (e) { problems.push('shift push: ' + e.message); } }
     store.update(s => ({ ...s, google: { ...s.google, lastSync: Date.now() } }), { remote: false, silent: true });
     regenerate();
-    rt.lastProblems = problems; rt.lastSyncAt = Date.now();
-    if (manual) toast(problems.length ? 'Synced with issues — see More › Diagnostics' : 'Synced', problems.length ? 'err' : 'ok');
+    rt.lastProblems = problems;
+    if (manual) toast(problems.length ? 'Synced with issues — see Settings › Diagnostics' : 'Synced', problems.length ? 'err' : 'ok');
     else if (problems.length) console.warn(problems);
   } finally { rt.syncing = false; renderSync(); render(); }
 }
@@ -187,10 +195,13 @@ async function pullRotasFromDrive() {
   for (const f of files) {
     const already = Object.values(known).find(r => r.driveId === f.id && r.driveModified === f.modifiedTime);
     if (already) continue;
+    const removedAt = S().deleted?.[`drive:${f.id}`];
+    if (removedAt && removedAt >= Date.parse(f.modifiedTime)) continue;   // you removed this rota; only a newer version of the file brings it back
     try {
       const buf = await G.downloadRota(f);
       const rota = serializeRota(await parseRotaFile(buf, f.name));
       rota.driveId = f.id; rota.driveModified = f.modifiedTime;
+      if (!rota.weekdayOk) toast(`${f.name}: the weekdays don't match ${MONTHS[rota.month - 1]} ${rota.year} — check the month cell`, 'err');
       store.update(s => ({ ...s, rotas: { ...s.rotas, [rota.id]: rota } }), { silent: true });
       added++;
     } catch (e) { console.warn('rota parse failed', f.name, e.message); toast(`Could not read ${f.name}: ${e.message}`, 'err'); }
@@ -205,7 +216,7 @@ async function pushShiftsToCalendar() {
   if (!calId) { calId = await G.ensureCalendar('Citrus Maxima Shifts'); store.update(x => ({ ...x, settings: { ...x.settings, shiftCalendarId: calId } }), { remote: false, silent: true }); }
   for (const r of Object.values(s.rotas)) {
     if (r.unitKind !== 'gp') continue;
-    const from = new Date(r.year, r.month - 1, 1), to = new Date(r.year, r.month, 2);
+    const from = new Date(r.year, r.month - 1, 1), to = new Date(r.year, r.month, 1, 12);   // the month, plus the morning end of a last-night shift
     const wanted = [];
     for (let d = 1; d <= r.daysInMonth; d++) {
       const date = new Date(r.year, r.month - 1, d);
@@ -227,15 +238,35 @@ function localAppStatuses() {
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
       if (!k || !k.startsWith('citrus.status.')) continue;
-      try { const st = JSON.parse(localStorage.getItem(k)); if (st && typeof st === 'object') out[st.title || st.app || k.slice(14)] = st; } catch {}
+      try { const st = normalizeStatus(JSON.parse(localStorage.getItem(k)), k.slice(14)); if (st) out[st.app] = st; } catch {}
     }
   } catch {}
   return out;
 }
-// Drive copies merged with fresher same-device copies
+// Status files come from other apps: never trust their shape. Returns a clean copy keyed by the lowercase app name.
+function normalizeStatus(st, fallbackName = '') {
+  if (!st || typeof st !== 'object' || Array.isArray(st)) return null;
+  const str = (v, max = 300) => (typeof v === 'string' ? v : v == null ? '' : String(v)).slice(0, max);
+  const app = str(st.app || st._folder || fallbackName, 40).toLowerCase().trim();
+  if (!app) return null;
+  const asks = (Array.isArray(st.asks) ? st.asks : []).filter(a => a && typeof a === 'object' && /^\d{4}-\d{2}-\d{2}$/.test(a.date))
+    .map(a => ({ date: a.date, title: str(a.title, 80), minutes: Math.max(0, Math.min(240, +a.minutes || 0)), slot: a.slot === 'before' ? 'before' : 'free' })).slice(0, 30);
+  const pending = (Array.isArray(st.pending) ? st.pending : typeof st.pending === 'string' ? [st.pending] : []).map(p => str(p, 120)).filter(Boolean).slice(0, 10);
+  const updatedAt = !isNaN(Date.parse(st.updatedAt)) ? new Date(st.updatedAt).toISOString() : '';
+  return {
+    app, title: str(st.title, 40), icon: str(st.icon, 4), color: /^#[0-9a-f]{3,8}$/i.test(st.color || '') ? st.color : '', url: safeUrl(st.url || st.extra?.url),
+    summary: str(st.summary), updatedAt, asks, pending,
+    next: st.next && typeof st.next === 'object' ? { title: str(st.next.title, 80), minutes: Math.max(0, +st.next.minutes || 0) } : null,
+    today: st.today && typeof st.today === 'object' ? { done: !!st.today.done } : null,
+    due: Number.isFinite(+st.due) ? +st.due : undefined, estimatedMinutes: Number.isFinite(+st.estimatedMinutes) ? +st.estimatedMinutes : undefined,
+    extra: st.extra && typeof st.extra === 'object' ? { streak: +st.extra.streak || undefined } : {},
+  };
+}
+// Drive copies merged with fresher same-device copies, all normalized
 function mergedApps() {
-  const apps = { ...(S().apps || {}) };
-  for (const [name, st] of Object.entries(localAppStatuses())) if (!apps[name] || (st.updatedAt || '') > (apps[name].updatedAt || '')) apps[name] = st;
+  const apps = {};
+  for (const [name, st] of Object.entries(S().apps || {})) { const n = normalizeStatus(st, name); if (n) apps[n.app] = n; }
+  for (const st of Object.values(localAppStatuses())) if (!apps[st.app] || st.updatedAt > apps[st.app].updatedAt) apps[st.app] = st;
   return apps;
 }
 
@@ -243,21 +274,27 @@ function mergedApps() {
 async function calendarCreate(calendarId, payload, meta = {}) {
   if (!rt.online || !G.isSignedIn()) { queueOutbox({ type: 'create', calendarId, payload, meta }); return null; }
   try { return await G.createEvent(calendarId, payload); }
-  catch (e) { if (/network|expired|not signed/i.test(e.message)) { queueOutbox({ type: 'create', calendarId, payload, meta }); return null; } throw e; }
+  catch (e) { if (e.network || /expired|not signed/i.test(e.message)) { queueOutbox({ type: 'create', calendarId, payload, meta }); return null; } throw e; }
 }
 function queueOutbox(op) { store.update(s => ({ ...s, outbox: [...(s.outbox || []), { ...op, id: uid(), at: Date.now() }] }), { silent: true, remote: false }); toast('Saved — will reach your calendar when online'); }
-async function flushOutbox() {
+let flushing = null;
+function flushOutbox() { if (!flushing) flushing = flushOutboxOnce().finally(() => { flushing = null; }); return flushing; }
+async function flushOutboxOnce() {
   const ops = S().outbox || []; if (!ops.length || !G.isSignedIn() || !rt.online) return;
-  const left = [];
+  const done = new Set();
   for (const op of ops) {
     try {
       if (op.type === 'create') {
         const ev = await G.createEvent(op.calendarId, { ...op.payload, start: new Date(op.payload.start), end: new Date(op.payload.end) });
         if (op.meta?.blockId && op.meta?.dateKey) store.update(s => ({ ...s, plan: { ...s.plan, [op.meta.dateKey]: (s.plan[op.meta.dateKey] || []).map(p => p.id === op.meta.blockId ? { ...p, eventId: ev.id, calendarId: ev.calendarId } : p) } }), { silent: true });
       } else if (op.type === 'delete') await G.deleteEvent(op.calendarId, op.eventId);
-    } catch (e) { if (!/404|410/.test(e.message)) left.push(op); }
+      done.add(op.id);
+    } catch (e) {
+      if (e.status && e.status >= 400 && e.status < 500 && e.status !== 401 && e.status !== 429) done.add(op.id);   // rejected for good: don't retry forever
+    }
   }
-  store.update(s => ({ ...s, outbox: left }), { silent: true });
+  // remove only what was sent — anything queued during the flush stays
+  store.update(s => ({ ...s, outbox: (s.outbox || []).filter(op => !done.has(op.id)) }), { silent: true, remote: false });
 }
 
 function autoPickMe() {
@@ -273,11 +310,28 @@ async function importFiles(fileList) {
   for (const f of fileList) {
     try {
       const rota = serializeRota(await parseRotaFile(await f.arrayBuffer(), f.name));
-      store.update(s => ({ ...s, rotas: { ...s.rotas, [rota.id]: rota } }), { silent: true });
+      if (!rota.weekdayOk) toast(`${f.name}: the weekdays don't match ${MONTHS[rota.month - 1]} ${rota.year} — check the month cell`, 'err');
+      store.update(s => { const deleted = { ...(s.deleted || {}) }; delete deleted[`rota:${rota.id}`]; return { ...s, rotas: { ...s.rotas, [rota.id]: rota }, deleted }; }, { silent: true });
       ok++;
     } catch (e) { toast(`${f.name}: ${e.message}`, 'err'); }
   }
   if (ok) { toast(`Imported ${ok} rota${ok > 1 ? 's' : ''}`, 'ok'); autoPickMe(); regenerate(); render(); }
+  if (ok && G.isSignedIn() && rt.online) uploadRotas(fileList).catch(e => console.warn('rota upload', e.message));
+}
+// Rotas imported on this device go to Drive › My Apps › Rotas too, named "YYYY-MM Unit.xlsx", so every device and Orange get them
+async function uploadRotas(fileList) {
+  const existing = await G.listRotaFiles(S().settings.driveFolder);
+  let up = 0;
+  for (const f of fileList) {
+    let rota; try { rota = await parseRotaFile(await f.arrayBuffer(), f.name); } catch { continue; }
+    const name = `${rota.year}-${pad2(rota.month)} ${({ gp: 'GP rota', fsed: 'FSED', uv: 'Upper Village', lv: 'Lower Village' })[rota.unitKind] || rota.unit}.xlsx`;
+    const same = existing.find(x => x.name === name || x.name === f.name);
+    if (same && +same.size === f.size) continue;   // already there
+    const r = await G.uploadRota(S().settings.driveFolder, name, f, same?.id);
+    store.update(s => ({ ...s, rotas: { ...s.rotas, [rota.id]: { ...s.rotas[rota.id], driveId: r.id, driveModified: r.modifiedTime } } }), { silent: true });
+    up++;
+  }
+  if (up) toast(`Saved ${up} rota file${up > 1 ? 's' : ''} to Drive › ${S().settings.driveFolder} › Rotas`, 'ok');
 }
 
 function importButton(label = 'Import rota files') {
@@ -365,7 +419,8 @@ function renderToday() {
   const hero = h('div', { class: 'card hero', style: today?.shift.type === 'N' ? { '--accent-soft': 'var(--night-soft)' } : afterNight ? { '--accent-soft': 'var(--night-soft)' } : {} });
   const words = h('div', {});
   words.append(h('div', { class: 'title' }, `${DAY_NAMES[now.getDay()]} ${fmtDate(now)}`));
-  if (!info.hasRota) words.append(h('div', { class: 'big' }, 'No rota for this month'), h('div', { class: 'sub' }, 'Import the Excel files, or drop them in Drive › My Apps › Rotas.'));
+  if (!info.hasRota && overnightTail) words.append(h('div', { class: 'big' }, 'Off, after a night'), h('div', { class: 'sub' }, `Your night ends ${fmtTime(overnightTail.window.end)}. No rota for ${MONTHS[now.getMonth()]} yet — import it to see the rest of the month.`));
+  else if (!info.hasRota) words.append(h('div', { class: 'big' }, 'No rota for this month'), h('div', { class: 'sub' }, 'Import the Excel files, or drop them in Drive › My Apps › Rotas.'));
   else if (!s.me) words.append(h('div', { class: 'big' }, 'Who are you?'), h('div', { class: 'sub' }, 'Pick your row in Settings › Me.'));
   else if (today) {
     const w = today.window;
@@ -519,7 +574,7 @@ function eventsCard(date) {
     if (!G.isSignedIn()) return toast('Sign in to Google (Settings) to add events');
     try { const ev = await G.createEvent(S().settings.calendarIds?.[0] || 'primary', { ...parsed, tag: 'quick' }); (rt.events[keyOf(ev.start)] ||= []).push(ev); cacheEvents(); quick.reset(); toast('Added to calendar', 'ok'); render(); }
     catch (err) { toast(err.message, 'err'); }
-  } }, h('input', { name: 'q', placeholder: 'Quick add: "Dentist Tue 3pm 1h"', style: { flex: 1, background: 'var(--bg2)', border: '1px solid var(--line)', borderRadius: '10px', padding: '9px 12px' } }), h('button', { class: 'btn sm primary' }, '+'));
+  } }, h('input', { name: 'q', 'aria-label': 'Quick add an event', placeholder: 'Quick add: "Dentist Tue 3pm 1h"', style: { flex: 1, minWidth: '0', background: 'var(--bg2)', border: '1px solid var(--line)', borderRadius: '10px', padding: '9px 12px' } }), h('button', { class: 'btn sm primary' }, '+'));
   return h('div', { class: 'card' }, h('div', { class: 'title' }, `Calendar · ${relDay(date)}`),
     evs.length ? h('div', { class: 'list' }, ...evs.map(ev => h('div', { class: 'item' },
       h('div', { class: 'col', style: { minWidth: '52px' } }, h('b', { class: 'small' }, ev.allDay ? 'all day' : fmtTime(ev.start)), ev.allDay ? null : h('span', { class: 'tiny dim' }, fmtTime(ev.end))),
@@ -531,14 +586,15 @@ function eventsCard(date) {
 
 // "Dentist Tue 3pm 1h" / "Call mum 18:30" / "Gym tomorrow 7am 90m"
 function parseQuick(text, base) {
-  let t = text, date = startOfDay(base), start = 9 * 60, dur = 60, had = false;
-  const dayIdx = DAY_SHORT.findIndex(d => new RegExp(`\\b${d}`, 'i').test(t));
+  let t = text, date = startOfDay(base), start = 9 * 60, dur = 60;
+  const dayRe = (i) => new RegExp(`\\b(${DAY_NAMES[i]}|${DAY_SHORT[i]})\\b`, 'i');   // whole words: "Wedding" is not Wednesday
+  const dayIdx = DAY_SHORT.findIndex((d, i) => dayRe(i).test(t));
   if (/\btomorrow\b/i.test(t)) { date = addDays(date, 1); t = t.replace(/\btomorrow\b/i, ''); }
-  else if (dayIdx >= 0) { let diff = (dayIdx - date.getDay() + 7) % 7; if (diff === 0) diff = 7; date = addDays(date, diff); t = t.replace(new RegExp(`\\b${DAY_SHORT[dayIdx]}\\w*`, 'i'), ''); }
+  else if (dayIdx >= 0) { let diff = (dayIdx - date.getDay() + 7) % 7; if (diff === 0) diff = 7; date = addDays(date, diff); t = t.replace(dayRe(dayIdx), ''); }
   const dm = /(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?/.exec(t);
   if (dm) { date = new Date(dm[3] ? (+dm[3] < 100 ? 2000 + +dm[3] : +dm[3]) : date.getFullYear(), +dm[2] - 1, +dm[1]); t = t.replace(dm[0], ''); }
   const tm = /(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i.exec(t);
-  if (tm) { let hh = +tm[1]; const mm = +(tm[2] || 0); const ap = (tm[3] || '').toLowerCase(); if (ap === 'pm' && hh < 12) hh += 12; if (ap === 'am' && hh === 12) hh = 0; if (!ap && hh < 7) hh += 12; start = hh * 60 + mm; t = t.replace(tm[0], ''); had = true; }
+  if (tm) { let hh = +tm[1]; const mm = +(tm[2] || 0); const ap = (tm[3] || '').toLowerCase(); if (ap === 'pm' && hh < 12) hh += 12; if (ap === 'am' && hh === 12) hh = 0; if (!ap && hh < 7) hh += 12; start = hh * 60 + mm; t = t.replace(tm[0], ''); }
   const du = /(\d+(?:\.\d+)?)\s*(h|hr|hrs|hour|hours|m|min|mins)\b/i.exec(t);
   if (du) { dur = /^h/i.test(du[2]) ? Math.round(+du[1] * 60) : +du[1]; t = t.replace(du[0], ''); }
   const title = t.replace(/\s+/g, ' ').replace(/\bat\b\s*$/i, '').trim() || 'Event';
@@ -600,12 +656,16 @@ async function rejectBlock(k, b) {
   regenerate(); render();
 }
 async function removeBlock(k, b) {
-  if (b.eventId) { try { if (!rt.online) throw new Error('network'); await G.deleteEvent(b.calendarId || 'primary', b.eventId); } catch (e) { if (/network|expired/i.test(e.message)) queueOutbox({ type: 'delete', calendarId: b.calendarId || 'primary', eventId: b.eventId }); } }
-  store.update(s => ({ ...s, plan: { ...s.plan, [k]: (s.plan[k] || []).filter(p => p.id !== b.id) } }));
+  if (b.eventId) {
+    const op = { type: 'delete', calendarId: b.calendarId || 'primary', eventId: b.eventId };
+    if (!rt.online || !G.isSignedIn()) queueOutbox(op);
+    else try { await G.deleteEvent(op.calendarId, op.eventId); } catch (e) { if (e.network || /expired/i.test(e.message)) queueOutbox(op); }
+  }
+  store.update(s => ({ ...s, plan: { ...s.plan, [k]: (s.plan[k] || []).filter(p => p.id !== b.id) }, deleted: store.tombstone(s, `plan:${b.id}`) }));
   publishPlanSoon();
 }
 function setBlockStatus(k, b, status) {
-  store.update(s => ({ ...s, plan: { ...s.plan, [k]: (s.plan[k] || []).map(p => p.id === b.id ? { ...p, status } : p) } }));
+  store.update(s => ({ ...s, plan: { ...s.plan, [k]: (s.plan[k] || []).map(p => p.id === b.id ? { ...p, status, at: Date.now() } : p) } }));
 }
 function moveBlock(k, b, isSuggestion = false) {
   const st = h('input', { type: 'time', value: fmtMin(b.start) }), en = h('input', { type: 'time', value: fmtMin(b.end % 1440) }), dt = h('input', { type: 'date', value: k });
@@ -632,11 +692,13 @@ const APP_META = {
   mephisto: { title: 'Mephisto', icon: '🇩🇪', color: '#c58cff', url: 'https://mephisto-deutsch.github.io/Mephisto/' },
   orange: { title: 'Orange', icon: '🍊', color: '#ff7a1a', url: 'https://orange-fitness.github.io/Orange/' },
   sinus: { title: 'Sinus', icon: '💓', color: '#ff5f6d', url: 'https://sinus-ekg.github.io/Sinus-EKG/' },
+  kumquat: { title: 'Kumquat', icon: '📊', color: '#ff6a13', url: 'https://kumquat-evidence.github.io/Kumquat/' },
+  embergine: { title: 'Embergine', icon: '🔥', color: '#f26a1b', url: 'https://embergine.github.io/embergine/' },
 };
-export function appMeta(name, st = {}) {
+function appMeta(name, st = {}) {
   const key = String(st.app || name || '').toLowerCase();
   const m = APP_META[key] || {};
-  return { key, title: st.title || m.title || name, icon: st.icon || m.icon || (name[0] || '?').toUpperCase(), color: st.color || m.color || '#9aa0b1', url: st.url || st.extra?.url || m.url || '' };
+  return { key, title: st.title || m.title || name, icon: st.icon || m.icon || (name[0] || '?').toUpperCase(), color: st.color || m.color || '#9aa0b1', url: safeUrl(st.url || st.extra?.url) || m.url || '' };
 }
 function appsCard() {
   const apps = mergedApps();
@@ -665,7 +727,7 @@ function appsCard() {
 function noteCard(date) {
   const k = keyOf(date);
   const ta = h('textarea', { rows: 2, placeholder: 'Notes for today…', style: { width: '100%', background: 'var(--bg2)', border: '1px solid var(--line)', borderRadius: '10px', padding: '9px 12px', resize: 'vertical' },
-    onChange: (e) => store.update(s => ({ ...s, notes: { ...s.notes, [k]: e.target.value } }), { silent: true }) }, S().notes[k] || '');
+    onChange: (e) => store.update(s => { const v = e.target.value.trim(); const notes = { ...s.notes }; if (v) notes[k] = e.target.value; else delete notes[k]; return { ...s, notes, deleted: v ? s.deleted : store.tombstone(s, `note:${k}`) }; }, { silent: true }) }, S().notes[k] || '');
   return h('div', { class: 'card' }, h('div', { class: 'title' }, 'Notes'), ta);
 }
 
@@ -716,8 +778,8 @@ function renderRota() {
   // legend + sources
   out.push(h('div', { class: 'card' }, h('div', { class: 'title' }, 'Sources'),
     h('div', { class: 'list' }, ...rotas.map(r => h('div', { class: 'item' }, h('div', { class: 'grow' }, h('div', { class: 'name' }, UNIT_LABEL[r.unitKind] || r.unit), h('div', { class: 'meta' }, `${r.people.length} people · ${r.sourceName || 'imported'} · ${new Date(r.importedAt).toLocaleDateString('en-GB')}`)),
-      h('button', { class: 'btn sm ghost danger', onClick: () => { if (confirm(`Remove ${UNIT_LABEL[r.unitKind]} ${MONTHS[r.month - 1]}?`)) store.update(x => { const rotas = { ...x.rotas }; delete rotas[r.id]; return { ...x, rotas }; }); } }, 'Remove')))),
-    h('div', { class: 'row', style: { marginTop: '10px' } }, importButton('Import / update files'), G.isSignedIn() ? h('button', { class: 'btn', onClick: () => refreshAll(true) }, '☁ Pull from Drive') : null)));
+      h('button', { class: 'btn sm ghost danger', onClick: () => { if (confirm(`Remove ${UNIT_LABEL[r.unitKind]} ${MONTHS[r.month - 1]}?`)) store.update(x => { const rotas = { ...x.rotas }; delete rotas[r.id]; let deleted = store.tombstone(x, `rota:${r.id}`); if (r.driveId) deleted = { ...deleted, [`drive:${r.driveId}`]: Date.now() }; return { ...x, rotas, deleted }; }); } }, 'Remove')))),
+    h('div', { class: 'row wrap', style: { marginTop: '10px' } }, importButton('Import / update files'), G.isSignedIn() ? h('button', { class: 'btn', onClick: () => refreshAll(true) }, '☁ Pull from Drive') : null)));
   const gp = rotas.find(r => r.unitKind === 'gp');
   if (gp) out.push(h('div', { class: 'card' }, h('div', { class: 'title' }, 'Shift codes'), h('div', { class: 'kv' }, ...gp.legendList.filter(e => e.code).flatMap(e => [h('b', {}, e.code), h('span', {}, [e.desc, e.hoursText].filter(Boolean).join(' · '))]))));
   // desktop: month grid on the left, everything else on the right
@@ -834,7 +896,9 @@ function renderPlan() {
   const s = S();
   const from = rt.planFrom || startOfDay(new Date());
   if (!Object.keys(rt.suggestions).length) regenerate();
-  const out = [h('div', { class: 'row' }, h('h1', { class: 'grow' }, 'Plan'), h('button', { class: 'btn sm', onClick: () => { rt.planFrom = startOfDay(new Date()); regenerate(); render(); } }, '↻ Regenerate'))];
+  const out = [h('div', { class: 'row' }, h('h1', { class: 'grow' }, 'Plan'), h('button', { class: 'btn sm', onClick: () => { rt.planFrom = startOfDay(new Date()); regenerate(); render(); } }, 'Regenerate'))];
+  if (!Object.keys(s.rotas).length || !s.me) out.push(h('div', { class: 'banner' }, h('span', { class: 'grow' }, !Object.keys(s.rotas).length ? 'No rota loaded, so every day is planned as a free day. Import your rota first.' : 'Pick your row in Settings › Me so the plan can work around your shifts.'),
+    h('button', { class: 'btn sm', onClick: () => show(!Object.keys(s.rotas).length ? 'rota' : 'more') }, !Object.keys(s.rotas).length ? 'Import' : 'Settings')));
   // goals progress this week
   const ws = weekStartOf(new Date());
   const prog = weekProgress(s, ws);
@@ -861,11 +925,15 @@ function renderPlan() {
   }
   return out;
 }
-async function acceptAllVisible() {
+function acceptAllVisible() {
   const all = Object.entries(rt.suggestions).flatMap(([k, list]) => list.map(b => [k, b]));
   if (!all.length) return toast('No suggestions to accept');
-  for (const [k, b] of all) await acceptBlock(k, b, { silent: true });
-  toast(`Planned ${all.length} blocks`, 'ok'); render();
+  const days = new Set(all.map(([k]) => k)).size;
+  const toCal = G.isSignedIn() && S().settings.pushPlan !== false;
+  const { close } = sheet([h('h2', {}, `Accept ${all.length} blocks?`),
+    h('p', { class: 'small muted' }, `${all.length} suggestions across ${days} days${toCal ? ' will be added to your Google Calendar' : ''}. You can remove any of them later from Plan.`),
+    h('div', { class: 'row' }, h('button', { class: 'btn primary grow', onClick: async () => { close(); for (const [k, b] of all) await acceptBlock(k, b, { silent: true }); toast(`Planned ${all.length} blocks`, 'ok'); render(); } }, `Accept ${all.length}`),
+      h('button', { class: 'btn grow', onClick: () => close() }, 'Cancel'))]);
 }
 
 function goalsSheet() {
@@ -1001,7 +1069,7 @@ function renderMore() {
     toggleRow('Light theme', s.settings.theme === 'light', (on) => { store.update(x => ({ ...x, settings: { ...x.settings, theme: on ? 'light' : 'dark' } }), { silent: true }); applyTheme(); }),
     h('div', { class: 'row wrap', style: { marginTop: '10px' } },
       h('button', { class: 'btn', onClick: () => { const blob = new Blob([store.exportJSON()], { type: 'application/json' }); const a = h('a', { href: URL.createObjectURL(blob), download: `citrus-maxima-backup-${keyOf(new Date())}.json` }); a.click(); } }, '⬇ Backup'),
-      (() => { const inp = h('input', { type: 'file', accept: '.json', style: { display: 'none' }, onChange: async (e) => { try { const j = JSON.parse(await e.target.files[0].text()); store.replaceState(j); toast('Restored', 'ok'); } catch (err) { toast('Bad backup file', 'err'); } } }); return h('span', {}, inp, h('button', { class: 'btn', onClick: () => inp.click() }, '⬆ Restore')); })(),
+      (() => { const inp = h('input', { type: 'file', accept: '.json', style: { display: 'none' }, onChange: async (e) => { try { const j = JSON.parse(await e.target.files[0].text()); if (!j || typeof j !== 'object' || !j.rotas) throw new Error('bad'); store.replaceState(j, { bump: true }); regenerate(); toast('Restored', 'ok'); } catch (err) { toast('Bad backup file', 'err'); } } }); return h('span', {}, inp, h('button', { class: 'btn', onClick: () => inp.click() }, '⬆ Restore')); })(),
       h('button', { class: 'btn danger', onClick: () => { if (confirm('Erase all local data?')) { localStorage.clear(); location.reload(); } } }, 'Erase')),
     h('div', { class: 'tiny dim', style: { marginTop: '10px' } }, 'Citrus Maxima · personal scheduler & hub · data lives in your browser and your own Google Drive.')));
   return out;
@@ -1025,7 +1093,7 @@ function openSearch() {
     const dm = /^(\d{1,2})[\/\-.](\d{1,2})(?:[\/\-.](\d{2,4}))?$/.exec(q);
     if (dm) { const y = dm[3] ? (+dm[3] < 100 ? 2000 + +dm[3] : +dm[3]) : new Date().getFullYear(); const d = new Date(y, +dm[2] - 1, +dm[1]); if (!isNaN(d)) items.push({ label: `${DAY_NAMES[d.getDay()]} ${fmtDate(d)}`, meta: dayInfo(s, d).mine?.shift.label || 'day', run: () => { rt.rotaSel = d; rt.rotaMonth = new Date(d.getFullYear(), d.getMonth(), 1); show('rota'); daySheet(d); } }); }
     for (const p of allPeople(s)) if (p.name.toLowerCase().includes(q) || (p.title || '').toLowerCase().includes(q)) items.push({ label: p.name, meta: p.title, run: () => personSheet(p) });
-    for (const [name, st] of Object.entries(mergedApps())) { const m = appMeta(name, st); if (m.title.toLowerCase().includes(q)) items.push({ label: `${m.icon} ${m.title}`, meta: st.summary || 'open', run: () => { if (m.url) window.open(m.url, '_blank'); } }); }
+    for (const [name, st] of Object.entries(mergedApps())) { const m = appMeta(name, st); if (m.title.toLowerCase().includes(q)) items.push({ label: `${m.icon} ${m.title}`, meta: st.summary || 'open', run: () => { if (m.url) window.open(m.url, '_blank', 'noopener'); } }); }
     for (const g of s.goals) if (g.name.toLowerCase().includes(q)) items.push({ label: g.name, meta: `${g.hoursPerWeek} h/week`, run: () => { show('plan'); goalsSheet(); } });
     for (const [k, t] of Object.entries(s.notes || {})) if (t && t.toLowerCase().includes(q)) items.push({ label: t.slice(0, 60), meta: `note · ${fmtDate(fromKey(k))}`, run: () => { rt.rotaSel = fromKey(k); show('rota'); daySheet(fromKey(k)); } });
     items = items.slice(0, 12);
@@ -1053,7 +1121,7 @@ function swapSheet(date) {
     h('div', { class: 'field' }, h('label', {}, 'Note'), note),
     h('div', { class: 'row' },
       h('button', { class: 'btn primary grow', onClick: () => { store.update(x => ({ ...x, swaps: { ...(x.swaps || {}), [k]: { code: code.value, with: withSel.value, note: note.value.trim(), at: Date.now() } } })); regenerate(); close(); toast('Saved', 'ok'); render(); } }, 'Save'),
-      cur ? h('button', { class: 'btn danger', onClick: () => { store.update(x => { const swaps = { ...(x.swaps || {}) }; delete swaps[k]; return { ...x, swaps }; }); regenerate(); close(); render(); } }, 'Remove') : null)]);
+      cur ? h('button', { class: 'btn danger', onClick: () => { store.update(x => { const swaps = { ...(x.swaps || {}) }; delete swaps[k]; return { ...x, swaps, deleted: store.tombstone(x, `swap:${k}`) }; }); regenerate(); close(); render(); } }, 'Remove') : null)]);
 }
 
 // ---------------- weekly review ----------------

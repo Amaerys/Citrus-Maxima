@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { parseRotaFile, interpretCode, fmtMin } from '../docs/js/rota-parser.js';
+import { parseRotaFile, interpretCode } from '../docs/js/rota-parser.js';
+import { fmtMin } from '../docs/js/util.js';
 
 const dir = path.join(path.dirname(new URL(import.meta.url).pathname), 'data');
 for (const f of ['main.xlsx', 'uv.xlsx', 'fsed.xlsx']) {

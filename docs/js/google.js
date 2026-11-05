@@ -1,6 +1,5 @@
 // Google integration: sign-in (Google Identity Services, browser-only), Calendar, Drive.
 // Needs only the OAuth *client ID* (entered in Settings). No secret, no backend.
-import { keyOf } from './util.js';
 
 const SCOPES = [
   'https://www.googleapis.com/auth/calendar',
@@ -79,11 +78,16 @@ async function authFetch(url, opts = {}, attempt = 0) {
   if (!isSignedIn()) {
     if (!wasSignedIn()) throw new Error('Not signed in to Google');
     try { await signIn({ silent: true }); }
-    catch (e) { auth.needsSignIn = true; for (const fn of authListeners) fn(false); throw new Error('Google sign-in expired — tap Sign in'); }
+    catch (e) { if (!isSignedIn()) { auth.needsSignIn = true; for (const fn of authListeners) fn(false); throw new Error('Google sign-in expired — tap Sign in'); } }
   }
   let r;
   try { r = await fetch(url, { ...opts, headers: { ...(opts.headers || {}), Authorization: `Bearer ${token.access_token}` } }); }
-  catch (e) { if (attempt < 2) { await sleep(600 * (attempt + 1)); return authFetch(url, opts, attempt + 1); } throw new Error('Network error'); }
+  catch (e) {
+    // only repeat requests that are safe to send twice; a lost POST may already have created the event/folder
+    const idempotent = !opts.method || /^(GET|PATCH|PUT|DELETE)$/i.test(opts.method);
+    if (idempotent && attempt < 2) { await sleep(600 * (attempt + 1)); return authFetch(url, opts, attempt + 1); }
+    const ne = new Error('Network error'); ne.network = true; throw ne;
+  }
   if (r.status === 401 && attempt < 2) { saveToken({ exp: 0 }); return authFetch(url, opts, attempt + 1); }
   if ((r.status === 429 || r.status >= 500 || r.status === 403) && attempt < 3) {
     let rate = r.status !== 403;
@@ -96,6 +100,7 @@ async function authFetch(url, opts = {}, attempt = 0) {
     const e = new Error(msg); e.status = r.status; throw e;
   }
   if (r.status === 204) return null;
+  if (opts.raw) return r.arrayBuffer();   // file contents: always bytes, whatever the content-type
   const ct = r.headers.get('content-type') || '';
   return ct.includes('json') ? r.json() : r.arrayBuffer();
 }
@@ -149,7 +154,7 @@ export async function patchEvent(calendarId, eventId, patch) {
 
 export async function deleteEvent(calendarId, eventId) {
   try { await authFetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`, { method: 'DELETE' }); }
-  catch (e) { if (!/404|410/.test(e.message)) throw e; }
+  catch (e) { if (e.status !== 404 && e.status !== 410) throw e; }   // already gone is fine
 }
 
 export async function ensureCalendar(name) {
@@ -197,34 +202,57 @@ async function mkdir(name, parentId) {
   return j.id;
 }
 // Folder id for a path like ['My Apps','hub','citrus'], creating what is missing. Ids are cached; a 404 clears the cache and retries once.
+// Folder id for a path like ['My Apps','hub','citrus'], creating what is missing.
+// Each level is resolved once (cached id, or one shared in-flight lookup), so parallel sync steps never create twin folders.
+const pathInflight = new Map();
 export async function ensurePath(parts, { create = true } = {}) {
-  const run = async () => {
-    let parent = 'root', key = '';
-    for (const name of parts) {
-      key = key ? `${key}/${name}` : name;
-      let id = ids[key];
-      if (!id) {
-        const found = (await list(parent, { name, folders: true }))[0];
-        if (found) id = found.id;
-        else if (create) id = await mkdir(name, parent);
-        else return null;
-        remember(key, id);
-      }
-      parent = id;
-    }
-    return parent;
-  };
-  try { return await run(); }
-  catch (e) { if (/404|not found/i.test(e.message)) { forget(parts[0]); return run(); } throw e; }
+  try { return await resolve(parts, create); }
+  catch (e) { if (e.status === 404) { forget(parts[0]); return resolve(parts, create); } throw e; }   // a cached folder was deleted
 }
-export async function downloadFile(fileId) { return authFetch(`${DRIVE}/files/${fileId}?alt=media`); }
+function resolve(parts, create) {
+  if (!parts.length) return Promise.resolve('root');
+  const key = parts.join('/');
+  if (ids[key]) return Promise.resolve(ids[key]);
+  const flight = key + (create ? '' : '?');
+  if (pathInflight.has(key)) return pathInflight.get(key);            // a creating lookup also answers a read-only one
+  if (pathInflight.has(flight)) return pathInflight.get(flight);
+  const p = (async () => {
+    const parent = await resolve(parts.slice(0, -1), create);
+    if (!parent) return null;
+    const name = parts[parts.length - 1];
+    const found = (await list(parent, { name, folders: true }))[0];
+    const id = found ? found.id : create ? await mkdir(name, parent) : null;
+    if (id) remember(key, id);
+    return id;
+  })().finally(() => pathInflight.delete(flight));
+  pathInflight.set(flight, p);
+  return p;
+}
+// Cached folder ids can go stale (folder trashed or deleted in Drive). Check the root once per sync; drop the cache if it's gone.
+export async function validateCache(root) {
+  const id = ids[root]; if (!id) return;
+  try { const f = await authFetch(`${DRIVE}/files/${id}?fields=id,trashed`); if (f?.trashed) forget(root); }
+  catch (e) { if (e.status === 404) forget(root); }
+}
+export async function downloadFile(fileId) { return authFetch(`${DRIVE}/files/${fileId}?alt=media`, { raw: true }); }
 async function readJsonIn(folderId, name) {
   const f = (await list(folderId, { name }))[0];
   if (!f) return null;
   const buf = await downloadFile(f.id);
   try { return { data: JSON.parse(new TextDecoder().decode(buf)), modifiedTime: f.modifiedTime, id: f.id }; } catch { return null; }
 }
-async function writeJsonIn(folderId, name, obj, fileId = null) {
+const writeQueue = new Map(); // one write at a time per file, so two quick saves never create two copies
+function writeJsonIn(folderId, name, obj, fileId = null) {
+  const key = `${folderId}/${name}`;
+  const prev = writeQueue.get(key) || Promise.resolve();
+  const next = prev.catch(() => {}).then(() => writeJsonOnce(folderId, name, obj, fileId)).catch(async (e) => {
+    if (e.status === 404 && fileId) return writeJsonOnce(folderId, name, obj, null);   // the file was deleted: create it again
+    throw e;
+  });
+  writeQueue.set(key, next); next.finally(() => { if (writeQueue.get(key) === next) writeQueue.delete(key); }).catch(() => {});
+  return next;
+}
+async function writeJsonOnce(folderId, name, obj, fileId = null) {
   if (!fileId) fileId = (await list(folderId, { name }))[0]?.id || null;
   const boundary = 'citrus' + Date.now();
   const meta = fileId ? { name } : { name, parents: [folderId] };
@@ -242,7 +270,7 @@ export async function listRotaFiles(root) {
   return files.map(f => ({ ...f, folderId: id }));
 }
 export async function downloadRota(f) {
-  if (f.mimeType === 'application/vnd.google-apps.spreadsheet') return authFetch(`${DRIVE}/files/${f.id}/export?mimeType=${encodeURIComponent('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')}`);
+  if (f.mimeType === 'application/vnd.google-apps.spreadsheet') return authFetch(`${DRIVE}/files/${f.id}/export?mimeType=${encodeURIComponent('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')}`, { raw: true });
   return downloadFile(f.id);
 }
 
@@ -255,16 +283,16 @@ export async function listAppStatus(root) {
     remember(`${root}/hub/${f.name}`, f.id);
     try { const r = await readJsonIn(f.id, 'status.json'); if (r?.data) out[f.name] = { ...r.data, _modified: r.modifiedTime, _folder: f.name }; } catch (e) { console.warn('status', f.name, e.message); }
   }));
-  // legacy location used by early Sinus builds
-  try {
-    const legacy = await ensurePath(['Citrus Maxima', 'Apps'], { create: false });
-    if (legacy) for (const f of await list(legacy, { extra: `name contains '.status.json'` })) {
-      const app = f.name.replace(/\.status\.json$/, '').toLowerCase();
-      if (out[app]) continue;
-      try { const buf = await downloadFile(f.id); out[app] = { ...JSON.parse(new TextDecoder().decode(buf)), _modified: f.modifiedTime, _legacy: true }; } catch {}
-    }
-  } catch {}
   return out;
+}
+// Upload (or replace) a rota spreadsheet in <root>/Rotas
+export async function uploadRota(root, name, blob, fileId = null) {
+  const dir = await ensurePath([root, 'Rotas']);
+  const meta = fileId ? { name } : { name, parents: [dir] };
+  const form = new FormData();
+  form.append('metadata', new Blob([JSON.stringify(meta)], { type: 'application/json' }));
+  form.append('file', blob, name);
+  return authFetch(`${UPLOAD}/files${fileId ? '/' + fileId : ''}?uploadType=multipart&fields=id,modifiedTime`, { method: fileId ? 'PATCH' : 'POST', body: form });
 }
 export async function uploadAppStatus(root, app, obj) { return writeJson([root, 'hub', app.toLowerCase()], 'status.json', obj); }
 export async function writePlan(root, plan) { return writeJson([root, 'hub', 'citrus'], 'plan.json', plan); }
@@ -283,8 +311,7 @@ export async function loadRemoteState(root) {
 let stateFileId = null;
 export async function saveRemoteState(root, state) {
   const id = await ensurePath([root, 'hub', 'citrus']);
-  const r = await writeJsonIn(id, 'state.json', state, stateFileId);
-  stateFileId = r?.id || stateFileId;
+  try { const r = await writeJsonIn(id, 'state.json', state, stateFileId); stateFileId = r?.id || stateFileId; }
+  catch (e) { stateFileId = null; throw e; }
 }
 
-export const dateKeyOf = keyOf;

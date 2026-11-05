@@ -66,8 +66,8 @@ await page.waitForTimeout(400);
 await page.screenshot({ path: `${out}/07-plan.png`, fullPage: true });
 console.log('PLAN >>>\n' + (await page.innerText('#view-plan')).slice(0, 1800));
 // accept first suggestion
-const acc = page.locator('#view-plan button:has-text("Accept")').first();
-if (await acc.count()) { await acc.click(); await page.waitForTimeout(300); }
+const acc = page.locator('#view-plan .tl-block button:has-text("Accept")').first();
+if (await acc.count()) { await acc.dispatchEvent('click'); await page.waitForTimeout(300); }
 await page.click('#view-plan button:has-text("Edit goals")'); await page.waitForTimeout(200);
 await page.screenshot({ path: `${out}/08-goals.png` });
 await page.click('.sheet-bg', { position: { x: 10, y: 10 } });

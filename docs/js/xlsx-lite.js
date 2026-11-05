@@ -83,11 +83,6 @@ export function colToNum(col) {
   for (const ch of col) n = n * 26 + (ch.charCodeAt(0) - 64);
   return n;
 }
-export function numToCol(n) {
-  let s = '';
-  while (n > 0) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26); }
-  return s;
-}
 export function splitRef(ref) {
   const m = /^([A-Z]+)(\d+)$/.exec(ref);
   return { col: colToNum(m[1]), row: +m[2] };
@@ -185,10 +180,10 @@ function parseDateStyles(stylesXml) {
   }
   const xfs = /<cellXfs[^>]*>([\s\S]*?)<\/cellXfs>/.exec(stylesXml);
   if (!xfs) return set;
-  const xre = /<xf [^>]*numFmtId="(\d+)"/g;
+  // every <xf> is one style index, with or without a numFmtId (skipping some would shift the indexes)
   let i = 0;
-  while ((m = xre.exec(xfs[1]))) {
-    const id = +m[1];
+  for (const xm of xfs[1].matchAll(/<xf\b[^>]*>/g)) {
+    const id = +((/numFmtId="(\d+)"/.exec(xm[0]) || [])[1] || 0);
     if ((id >= 14 && id <= 22) || (id >= 45 && id <= 47) || custom.has(id)) set.add(i);
     i++;
   }
@@ -224,7 +219,7 @@ export async function readXlsx(arrayBufferOrU8) {
   return { sheets };
 }
 
-// Convenience: sheet -> 2D array (1-based rows/cols) with merged values filled across.
+// sheet -> 2D array (1-based rows/cols) with merged values filled across, plus a parallel grid of outline colours
 export function sheetToGrid(sheet) {
   const grid = [];
   for (let r = 0; r <= sheet.maxRow; r++) grid.push(new Array(sheet.maxCol + 1).fill(null));
@@ -232,12 +227,10 @@ export function sheetToGrid(sheet) {
     const { col, row } = splitRef(ref);
     grid[row][col] = v;
   }
-  const mergedSpans = [];
   for (const rng of sheet.merges) {
-    const [a, b] = rng.split(':');
+    const [a, b = a] = rng.split(':');   // a one-cell "merge" has no colon
     const A = splitRef(a), B = splitRef(b);
     const v = grid[A.row]?.[A.col] ?? null;
-    mergedSpans.push({ r1: A.row, c1: A.col, r2: B.row, c2: B.col, value: v });
     if (v === null) continue;
     for (let r = A.row; r <= B.row; r++) for (let c = A.col; c <= B.col; c++) {
       if (grid[r]) grid[r][c] = v;
@@ -246,5 +239,5 @@ export function sheetToGrid(sheet) {
   // outlines as a parallel grid of hex colors
   const outlineGrid = [];
   for (const [ref, color] of sheet.outlines || []) { const { col, row } = splitRef(ref); (outlineGrid[row] ||= [])[col] = color; }
-  return { grid, mergedSpans, outlineGrid };
+  return { grid, outlineGrid };
 }

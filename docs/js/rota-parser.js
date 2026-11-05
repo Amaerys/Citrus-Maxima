@@ -24,10 +24,6 @@ export function parseHours(text) {
   if (start === null || end === null) return null;
   return { start, end, overnight: end <= start, durationMin: end > start ? end - start : 24 * 60 - start + end };
 }
-export function fmtMin(min) {
-  const h = Math.floor(min / 60) % 24, m = min % 60;
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-}
 
 // ---------- legend ----------
 function splitCodes(codeText) {

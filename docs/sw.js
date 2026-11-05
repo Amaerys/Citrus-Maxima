@@ -1,9 +1,14 @@
-const CACHE = 'citrus-maxima-ed1763a913';
+const CACHE = 'citrus-maxima-cf4f29fc51';
 const ASSETS = ['./', './index.html', './css/app.css', './js/app.js', './js/store.js', './js/google.js', './js/model.js', './js/planner.js', './js/util.js', './js/rota-parser.js', './js/xlsx-lite.js', './manifest.webmanifest', './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
+// Network first so a new release shows up at once; the cache is the offline fallback.
+// Only successful same-origin GETs are cached; only page navigations fall back to the app shell.
 self.addEventListener('fetch', e => {
-  const url = new URL(e.request.url);
-  if (url.origin !== location.origin) return; // Google APIs etc. go to network
-  e.respondWith(fetch(e.request).then(r => { const copy = r.clone(); caches.open(CACHE).then(c => c.put(e.request, copy)); return r; }).catch(() => caches.match(e.request).then(r => r || caches.match('./index.html'))));
+  const req = e.request; const url = new URL(req.url);
+  if (req.method !== 'GET' || url.origin !== location.origin) return;   // Google APIs, uploads: straight to the network
+  e.respondWith(fetch(req).then(r => {
+    if (r.ok && r.type === 'basic') { const copy = r.clone(); caches.open(CACHE).then(c => c.put(req, copy)); }
+    return r;
+  }).catch(() => caches.match(req, { ignoreSearch: true }).then(r => r || (req.mode === 'navigate' ? caches.match('./index.html') : Response.error()))));
 });

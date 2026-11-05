@@ -46,8 +46,9 @@ export function dayInfo(state, date) {
   // your own correction (swap / cover / cancelled) wins over the imported rota
   const swap = state.swaps?.[keyOf(date)];
   if (swap && mine) {
+    // a swap: the colleague takes what you were rostered for, you take swap.code (often their shift, or off)
     const other = swap.with ? entries.find(e => e.rota === mine.rota && e.person.name === swap.with) : null;
-    if (other && swap.code && other.code && other.code !== swap.code) { const oc = other.code; other.code = mine.code; other.shift = interpretCode(other.code, other.rota.legend, other.rota.unitKind); other.swap = swap; mine.code = oc; }
+    if (other) { other.code = mine.code; other.shift = interpretCode(other.code, other.rota.legend, other.rota.unitKind); other.swap = swap; }
     mine.code = swap.code || ''; mine.shift = interpretCode(mine.code, mine.rota.legend, mine.rota.unitKind); mine.swap = swap;
   }
   const working = entries.filter(e => e.shift.kind === 'work');

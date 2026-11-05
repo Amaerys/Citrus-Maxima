@@ -1,7 +1,7 @@
 // Rule-based planner: finds free, energy-appropriate slots and fills them with goal blocks.
 // Every suggestion carries a human "why". Rejections teach preferences (state.prefs).
-import { myDay, shiftWindow } from './model.js';
-import { keyOf, addDays, startOfDay, atMin, minsOf, fmtMin, fmtDur } from './util.js';
+import { myDay } from './model.js';
+import { keyOf, fromKey, addDays, startOfDay, fmtMin, fmtDur } from './util.js';
 
 const DAY_MS = 86400000;
 
@@ -33,9 +33,10 @@ export function dayBusy(state, date, events = []) {
   const tomorrow = myDay(state, addDays(date, 1));
   let lightsOut = rules.sleepStart;
   if (tomorrow.today && !tomorrow.today.shift.hours.overnight) {
+    // only an early start pulls bedtime forward: wake − sleep lands before midnight (negative) → bed earlier tonight
     const wake = tomorrow.today.shift.hours.start - commuteFor(rules, tomorrow.today.shift.site) - rules.preShiftBufferMin;
-    lightsOut = Math.min(lightsOut, wake - Math.round(rules.sleepHours * 60));
-    if (lightsOut < 0) lightsOut += 1440; // handled as early-night
+    const bed = wake - Math.round(rules.sleepHours * 60);
+    if (bed < 0) lightsOut = Math.min(rules.sleepStart, bed + 1440);
   }
   if (!(today && today.shift.hours.overnight)) add(lightsOut, 1440, 'Sleep', 'sleep');
   if (!overnightTail) add(0, rules.wakeMin, 'Sleep', 'sleep');
@@ -51,7 +52,7 @@ export function dayBusy(state, date, events = []) {
     if (e > 0 && s < 1440) add(s, e, ev.title, 'event');
   }
   // accepted plan blocks
-  for (const p of state.plan[keyOf(date)] || []) if (p.status === 'accepted') add(p.start, p.end, p.title, 'plan');
+  for (const p of state.plan[keyOf(date)] || []) if (p.status === 'accepted' || p.status === 'done') add(p.start, p.end, p.title, 'plan');
 
   busy.sort((a, b) => a.start - b.start);
   return { busy, today, overnightTail, afterNight };
@@ -136,19 +137,17 @@ export function suggest(state, from, days, eventsByDay = {}, apps = {}, metaFn =
         if (existing.some(p => p.goalId === gid)) { askedApps.add(appKey); continue; }
         const slots = freeSlots(busy, ctx.today?.shift.hours?.overnight ? Math.max(rules.earliestPlan, 10 * 60) : rules.earliestPlan, rules.latestPlan, Math.min(minutes, 20));
         if (!slots.length) continue;
-        let pick;
-        if (ask.slot === 'before' && ctx.today && !ctx.today.shift.hours.overnight) {
-          const shiftStart = ctx.today.shift.hours.start - commuteFor(rules, ctx.today.shift.site) - rules.preShiftBufferMin;
-          pick = slots.filter(x => x.end <= shiftStart).sort((x, y) => y.end - x.end)[0] || slots[0];
-        } else {
-          pick = slots.map(x => ({ s: x, score: scoreSlot(state, { id: gid, kind: 'study', maxBlock: minutes }, x, ctx, energy, date) })).sort((x, y) => y.score - x.score).find(x => !rejectedToday.has(`${gid}|${x.s.start}`))?.s;
-        }
-        if (!pick) continue;
-        const len = Math.min(minutes, pick.s ? pick.s.end - pick.s.start : pick.end - pick.start);
-        const slot = pick.s || pick;
-        const start = ask.slot === 'before' && ctx.today && slot.end <= (ctx.today.shift.hours.start) ? Math.max(slot.start, slot.end - len) : preferredStart({ kind: 'study' }, slot, len);
+        const dayShift = ctx.today && !ctx.today.shift.hours.overnight;
+        const shiftStart = dayShift ? ctx.today.shift.hours.start - commuteFor(rules, ctx.today.shift.site) - rules.preShiftBufferMin : null;
+        const wantBefore = ask.slot === 'before' && dayShift;
+        const placeIn = (slot) => { const len = Math.min(minutes, slot.end - slot.start); const start = wantBefore && slot.end <= shiftStart ? Math.max(slot.start, slot.end - len) : preferredStart({ kind: 'study' }, slot, len); return { slot, len, start }; };
+        let ordered = wantBefore ? [...slots.filter(x => x.end <= shiftStart).sort((x, y) => y.end - x.end), ...slots.filter(x => x.end > shiftStart)]
+          : slots.map(x => ({ x, score: scoreSlot(state, { id: gid, kind: 'study', maxBlock: minutes }, x, ctx, energy, date) })).sort((a, b) => b.score - a.score).map(o => o.x);
+        const choice = ordered.map(placeIn).find(c => !rejectedToday.has(`${gid}|${c.start}`) && !rejectedToday.has(`${gid}|${c.slot.start}`));
+        if (!choice) continue;
+        const { len, start } = choice;
         const meta = metaFn ? metaFn(appName, st) : { title: st.title || appName, color: st.color || '#9aa0b1' };
-        const block = { id: `${key}-${gid}-${start}`, goalId: gid, app: appKey, title: ask.title || meta.title, kind: 'app', color: meta.color, start, end: start + len, status: 'suggested', date: key, reason: `${meta.title} asked for ${fmtDur(minutes)}${ask.slot === 'before' ? (ctx.today && start + len <= ctx.today.shift.hours.start ? ' before your shift' : ' before your shift (no room — moved after)') : ''}${st.summary ? ' · ' + st.summary.slice(0, 80) : ''}`, tag: slotTag(ctx, { start }) };
+        const block = { id: `${key}-${gid}-${start}`, goalId: gid, app: appKey, title: ask.title || meta.title, kind: 'app', color: meta.color, start, end: start + len, status: 'suggested', date: key, reason: `${meta.title} asked for ${fmtDur(minutes)}${len < minutes ? ` (only ${fmtDur(len)} free)` : ''}${wantBefore ? (start + len <= shiftStart ? ' before your shift' : ' before your shift — no room, placed after') : ''}${st.summary ? ' · ' + String(st.summary).slice(0, 80) : ''}`, tag: slotTag(ctx, { start }) };
         dayList.push(block);
         busy.push({ start: block.start, end: block.end + 20, label: block.title, kind: 'plan' }); busy.sort((x, y) => x.start - y.start);
         askedApps.add(appKey);
@@ -166,15 +165,15 @@ export function suggest(state, from, days, eventsByDay = {}, apps = {}, metaFn =
       if (g.daily && existing.some(p => p.goalId === g.id)) continue;
       // How much today? spread deficit across remaining days, but at least minBlock
       let want = g.daily ? Math.min(g.maxBlock, Math.max(g.minBlock, Math.round(target / 7))) : Math.min(g.maxBlock, Math.max(g.minBlock, Math.round(deficit / Math.max(1, daysLeftInWeek))));
-      if (energy === 'low' && g.kind === 'study') want = Math.min(want, 45);
-      if (energy === 'low' && g.kind === 'fitness') continue;
-      if (g.kind === 'study' && studyUsed + want > cap) want = cap - studyUsed;
-      if (want < g.minBlock) continue;
-      // deadline pull: closer deadline -> allow bigger block
-      if (g.deadline) { const dl = (new Date(g.deadline) - date) / DAY_MS; if (dl > 0 && dl < 42) want = Math.min(g.maxBlock, Math.round(want * 1.3)); }
-      // app signal
+      // boosts: a near deadline allows a bigger block; an app saying how long it needs sets the size
+      if (g.deadline) { const dl = (fromKey(g.deadline) - startOfDay(date)) / DAY_MS; if (dl > 0 && dl < 42) want = Math.min(g.maxBlock, Math.round(want * 1.3)); }
       const app = appHint(apps, g);
       if (app?.minutes) want = Math.max(g.minBlock, Math.min(g.maxBlock, app.minutes));
+      // limits always win over boosts: tired days stay light, study has a daily ceiling
+      if (energy === 'low' && g.kind === 'fitness') continue;
+      if (energy === 'low' && g.kind === 'study') want = Math.min(want, 45);
+      if (g.kind === 'study' && studyUsed + want > cap) want = cap - studyUsed;
+      if (want < g.minBlock) continue;
 
       // on a night-shift day: sleep in, and keep the late afternoon/evening for rest before the shift
       const earliest = ctx.today?.shift.hours?.overnight ? Math.max(rules.earliestPlan, 10 * 60) : rules.earliestPlan;
@@ -206,7 +205,7 @@ function appHint(apps, goal) {
   const name = goal.name.toLowerCase();
   for (const [app, st] of Object.entries(apps || {})) {
     if (name.includes(app.toLowerCase()) || (goal.app && goal.app.toLowerCase() === app.toLowerCase())) {
-      const due = st.due ?? st.dueCards ?? st.pending ?? 0;
+      const due = +(st.due ?? st.dueCards ?? (Array.isArray(st.pending) ? 0 : st.pending) ?? 0) || 0;
       const minutes = st.estimatedMinutes ?? (due ? Math.min(90, Math.max(15, Math.round(due * 0.2))) : 0);
       return { app, due, minutes, summary: st.summary || '' };
     }
@@ -245,7 +244,7 @@ function reasonFor(g, ctx, energy, deficit, target, app, start) {
   else if (ctx.today) bits.push(`around your ${ctx.today.shift.label.split(' · ')[0].toLowerCase()} shift`);
   bits.push(`${fmtDur(Math.max(0, deficit))} left of ${fmtDur(target)} this week`);
   if (app) bits.push(`${app.app}: ${app.due} due`);
-  if (g.deadline) { const dl = Math.ceil((new Date(g.deadline) - new Date()) / DAY_MS); if (dl > 0) bits.push(`${dl} days to deadline`); }
+  if (g.deadline) { const dl = Math.ceil((fromKey(g.deadline) - startOfDay(new Date())) / DAY_MS); if (dl > 0) bits.push(`${dl} days to deadline`); }
   return bits.join(' · ');
 }
 
@@ -257,4 +256,3 @@ export function learn(state, block, delta) {
   return prefs;
 }
 
-export { fmtMin, atMin, minsOf, shiftWindow };
