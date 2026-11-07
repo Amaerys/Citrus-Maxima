@@ -4,7 +4,7 @@ import * as L from './media.js';
 import { ring, bars } from './mind-viz.js';
 
 let ctx = null;
-export function initMedia(c) { ctx = c; }
+export function initMedia(c) { ctx = c; setTimeout(() => { try { if (!ctx.S().mediaMeta?.datefix1) ctx.update(st => { const r = L.repairDates(st); return L.setMeta(r.state, { datefix1: true }); }); } catch {} }, 800); }
 const S = () => ctx.S();
 const up = (fn) => ctx.update(fn);
 const ui = { f: { q: '', genre: '', min: 0, year: '', sort: 'recent' }, year: '', kind: '', tab: 'shelf', q: '', tag: '', busy: '', sugg: {}, suggErr: '', importMsg: '' };
@@ -76,6 +76,22 @@ function insights() {
     st.top.length ? [h('div', { class: 'dim tiny' }, 'Your top rated'), chips(st.top, worksChip)] : null,
     tp.loved.length ? null : null);
 }
+/** Games: hours, what you really play, what sits unopened. */
+function gamesCard() {
+  const s = S(), g = L.gameStats(s, new Date()); if (!g.n) return null; const mx = Math.max(1, ...g.buckets.map(b => b[1])), hrs = (m) => Math.round((m.minutes || (m.progress || 0) * 60) / 60);
+  const notes = [g.hours ? `${g.hours.toLocaleString('en')} hours across ${g.played} games${g.hoursYear ? `, ${g.hoursYear.toLocaleString('en')}h of it in games last played this year` : ''}.` : '',
+    g.n >= 10 && g.neverShare >= 0.3 ? `${Math.round(g.neverShare * 100)}% of your library (${g.never} games) has never been opened.` : '', g.played >= 5 && g.top3Share >= 0.5 ? `Your top three games hold ${Math.round(g.top3Share * 100)}% of all your hours. You go deep rather than wide.` : ''].filter(Boolean);
+  return h('div', { class: 'card' }, h('div', { class: 'title' }, 'Your play'), h('div', { class: 'stat-grid' }, [[g.hours.toLocaleString('en'), 'hours'], [g.played, 'played'], [g.never, 'unopened'], [g.n, 'in library']].map(([v, l]) => h('div', { class: 'stat' }, h('b', {}, String(v)), h('span', {}, l)))),
+    notes.map(t => h('div', { class: 'fb small' }, t)), h('div', { class: 'dim tiny' }, 'Games by hours played'), bars(g.buckets.map(([l, v]) => ({ v: v / mx, label: l.replace(' hours', ''), title: `${v} games` })), { h: 44, color: 'var(--blue, #4fb3ff)' }),
+    g.top.length ? [h('div', { class: 'dim tiny' }, 'Most played'), chips(g.top, m => h('span', { class: 'chip', onClick: () => mediaSheet(m.id) }, `${m.title} · ${hrs(m)}h`))] : null);
+}
+/** Games have no genres from Steam, so the backlog gets a shuffle instead of a ranking. */
+function backlogPick() {
+  const s = S(), pool = L.mediaList(s, 'game').filter(m => m.status === 'planned'); if (!pool.length) return null;
+  const seed = ui.pickSeed || 1, pick = pool.map((m, i) => [Math.sin(seed * 9301 + i * 49297) * 233280 % 1, m]).sort((a, b) => a[0] - b[0]).slice(0, 3).map(x => x[1]);
+  return h('div', { class: 'card' }, h('div', { class: 'row' }, h('div', { class: 'title grow' }, '🎲 Pick from your backlog'), h('button', { class: 'btn sm', onClick: () => { ui.pickSeed = (ui.pickSeed || 1) + 1; ctx.render(); } }, 'Shuffle')),
+    h('div', { class: 'dim tiny' }, `${pool.length} games are waiting. Steam doesn’t share genres, so here are three at random. Tap one to start it.`), h('div', { class: 'mlist' }, pick.map(m => h('div', { class: 'mrow media', onClick: () => mediaSheet(m.id) }, m.cover ? h('img', { class: 'cover', src: m.cover, alt: '', loading: 'lazy', referrerpolicy: 'no-referrer' }) : h('span', { class: 'cover ph' }, '🎮'), h('div', { class: 'grow' }, h('div', { class: 'mtitle' }, m.title))))));
+}
 /** Filters above the shelf: text, genre, minimum rating, year finished, sort. */
 function filterBar(list) {
   const f = ui.f, genres = L.genresOf(list), years = [...new Set(list.map(m => (m.finishedAt || '').slice(0, 4)).filter(Boolean))].sort().reverse();
@@ -108,6 +124,7 @@ function review() {
       h('div', { class: 'card' }, h('div', { class: 'title' }, 'By category'), h('div', { class: 'mlist' }, ys.per.map(x => h('div', { class: 'mrow', onClick: () => { ui.kind = x.kind.id; ui.f = { q: '', genre: '', min: 0, year: ys.year, sort: 'rating' }; ui.tab = 'shelf'; ctx.render(); } }, h('span', { class: 'cover ph', style: { '--c': x.kind.color } }, x.kind.emoji), h('div', { class: 'grow' }, h('div', { class: 'mtitle' }, `${x.kind.name} · ${x.n}`), h('div', { class: 'msub' }, x.avg != null ? h('span', {}, `avg ${x.avg.toFixed(1)}`) : null, x.top ? h('span', { class: 'ok' }, `best: ${x.top.title}`) : null)))))),
       ys.best.length ? h('div', { class: 'card' }, h('div', { class: 'title' }, 'Best of the year'), h('div', { class: 'mlist' }, ys.best.map(mediaRow))) : null,
       ys.genres.length ? h('div', { class: 'card' }, h('div', { class: 'title' }, 'Your genres'), chips(ys.genres, ([g, n]) => h('span', { class: 'chip hot' }, `${g} · ${n}`)), ys.makers.length ? h('div', { class: 'dim small' }, 'Repeat names: ', ys.makers.map(([d, n]) => `${d} (${n})`).join(', ')) : null) : null,
+      ys.undated ? h('div', { class: 'dim small' }, `${ys.undated} finished item${ys.undated === 1 ? ' has' : 's have'} no date, so ${ys.undated === 1 ? 'it isn’t' : 'they aren’t'} counted in any year. Open one and set “Finished on” to place it.`) : null,
       ys.worst.length ? h('div', { class: 'card' }, h('div', { class: 'title' }, 'Not for you'), h('div', { class: 'mlist' }, ys.worst.map(mediaRow))) : null]];
 }
 function shelf() {
@@ -121,6 +138,7 @@ function shelf() {
       goalKinds.map(k => { const g = goal(k), n = st.byKind[k].year; return h('button', { class: 'goal-ring', onClick: () => goalSheet(k), 'aria-label': `${L.kindOf(k).name} goal` }, ring(g ? n / g : null, { size: 64, stroke: 6, color: L.kindOf(k).color, label: g ? `${n}/${g}` : String(n), sub: L.kindOf(k).name.toLowerCase(), cls: 'breathing' })); })),
       st.doneYear ? bars(st.months.map((v, i) => ({ v: Math.min(1, v / Math.max(1, ...st.months)), label: 'JFMAMJJASOND'[i], now: i === new Date().getMonth(), title: `${v}` })), { h: 40, color: 'var(--cyan)' }) : null),
     ui.kind === 'book' ? booksInsights() : null,
+    ui.kind === 'game' ? gamesCard() : null,
     insights(),
     filterBar(list),
     h('div', { class: 'row' }, h('div', { class: 'title grow' }, 'Your shelf'), h('button', { class: 'btn sm primary', onClick: () => addSheet() }, '+ Log')),
@@ -165,7 +183,7 @@ function discover() {
   const s = S(); if (ui.kind === 'book') return bookDiscover();
   if (!ui.kind) return [backlogCard(null), ...bookDiscover(), ...discoverKinds(['anime', 'manga'])];
   const online = ui.kind === 'anime' || ui.kind === 'manga';
-  return [backlogCard([ui.kind]), ...(online ? discoverKinds([ui.kind]) : [])];
+  return [ui.kind === 'game' ? backlogPick() : null, backlogCard([ui.kind]), ...(online ? discoverKinds([ui.kind]) : [])];
 }
 function discoverKinds(kinds) {
   const s = S();
@@ -195,10 +213,16 @@ function connect() {
   const s = S(), meta = s.mediaMeta || {};
   const aniIn = h('input', { type: 'text', value: meta.anilist || '', placeholder: 'AniList username', autocomplete: 'off', spellcheck: false });
   const file = h('input', { type: 'file', accept: '.csv,text/csv', style: { display: 'none' }, onChange: async () => { const f = file.files[0]; if (!f) return; importText(await f.text(), f.name); file.value = ''; } });
-  const key = h('input', { type: 'password', placeholder: 'Steam Web API key (stays in this box)', autocomplete: 'off' }), sid = h('input', { type: 'text', value: meta.steamId || '', placeholder: 'SteamID64 (17 digits)', inputmode: 'numeric' }), link = h('div', { class: 'tiny' }), paste = h('textarea', { rows: 3, placeholder: 'Paste the page’s text here…', spellcheck: false });
-  const paintLink = () => { link.replaceChildren(); if (key.value && /^\d{17}$/.test(sid.value.trim())) link.append(h('a', { class: 'btn sm', href: L.steamUrl(key.value.trim(), sid.value.trim()), target: '_blank', rel: 'noopener noreferrer' }, '1 · Open Steam data'), h('span', { class: 'dim' }, ' then copy everything on that page')); };
-  key.addEventListener('input', paintLink); sid.addEventListener('input', paintLink);
+  const key = h('input', { type: 'password', placeholder: 'Steam Web API key (stays in this box)', autocomplete: 'off' }), sid = h('input', { type: 'text', value: meta.steamId || '', placeholder: 'e.g. 76561198000000000 or gaben', autocomplete: 'off', spellcheck: false }), link = h('div', { class: 'tiny' }), paste = h('textarea', { rows: 3, placeholder: 'Paste the page’s text here…', spellcheck: false });
+  const link2 = h('div', { class: 'tiny' }), id17 = () => sid.value.trim();
+  const paintLink = () => { link.replaceChildren(); link2.replaceChildren(); const v = id17();
+    if (v && /^[A-Za-z0-9_-]{2,40}$/.test(v)) link.append(h('a', { class: 'btn sm', href: L.steamListUrl(v), target: '_blank', rel: 'noopener noreferrer' }, '1 · Open my games list'), h('span', { class: 'dim' }, ' then select all, copy, and paste below'));
+    if (key.value && /^\d{17}$/.test(v)) link2.append(h('a', { class: 'btn sm', href: L.steamUrl(key.value.trim(), v), target: '_blank', rel: 'noopener noreferrer' }, 'Open Steam data (API)')); };
+  const doSteam = (text) => { const r = L.parseSteam(text); if (r.error) return toast(r.error, 'err'); let res; up(s => { const x = L.upsertMany(s, r.items); res = x; return L.setMeta(x.state, { steamId: id17(), steamAt: Date.now() }); }); ui.importMsg = `Steam: ${res.added} added, ${res.updated} updated, ${res.skipped} unchanged`; toast(ui.importMsg, 'ok'); paste.value = ''; ctx.render(); };
+  const steamFile = h('input', { type: 'file', accept: '.xml,.json,.txt,text/*,application/json', style: { display: 'none' }, onChange: async () => { const f = steamFile.files[0]; if (f) doSteam(await f.text()); steamFile.value = ''; } });
+  key.addEventListener('input', paintLink); sid.addEventListener('input', paintLink); paintLink();
   return [
+    importPreview(),
     h('div', { class: 'card' }, h('div', { class: 'title' }, '🍥 AniList'), h('div', { class: 'dim small' }, 'Live: your anime and manga lists, scores and progress. Public profiles only. Safe to run again — it never overwrites your own ratings.'),
       field('', aniIn), h('div', { class: 'row' }, h('button', { class: 'btn primary', disabled: !!ui.busy, onClick: async () => {
         const u = aniIn.value.trim(); if (!u) return toast('Enter your AniList username'); ui.busy = 'ani'; toast('Fetching…');
@@ -206,16 +230,38 @@ function connect() {
         catch (e) { toast(e.message, 'err'); } ui.busy = ''; ctx.render();
       } }, meta.anilist ? 'Sync now' : 'Connect'), meta.anilistAt ? h('span', { class: 'dim tiny' }, `last ${new Date(meta.anilistAt).toLocaleDateString('en-GB')}`) : null)),
     h('div', { class: 'card' }, h('div', { class: 'title' }, '📚🎬 Goodreads · IMDb files'), h('div', { class: 'dim small' }, 'Neither offers a connection for apps, so Citrus reads their export files. Goodreads: My Books → Import and export → Export library. IMDb: your Ratings or Watchlist page → ⋯ → Export. Re-import any time; duplicates are merged. Kindle books you track on Goodreads come through this way.'),
+      field('This IMDb file is my…', h('select', { 'aria-label': 'IMDb list type', onChange: (e) => { ui.importMode = e.target.value; } }, MODES.map(([v, l]) => h('option', { value: v, ...((ui.importMode || 'auto') === v ? { selected: true } : {}) }, l)))),
+      h('label', { class: 'check small' }, h('input', { type: 'checkbox', checked: !ui.noImdbDates, onChange: (e) => { ui.noImdbDates = !e.target.checked; } }), ' Use IMDb’s “Date Rated” as the date I watched it (it is when you rated, which can be later than when you watched; untick to leave films undated)'),
+      h('label', { class: 'check small' }, h('input', { type: 'checkbox', checked: !ui.noSync, onChange: (e) => { ui.noSync = !e.target.checked; } }), ' Re-importing a file corrects status, date and rating of items that came from the same service'),
       h('div', { class: 'row' }, file, h('button', { class: 'btn primary', onClick: () => file.click() }, 'Choose CSV file')), ui.importMsg ? h('div', { class: 'ok small', style: { marginTop: '8px' } }, ui.importMsg) : null),
-    h('div', { class: 'card' }, h('div', { class: 'title' }, '🎮 Steam'), h('div', { class: 'dim small' }, 'Steam blocks direct calls from a web page, so it takes one copy-paste: make a free key at steamcommunity.com/dev/apikey, set your Game details to Public, and Citrus builds the link. The key is never saved.'),
-      field('', key), field('', sid), link, field('', paste), h('div', { class: 'row' }, h('button', { class: 'btn primary', onClick: () => { const r = L.parseSteam(paste.value); if (r.error) return toast(r.error, 'err'); let res; up(s => { const x = L.upsertMany(s, r.items); res = x; return L.setMeta(x.state, { steamId: sid.value.trim(), steamAt: Date.now() }); }); ui.importMsg = `Steam: ${res.added} added, ${res.updated} updated`; toast(ui.importMsg, 'ok'); paste.value = ''; ctx.render(); } }, '2 · Import games'))),
+    h('div', { class: 'card' }, h('div', { class: 'title' }, '🎮 Steam library'), h('div', { class: 'dim small' }, 'Steam blocks direct calls from a web page, so it takes one copy-paste. Set Game details to Public in Steam › Profile › Privacy first. Hours played, last-played dates and covers come through; played games become Played, under an hour becomes Dropped, anything opened in the last two weeks is Playing, and unopened games go to your Backlog. Your own ratings and statuses are never overwritten, and re-importing refreshes hours.'),
+      field('Steam profile (SteamID64 or custom URL name)', sid), h('div', { class: 'tiny' }, link),
+      h('details', { class: 'tiny' }, h('summary', {}, 'No luck? Use a free API key instead'), h('div', { class: 'dim small' }, 'Make a key at steamcommunity.com/dev/apikey. It is only used to build the link and is never saved.'), field('', key), link2),
+      field('Paste the page text, or choose the saved file', paste), h('div', { class: 'row' }, steamFile, h('button', { class: 'btn', onClick: () => steamFile.click() }, 'Choose file'), h('button', { class: 'btn primary', onClick: () => doSteam(paste.value) }, 'Import games')),
+      meta.steamAt ? h('div', { class: 'dim tiny' }, `Last import ${new Date(meta.steamAt).toLocaleDateString('en-GB')}`) : null),
     h('div', { class: 'card' }, h('div', { class: 'title' }, 'Anything else'), h('div', { class: 'dim small' }, 'Log by hand with search: books from Open Library, anime from AniList; shows, movies and games by title. Everything syncs through Drive with the rest of Citrus.'), h('div', { class: 'row' }, h('button', { class: 'btn', onClick: () => addSheet() }, '+ Log something'))),
   ];
 }
+const MODES = [['auto', 'Auto: rated titles are watched, the rest are watchlist'], ['done', 'Watched / read (even without a rating)'], ['planned', 'Watchlist / want to watch'], ['dropped', 'Dropped / did not finish']];
 function importText(text, name) {
-  const r = L.parseExport(text); if (r.error) { toast(r.error, 'err'); return; }
-  let res; up(s => { const x = L.upsertMany(s, r.items); res = x; return x.state; });
-  ui.importMsg = `${r.source}: ${res.added} added, ${res.updated} updated, ${res.skipped} unchanged (${name})`; toast(ui.importMsg, 'ok'); ctx.render();
+  const r = L.parseExport(text, { mode: ui.importMode || 'auto' }); if (r.error) { toast(r.error, 'err'); return; }
+  if (r.source === 'IMDb' && ui.noImdbDates) r.items.forEach(i => { i.finishedAt = ''; });
+  ui.pending = { r, name, mode: ui.importMode || 'auto' }; ctx.render();
+}
+/** Shows exactly how a file will be read before anything is saved. */
+function importPreview() {
+  const p = ui.pending; if (!p) return null; const r = p.r, sm = L.summariseImport(r.items), imdb = r.source === 'IMDb', gr = r.source === 'Goodreads';
+  const word = (k) => ({ done: imdb ? 'Watched' : gr ? 'Read' : 'Finished', doing: gr ? 'Currently reading' : 'In progress', planned: gr ? 'Want to read' : imdb ? 'Watchlist' : 'Plan to', dropped: gr ? 'Did not finish' : 'Dropped', paused: 'Paused' }[k]);
+  const rows = ['done', 'doing', 'planned', 'dropped', 'paused'].filter(k => sm[k]).map(k => h('div', { class: 'row' }, h('div', { class: 'grow' }, word(k)), h('b', {}, String(sm[k]))));
+  const fmt = (k) => k ? fmtDate(fromKey(k)) : '';
+  return h('div', { class: 'card preview' }, h('div', { class: 'title' }, `${r.source} file: ${sm.n} items`), h('div', { class: 'dim tiny' }, p.name),
+    ...rows, sm.done ? h('div', { class: 'dim small' }, sm.from ? `Finished dates run ${fmt(sm.from)} to ${fmt(sm.to)}.` : 'None of the finished items have a date.', sm.undated ? ` ${sm.undated} have no date and will stay undated.` : '', ` ${sm.rated} rated.`) : null,
+    imdb ? h('div', { class: 'dim small' }, `Read as: ${MODES.find(m => m[0] === p.mode)[1]}.`) : null,
+    h('div', { class: 'dim tiny' }, r.items.slice(0, 4).map(i => i.title).join(' · '), sm.n > 4 ? ` … +${sm.n - 4} more` : ''),
+    h('div', { class: 'row' }, h('button', { class: 'btn primary', onClick: () => {
+      let res; up(s => { const x = L.upsertMany(s, r.items, { sync: !ui.noSync, dropped: p.mode === 'dropped' }); res = x; return x.state; });
+      ui.importMsg = `${r.source}: ${res.added} added, ${res.updated} updated, ${res.skipped} unchanged (${p.name})`; ui.pending = null; toast(ui.importMsg, 'ok'); ctx.render(); } }, 'Import'),
+      h('button', { class: 'btn ghost', onClick: () => { ui.pending = null; ctx.render(); } }, 'Cancel')));
 }
 
 // ───────────────────────────────────────── sheets

@@ -18,14 +18,21 @@ export const statusWord = (kind, st) => ({ planned: READ(kind) ? 'Want to read' 
 const norm = (t) => String(t || '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
 
 // ───────────────────────────── records
+const IMPORTED = new Set(['goodreads', 'imdb', 'anilist', 'steam']);
 export function addMedia(s, f) {
   const title = String(f.title || '').trim().slice(0, 140); if (!title) return s;
   const kind = KINDS.some(k => k.id === f.kind) ? f.kind : 'book', now = Date.now(), id = f.id || uid();
   const m = { id, kind, title, status: STATUS[f.status] ? f.status : 'planned', rating: Math.max(0, Math.min(10, +f.rating || 0)), progress: Math.max(0, +f.progress || 0), total: Math.max(0, +f.total || 0),
     year: +f.year || 0, creator: String(f.creator || '').slice(0, 80), genres: (f.genres || []).map(g => String(g).slice(0, 30)).slice(0, 6), cover: f.cover ? safeUrl(f.cover) : '', src: f.src || 'manual', extId: f.extId ? String(f.extId) : '',
     format: ['paper', 'ebook', 'audio'].includes(f.format) ? f.format : '', log: Array.isArray(f.log) ? f.log.slice(-400) : [], quotes: Array.isArray(f.quotes) ? f.quotes.slice(-100) : [], startedAt: f.startedAt || '', finishedAt: f.finishedAt || '', minutes: Math.max(0, +f.minutes || 0), review: String(f.review || '').slice(0, 800), runtime: Math.max(0, Math.min(900, +f.runtime || 0)), pub: Math.max(0, Math.min(10, +f.pub || 0)), createdAt: f.createdAt || now, at: now };
-  if (m.status === 'done' && !m.finishedAt) m.finishedAt = keyOf(new Date());
+  if (m.status === 'done' && !m.finishedAt && !IMPORTED.has(m.src)) m.finishedAt = keyOf(new Date());   // imports without a date stay undated rather than becoming "today"
   return { ...s, media: { ...s.media, [id]: m } };
+}
+/** Earlier versions stamped undated imports with the day they were imported. Clear those (only where the date equals the import day). */
+export function repairDates(s) {
+  let n = 0, media = { ...s.media };
+  for (const m of rec(s.media)) if (IMPORTED.has(m.src) && m.src !== 'imdb' && m.status === 'done' && m.finishedAt && m.finishedAt === keyOf(new Date(m.createdAt || 0))) { media[m.id] = { ...m, finishedAt: '', at: Date.now() }; n++; }
+  return { state: n ? { ...s, media } : s, fixed: n };
 }
 export function updateMedia(s, id, patch) {
   const m = s.media?.[id]; if (!m) return s; const n = { ...m, ...patch, at: Date.now() };
@@ -41,19 +48,26 @@ export function findMedia(s, { kind, title, year, src, extId }) {
   return rec(s.media).find(m => (extId && m.src === src && m.extId === String(extId)) || (m.kind === kind && norm(m.title) === nt && (!year || !m.year || m.year === year)));
 }
 /** Add or fill in: your own rating/status are never overwritten by an import unless the record has none. */
-export function upsertMedia(s, f) {
+export function upsertMedia(s, f, opts = {}) {
   const cur = findMedia(s, f); if (!cur) return { state: addMedia(s, f), added: 1 };
   const patch = {};
+  if (opts.sync && cur.src === f.src && IMPORTED.has(cur.src) && f.status) {   // the file is the source of truth for things that came from it
+    if (cur.status !== f.status) patch.status = f.status;
+    if (f.status === 'done' && (cur.finishedAt || '') !== (f.finishedAt || '')) patch.finishedAt = f.finishedAt || '';
+    if (f.status !== 'done' && cur.finishedAt) patch.finishedAt = '';
+    if (f.rating && cur.rating !== f.rating) patch.rating = f.rating;
+  } else if (opts.dropped && f.status === 'dropped' && !(cur.status === 'done' && cur.rating)) { if (cur.status !== 'dropped') patch.status = 'dropped'; if (f.rating && !cur.rating) patch.rating = f.rating; }
   if (!cur.rating && f.rating) patch.rating = f.rating; if (!cur.total && f.total) patch.total = f.total; if (!cur.creator && f.creator) patch.creator = f.creator;
   if (!cur.extId && f.extId) { patch.extId = String(f.extId); patch.src = f.src; } if (!cur.cover && f.cover) patch.cover = safeUrl(f.cover) || undefined;
   if (!cur.genres?.length && f.genres?.length) patch.genres = f.genres; if (!cur.finishedAt && f.finishedAt) patch.finishedAt = f.finishedAt;
+  if (cur.finishedAt && f.src === cur.src && IMPORTED.has(cur.src) && !f.finishedAt && cur.finishedAt === keyOf(new Date(cur.createdAt || 0))) patch.finishedAt = '';
   if (f.minutes && f.minutes > (cur.minutes || 0)) patch.minutes = f.minutes;
   if (!cur.runtime && f.runtime) patch.runtime = f.runtime; if (!cur.pub && f.pub) patch.pub = f.pub;
   if (f.progress && f.progress > (cur.progress || 0)) patch.progress = f.progress;
-  if (cur.status === 'planned' && f.status && f.status !== 'planned') patch.status = f.status;
+  if (cur.status === 'planned' && f.status && f.status !== 'planned' && !patch.status) patch.status = f.status;
   return Object.keys(patch).length ? { state: updateMedia(s, cur.id, patch), added: 0, updated: 1 } : { state: s, added: 0 };
 }
-export function upsertMany(s, list) { let st = s, added = 0, updated = 0; for (const f of list) { const r = upsertMedia(st, f); st = r.state; added += r.added || 0; updated += r.updated || 0; } return { state: st, added, updated, skipped: list.length - added - updated }; }
+export function upsertMany(s, list, opts = {}) { let st = s, added = 0, updated = 0; for (const f of list) { const r = upsertMedia(st, f, opts); st = r.state; added += r.added || 0; updated += r.updated || 0; } return { state: st, added, updated, skipped: list.length - added - updated }; }
 
 
 // ───────────────────────────── reading log: sessions, pace, finish estimates, highlights
@@ -136,22 +150,22 @@ const dateKeyOf = (v) => { const m = /^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/.exec
 const unExcel = (v) => String(v || '').replace(/^="?|"$/g, '');
 /** Detects which export it is by its columns. Returns {source, items} or {error}. */
 const DE_GENRE = { Krimi: 'Crime', Kriegsfilm: 'War', Familienfilm: 'Family', Abenteuer: 'Adventure', Komödie: 'Comedy', Liebesfilm: 'Romance', Dokumentarfilm: 'Documentary', Biografie: 'Biography', Geschichte: 'History', Historienfilm: 'History', Musikfilm: 'Music', Sport: 'Sport', Sportfilm: 'Sport', Western: 'Western', Zeichentrick: 'Animation', Kurzfilm: 'Short', Fantasy: 'Fantasy', Science: 'Sci-Fi', 'Sci-Fi': 'Sci-Fi', Musical: 'Musical', Mystery: 'Mystery', Horror: 'Horror', Thriller: 'Thriller', Drama: 'Drama', Animation: 'Animation', Action: 'Action', Reality: 'Reality', Talkshow: 'Talk-Show', Nachrichten: 'News' };
-export function parseExport(text) {
+export function parseExport(text, { mode = 'auto' } = {}) {
   const rows = parseCSV(text); if (!rows.length) return { error: 'That file has no rows.' };
   const cols = Object.keys(rows[0]);
   if (cols.includes('Exclusive Shelf') && cols.includes('Title')) {
     const items = rows.filter(r => r.Title).map(r => {
       const shelf = r['Exclusive Shelf'], rating = +r['My Rating'] || 0, isbn = unExcel(r.ISBN13 || r.ISBN);
       return { kind: 'book', title: r.Title.replace(/\s*\([^)]*#\d+[^)]*\)\s*$/, ''), creator: r.Author, year: +r['Original Publication Year'] || +r['Year Published'] || 0, total: +r['Number of Pages'] || 0,
-        genres: (r.Bookshelves || '').split(',').map(x => x.trim()).filter(x => x && !/^(to-read|read|currently-reading)$/.test(x)).slice(0, 8), status: shelf === 'read' ? 'done' : shelf === 'currently-reading' ? 'doing' : shelf === 'to-read' ? 'planned' : 'planned', rating: rating * 2, finishedAt: dateKeyOf(r['Date Read']), review: r['My Review'] || '', src: 'goodreads', extId: r['Book Id'] || isbn };
+        genres: (r.Bookshelves || '').split(',').map(x => x.trim()).filter(x => x && !/^(to-read|read|currently-reading)$/.test(x)).slice(0, 8), status: shelf === 'read' ? 'done' : shelf === 'currently-reading' ? 'doing' : shelf === 'did-not-finish' || /^(dnf|abandoned)$/i.test(shelf) ? 'dropped' : 'planned', rating: rating * 2, finishedAt: dateKeyOf(r['Date Read']), review: r['My Review'] || '', src: 'goodreads', extId: r['Book Id'] || isbn };
     });
     return { source: 'Goodreads', items };
   }
   if (cols.includes('Const') && cols.includes('Title Type')) {
     const items = rows.filter(r => r.Title && !/episode|episode|video ?game|videospiel|podcast/i.test(r['Title Type'])).map(r => {
-      const rated = +r['Your Rating'] || 0, type = r['Title Type'];
+      const rated = +r['Your Rating'] || 0, type = r['Title Type'], status = mode === 'planned' ? 'planned' : mode === 'dropped' ? 'dropped' : mode === 'done' ? 'done' : rated ? 'done' : 'planned';
       return { kind: /serie|mini/i.test(type) ? 'show' : 'movie', title: r.Title, creator: r.Directors || r.Creators || '', year: +r.Year || 0, genres: (r.Genres || '').split(',').map(x => x.trim()).filter(Boolean).map(g => DE_GENRE[g] || g),
-        status: rated ? 'done' : 'planned', rating: rated, finishedAt: dateKeyOf(r['Date Rated']), src: 'imdb', extId: r.Const, runtime: +r['Runtime (mins)'] || 0, pub: +r['IMDb Rating'] || 0 };
+        status, rating: rated, finishedAt: status === 'done' ? dateKeyOf(r['Date Rated']) : '', src: 'imdb', extId: r.Const, runtime: +r['Runtime (mins)'] || 0, pub: +r['IMDb Rating'] || 0 };
     });
     return { source: 'IMDb', items };
   }
@@ -303,10 +317,33 @@ export async function worldSuggestions(s, dismissed = []) {
 
 // ───────────────────────────── Steam: the browser can't call Steam directly, so you paste what the API returns
 export function steamUrl(key, id) { return `https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key=${encodeURIComponent(key)}&steamid=${encodeURIComponent(id)}&include_appinfo=1&include_played_free_games=1&format=json`; }
+const steamCover = (id) => `https://cdn.cloudflare.steamstatic.com/steam/apps/${id}/header.jpg`;
+const steamItem = (appid, name, minutes, last, recent) => {
+  const mins = Math.max(0, Math.round(minutes || 0)), d = last ? new Date(last * 1000) : null;
+  return { kind: 'game', title: name, minutes: mins, cover: steamCover(appid), src: 'steam', extId: appid,
+    status: !mins ? 'planned' : recent ? 'doing' : mins < 60 ? 'dropped' : 'done', finishedAt: mins && d && !isNaN(d) ? keyOf(d) : '' };
+};
+/** Accepts what Steam gives you: the Web API JSON (GetOwnedGames) or the community games-list XML. */
 export function parseSteam(text) {
-  let j; try { j = JSON.parse(text); } catch { return { error: 'That is not JSON. Open the link, select everything on the page and paste it here.' }; }
-  const games = j?.response?.games; if (!Array.isArray(games)) return { error: j?.response && !Object.keys(j.response).length ? 'Steam returned nothing — set your Game details to Public in Steam › Privacy.' : 'No games found in that.' };
-  return { source: 'Steam', items: games.filter(g => g.name).map(g => ({ kind: 'game', title: g.name, minutes: g.playtime_forever || 0, status: g.playtime_forever > 0 ? 'doing' : 'planned', src: 'steam', extId: g.appid })) };
+  const t = String(text || '').trim(); if (!t) return { error: 'Paste what the Steam page shows first.' };
+  if (t[0] === '<') {
+    const items = [], re = /<game>([\s\S]*?)<\/game>/g; let m; const tag = (x, n) => { const r = new RegExp(`<${n}>\\s*(?:<!\\[CDATA\\[)?([\\s\\S]*?)(?:\\]\\]>)?\\s*</${n}>`, 'i').exec(x); return r ? r[1].trim() : ''; };
+    while ((m = re.exec(t))) { const name = tag(m[1], 'name'), id = tag(m[1], 'appID'); if (!name || !id) continue; items.push(steamItem(id, name, parseFloat(tag(m[1], 'hoursOnRecord').replace(/,/g, '')) * 60 || 0, 0, parseFloat(tag(m[1], 'hoursLast2Weeks')) > 0)); }
+    return items.length ? { source: 'Steam', items } : { error: /private|not public/i.test(t) ? 'That profile’s game details are private. Set Game details to Public in Steam › Privacy settings.' : 'No games found in that XML.' };
+  }
+  let j; try { j = JSON.parse(t); } catch { return { error: 'That is neither Steam’s JSON nor its games-list XML. Open the link, select everything on the page, copy and paste it here.' }; }
+  const games = j?.response?.games; if (!Array.isArray(games)) return { error: j?.response && !Object.keys(j.response).length ? 'Steam returned nothing. Set your Game details to Public in Steam › Privacy.' : 'No games found in that.' };
+  return { source: 'Steam', items: games.filter(g => g.name).map(g => steamItem(g.appid, g.name, g.playtime_forever, g.rtime_last_played, g.playtime_2weeks > 0)) };
+}
+/** The community games list needs no key, only a public profile (id = 17-digit SteamID64 or the custom URL name). */
+export const steamListUrl = (id) => /^\d{17}$/.test(id) ? `https://steamcommunity.com/profiles/${id}/games?tab=all&xml=1` : `https://steamcommunity.com/id/${encodeURIComponent(id)}/games?tab=all&xml=1`;
+/** Games: hours, what you actually play, what sits unplayed. */
+export function gameStats(s, now = new Date()) {
+  const gs = rec(s.media).filter(m => m.kind === 'game'), mins = (m) => m.minutes || (m.progress || 0) * 60, played = gs.filter(m => mins(m) > 0), y = String(now.getFullYear());
+  const total = played.reduce((t, m) => t + mins(m), 0), top = played.slice().sort((a, b) => mins(b) - mins(a)).slice(0, 8), never = gs.filter(m => !mins(m) && m.status !== 'done');
+  const hoursYear = played.filter(m => yearOf(m) === y).reduce((t, m) => t + mins(m), 0);
+  const buckets = [['under 1h', 0, 60], ['1–10h', 60, 600], ['10–50h', 600, 3000], ['50h+', 3000, 1e9]].map(([l, lo, hi]) => [l, played.filter(m => mins(m) >= lo && mins(m) < hi).length]);
+  return { n: gs.length, played: played.length, hours: Math.round(total / 60), top, never: never.length, neverShare: gs.length ? never.length / gs.length : 0, buckets, hoursYear: Math.round(hoursYear / 60), top3Share: total ? top.slice(0, 3).reduce((t, m) => t + mins(m), 0) / total : 0 };
 }
 
 // ───────────────────────────── suggestions cache (this device only)
@@ -339,7 +376,7 @@ export function statsOf(s, kinds, { year = '' } = {}, now = new Date()) {
   const hist = Array(10).fill(0); rated.forEach(m => hist[Math.min(9, m.rating - 1)]++);
   const gAvg = {}; rated.forEach(m => (m.genres || []).forEach(g => { (gAvg[g] ||= []).push(m.rating); }));
   const genreAvg = Object.entries(gAvg).filter(([, a]) => a.length >= 3).map(([g, a]) => [g, a.reduce((x, y) => x + y, 0) / a.length, a.length]).sort((a, b) => b[1] - a[1]);
-  const mins = done.reduce((t, m) => t + (m.kind === 'movie' ? m.runtime || 0 : m.kind === 'book' ? m.minutes || 0 : m.kind === 'game' ? (m.progress || 0) * 60 : 0), 0);
+  const mins = done.reduce((t, m) => t + (m.kind === 'movie' ? m.runtime || 0 : m.kind === 'book' ? m.minutes || 0 : m.kind === 'game' ? (m.minutes || (m.progress || 0) * 60) : 0), 0);
   const vs = rated.filter(m => m.pub), gap = vs.length ? vs.reduce((t, m) => t + (m.rating - m.pub), 0) / vs.length : null, hot = vs.map(m => ({ m, d: m.rating - m.pub })).sort((a, b) => b.d - a.d);
   const yr = String(year || now.getFullYear()), inYear = all.filter(m => yearOf(m) === yr);
   return { n: done.length, byKind: Object.fromEntries(KINDS.map(k => [k.id, done.filter(m => m.kind === k.id).length])), avg: rated.length ? rated.reduce((t, m) => t + m.rating, 0) / rated.length : null, ratedN: rated.length, hist,
@@ -388,7 +425,7 @@ export function yearReview(s, year, now = new Date()) {
   if (st.months[busy] > 1) lines.push(`${['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][busy]} was your busiest month, with ${st.months[busy]}.`);
   if (pages) lines.push(`${pages.toLocaleString('en')} pages read.`);
   if (st.hours) lines.push(`About ${st.hours} hours of films, reading and play logged.`);
-  return { year: y, n: done.length, avg: st.avg, per, best: best.slice(0, 5), worst: rated.filter(m => m.rating <= 4).slice(0, 3), months: st.months, genres: st.genres.slice(0, 6), makers: st.makers.slice(0, 4), lines, pages, hours: st.hours, years: [...new Set(rec(s.media).filter(m => m.status === 'done' && yearOf(m)).map(yearOf))].sort().reverse() };
+  return { year: y, n: done.length, avg: st.avg, per, best: best.slice(0, 5), worst: rated.filter(m => m.rating <= 4).slice(0, 3), months: st.months, genres: st.genres.slice(0, 6), makers: st.makers.slice(0, 4), lines, pages, hours: st.hours, undated: rec(s.media).filter(m => m.status === 'done' && !m.finishedAt).length, years: [...new Set(rec(s.media).filter(m => m.status === 'done' && yearOf(m)).map(yearOf))].sort().reverse() };
 }
 /** Shelf filter: free text, genre, rating floor, finish year, sort. */
 export function filterShelf(list, { q = '', genre = '', min = 0, year = '', sort = 'recent' } = {}) {
@@ -397,3 +434,10 @@ export function filterShelf(list, { q = '', genre = '', min = 0, year = '', sort
   return by ? out.slice().sort(by) : out;
 }
 export const genresOf = (list) => countOf(list.flatMap(m => m.genres || [])).slice(0, 24);
+
+/** What a parsed file will do, in plain words, before anything is saved. */
+export function summariseImport(items) {
+  const by = (st) => items.filter(i => i.status === st), dated = items.filter(i => i.status === 'done' && i.finishedAt).map(i => i.finishedAt).sort();
+  return { n: items.length, done: by('done').length, doing: by('doing').length, planned: by('planned').length, dropped: by('dropped').length, paused: by('paused').length, undated: by('done').filter(i => !i.finishedAt).length, rated: items.filter(i => i.rating).length,
+    from: dated[0] || '', to: dated[dated.length - 1] || '', kinds: countOf(items.map(i => i.kind)) };
+}

@@ -122,4 +122,45 @@ t('pile ranking: favours authors and shelves you rated highly, collapses edition
   console.log('  ✓ all-kinds stats, feedback, year in review, filters');
 }
 
+// Steam: XML + JSON, statuses, game stats
+{
+  const xml = '<?xml version="1.0"?><gamesList><games><game><appID>10</appID><name><![CDATA[Counter-Strike]]></name><hoursLast2Weeks>3.5</hoursLast2Weeks><hoursOnRecord>1,234.5</hoursOnRecord></game><game><appID>20</appID><name><![CDATA[Portal 2]]></name><hoursOnRecord>12.0</hoursOnRecord></game><game><appID>30</appID><name><![CDATA[Tried It]]></name><hoursOnRecord>0.4</hoursOnRecord></game><game><appID>40</appID><name><![CDATA[Never Opened]]></name></game></games></gamesList>';
+  const r = L.parseSteam(xml), by = Object.fromEntries(r.items.map(x => [x.title, x]));
+  assert.equal(r.items.length, 4); assert.equal(by['Counter-Strike'].minutes, 74070); assert.equal(by['Counter-Strike'].status, 'doing'); assert.equal(by['Portal 2'].status, 'done'); assert.equal(by['Tried It'].status, 'dropped'); assert.equal(by['Never Opened'].status, 'planned');
+  assert.ok(by['Portal 2'].cover.includes('/apps/20/')); assert.ok(L.parseSteam('<profile>private</profile>').error);
+  const j = L.parseSteam(JSON.stringify({ response: { games: [{ appid: 7, name: 'Hades', playtime_forever: 600, rtime_last_played: 1760000000 }] } })); assert.equal(j.items[0].status, 'done'); assert.equal(j.items[0].finishedAt, '2025-10-09');
+  const st = L.upsertMany({ media: {}, deleted: {} }, r.items).state, g = L.gameStats(st, new Date('2026-06-01'));
+  assert.equal(g.n, 4); assert.equal(g.played, 3); assert.equal(g.never, 1); assert.equal(g.hours, 1247); assert.equal(g.top[0].title, 'Counter-Strike');
+  assert.ok(L.steamListUrl('76561198000000000').includes('/profiles/')); assert.ok(L.steamListUrl('gabe').includes('/id/gabe/'));
+  console.log('  ✓ steam xml/json parsing, statuses, game stats');
+}
+
+// undated imports stay undated; old "today" stamps are repaired
+{
+  const csv = 'Book Id,Title,Author,My Rating,Exclusive Shelf,Date Read,Number of Pages\n1,Alice,Carroll,4,read,,200\n2,Dune,Herbert,5,read,2019/03/15,600';
+  let s = L.upsertMany({ media: {}, deleted: {} }, L.parseExport(csv).items).state; const by = (t) => Object.values(s.media).find(m => m.title === t);
+  assert.equal(by('Alice').finishedAt, ''); assert.equal(by('Dune').finishedAt, '2019-03-15');
+  const today = new Date().toLocaleDateString('en-CA'); s = { ...s, media: { ...s.media, [by('Alice').id]: { ...by('Alice'), finishedAt: today, createdAt: Date.now() } } };
+  const r = L.repairDates(s); assert.equal(r.fixed, 1); assert.equal(Object.values(r.state.media).find(m => m.title === 'Alice').finishedAt, ''); assert.equal(Object.values(r.state.media).find(m => m.title === 'Dune').finishedAt, '2019-03-15');
+  assert.equal(L.addMedia({ media: {}, deleted: {} }, { kind: 'book', title: 'Manual', status: 'done' }).media && Object.values(L.addMedia({ media: {}, deleted: {} }, { kind: 'book', title: 'Manual', status: 'done' }).media)[0].finishedAt, today);
+  console.log('  ✓ undated imports stay undated, old today-stamps repaired');
+}
+
+// list types: watched / watchlist / dropped, did-not-finish, sync
+{
+  const hdr = 'Const,Title,Title Type,Year,Genres,Directors,Created';
+  const lst = (rows) => [hdr, ...rows].join('\n'), row = (id, t, ty = 'Film') => `tt${id},"${t}",${ty},2020,"Drama","X",2025-01-01`;
+  const watch = L.parseExport(lst([row(1, 'W1'), row(2, 'W2', 'Fernsehserie')]), { mode: 'planned' }), drop = L.parseExport(lst([row(2, 'W2', 'Fernsehserie'), row(3, 'D1')]), { mode: 'dropped' });
+  assert.deepEqual(watch.items.map(i => i.status), ['planned', 'planned']); assert.deepEqual(drop.items.map(i => i.status), ['dropped', 'dropped']); assert.ok(watch.items.every(i => !i.finishedAt));
+  assert.equal(L.parseExport(lst([row(5, 'U')]), { mode: 'done' }).items[0].status, 'done'); assert.equal(L.parseExport(lst([row(5, 'U')])).items[0].status, 'planned');
+  let s = L.upsertMany({ media: {}, deleted: {} }, watch.items).state; s = L.upsertMany(s, drop.items, { dropped: true }).state; const by = (t) => Object.values(s.media).find(m => m.title === t);
+  assert.equal(by('W1').status, 'planned'); assert.equal(by('W2').status, 'dropped'); assert.equal(by('W2').kind, 'show'); assert.equal(by('D1').status, 'dropped');
+  const rated = L.parseExport('Const,Your Rating,Date Rated,Title,Title Type,Year,Genres,Directors\ntt1,8,2024-05-05,W1,Film,2020,Drama,X'); s = L.upsertMany(s, rated.items).state; assert.equal(by('W1').status, 'done'); assert.equal(by('W1').finishedAt, '2024-05-05');
+  s = L.upsertMany(s, drop.items.slice(1), { dropped: true }).state; assert.equal(by('W1').status, 'done', 'dropped list never demotes a rated film');
+  const gr = L.parseExport('Book Id,Title,Author,My Rating,Exclusive Shelf,Date Read,Number of Pages\n1,A,x,0,did-not-finish,,10\n2,B,x,0,currently-reading,,10\n3,C,x,0,to-read,,10'); assert.deepEqual(gr.items.map(i => i.status), ['dropped', 'doing', 'planned']);
+  let g = L.upsertMany({ media: {}, deleted: {} }, [{ ...gr.items[1], status: 'done', finishedAt: '2026-11-07' }]).state; g = L.upsertMany(g, [gr.items[1]], { sync: true }).state; assert.equal(Object.values(g.media)[0].status, 'doing'); assert.equal(Object.values(g.media)[0].finishedAt, '');
+  const sm = L.summariseImport(rated.items); assert.deepEqual([sm.n, sm.done, sm.from], [1, 1, '2024-05-05']);
+  console.log('  ✓ imdb list types, did-not-finish, sync correction, preview summary');
+}
+
 await Promise.all(pend); console.log(fails ? `\n${fails} failed` : '\nlibrary logic ok'); process.exit(fails ? 1 : 0);
