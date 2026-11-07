@@ -53,6 +53,11 @@ function defaults() {
     yearMeta: {},             // year -> {theme, at}
     // ---- received from other apps (see inbound.js)
     metricLog: {},            // 'app:key' -> dateKey -> {v, goal, label, unit, kind, at}   numbers and progress the apps report
+    // ---- Library, notes, reminders
+    media: {},                // id -> {kind, title, status, rating 0-10, progress, total, creator, genres, src, extId, finishedAt, minutes}
+    mediaMeta: {},            // {goals:{book:24}, anilist:'name', dismissed:[…], at}
+    memos: {},                // id -> {title, body, tags[], pinned}
+    reminders: {},            // 'task:id' | 'habit:id' -> {eventId, sig, at}   calendar alarms Citrus created
     inboxLog: {},             // 'app:id' -> {status: accepted|dismissed, at, taskId}      what you decided about their proposals
   };
 }
@@ -66,7 +71,7 @@ function load() {
     if (!raw) return defaults();
     const s = JSON.parse(raw);
     if (!s || typeof s !== 'object') return defaults();
-    for (const k of ['rotas', 'plan', 'prefs', 'notes', 'swaps', 'deleted', 'apps', 'tasks', 'aims', 'habits', 'habitLog', 'reflections', 'resolutions', 'yearMeta', 'metricLog', 'inboxLog']) if (!s[k] || typeof s[k] !== 'object' || Array.isArray(s[k])) delete s[k];
+    for (const k of ['rotas', 'plan', 'prefs', 'notes', 'swaps', 'deleted', 'apps', 'tasks', 'aims', 'habits', 'habitLog', 'reflections', 'resolutions', 'yearMeta', 'metricLog', 'inboxLog', 'media', 'mediaMeta', 'memos', 'reminders']) if (!s[k] || typeof s[k] !== 'object' || Array.isArray(s[k])) delete s[k];
     for (const [id, r] of Object.entries(s.rotas || {})) if (!r || !Array.isArray(r.people) || !r.legend) delete s.rotas[id];
     for (const [k, list] of Object.entries(s.plan || {})) if (!Array.isArray(list)) delete s.plan[k];
     if (!Array.isArray(s.goals)) delete s.goals; if (!Array.isArray(s.outbox)) delete s.outbox;
@@ -162,6 +167,10 @@ export function mergeStates(local, remote) {
   out.resolutions = mergeMap('res', older.resolutions, newer.resolutions, at);
   out.yearMeta = mergeMap('year', older.yearMeta, newer.yearMeta, at);
   out.inboxLog = mergeMap('inbox', older.inboxLog, newer.inboxLog, at);
+  out.media = mergeMap('media', older.media, newer.media, at);
+  out.memos = mergeMap('memo', older.memos, newer.memos, at);
+  out.mediaMeta = (newer.mediaMeta?.at || 0) >= (older.mediaMeta?.at || 0) ? { ...(older.mediaMeta || {}), ...(newer.mediaMeta || {}) } : { ...(newer.mediaMeta || {}), ...(older.mediaMeta || {}) };
+  out.reminders = mergeMap('rem', older.reminders, newer.reminders, at);
   out.metricLog = {};
   for (const src of [older.metricLog || {}, newer.metricLog || {}]) for (const [sk, cells] of Object.entries(src)) {
     const m = (out.metricLog[sk] ||= {});

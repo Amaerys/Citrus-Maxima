@@ -44,7 +44,7 @@ export function h(tag, attrs = {}, ...children) {
   return el;
 }
 // Only http(s) links from outside data (app status files) may become hrefs
-export function safeUrl(u) { try { const x = new URL(String(u || ''), location.href); return /^https?:$/.test(x.protocol) ? x.href : ''; } catch { return ''; } }
+export function safeUrl(u) { if (u == null || String(u).trim() === '') return ''; try { const x = new URL(String(u || ''), location.href); return /^https?:$/.test(x.protocol) ? x.href : ''; } catch { return ''; } }
 
 export function toast(msg, kind = '') {
   let host = document.getElementById('toasts');

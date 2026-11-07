@@ -4,9 +4,11 @@ import { h, toast, keyOf, fromKey, addDays, startOfDay, fmtDate, relDay, DAY_SHO
 import { weekStartOf } from './planner.js';
 import * as M from './mind.js';
 import { ring, spark, bars, heat, radar, tree } from './mind-viz.js';
+import * as L from './media.js';
+import { initMedia, renderLibrary, renderNotes, mediaSearchItems, quickNote, quickLog } from './media-ui.js';
 
 let ctx = null;
-export function initMind(c) { ctx = c; }
+export function initMind(c) { ctx = c; ctx.openTask = (p) => openTask(p); initMedia(ctx); }
 const S = () => ctx.S();
 const up = (fn) => ctx.update(fn);
 const now = () => new Date();
@@ -15,10 +17,11 @@ const ui = { seg: 'overview', area: '', doneOpen: false, year: new Date().getFul
 export const mindSeg = () => ui.seg;
 export function setSeg(seg, area = '') { ui.seg = seg; ui.area = area; }
 
-const SEGS = [['overview', 'Overview'], ['tasks', 'Tasks'], ['habits', 'Habits'], ['aims', 'Aims'], ['reflect', 'Reflect'], ['year', 'Year']];
+const SEGS = [['overview', 'Overview'], ['tasks', 'Tasks'], ['habits', 'Habits'], ['aims', 'Aims'], ['reflect', 'Reflect'], ['year', 'Year'], ['library', 'Library'], ['notes', 'Notes']];
 const MOODS = ['😞', '😕', '😐', '🙂', '😄'];
 const areaColor = (id) => M.areaOf(id)?.color || 'var(--muted)';
 const pctTxt = (v) => v == null ? '–' : `${Math.round(v * 100)}%`;
+const firstUrl = (t) => { const m = /https?:\/\/[^\s)]+/.exec(t || ''); return m ? m[0] : ''; };
 const dueLabel = (k) => k ? relDay(fromKey(k), now()) : '';
 
 // ───────────────────────────────────────── small form helpers
@@ -71,7 +74,9 @@ function taskRow(t, { showArea = true } = {}) {
         blk ? h('span', { class: 'ok' }, `⏰ ${fmtMinStr(blk.start)}`) : null,
         showArea && area ? h('span', { style: { color: areaColor(area) } }, M.areaOf(area)?.name) : null,
         aim ? h('span', {}, '◆ ', aim.title) : null,
-        t.srcApp ? h('span', { class: 'src' }, `from ${t.srcApp}`) : null)),
+        t.srcApp ? h('span', { class: 'src' }, `from ${t.srcApp}`) : null,
+        t.remindAt && !t.done ? h('span', {}, '🔔') : null)),
+    !t.done && firstUrl(t.notes) ? h('a', { class: 'btn sm', href: firstUrl(t.notes), target: '_blank', rel: 'noopener', onClick: (e) => e.stopPropagation() }, 'Open ▸') : null,
     t.pri ? h('span', { class: 'flag', title: M.PRI[t.pri] }, t.pri === 2 ? '‼' : '!') : null);
 }
 const fmtMinStr = (m) => `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
@@ -94,7 +99,8 @@ function habitRow(hb, { dots = true } = {}) {
     check,
     h('div', { class: 'grow' },
       h('div', { class: 'mtitle' }, hb.emoji ? `${hb.emoji} ` : '', hb.name),
-      h('div', { class: 'msub' }, h('span', {}, M.habitFreqLabel(hb)), wk != null ? h('span', {}, `${wk}/${hb.freq.n} this week`) : null, auto ? h('span', { class: 'ok' }, `auto · ${hb.link.split(':')[0]}`) : null, !due ? h('span', {}, 'rest day') : null),
+      h('div', { class: 'msub' }, h('span', {}, M.habitFreqLabel(hb)), wk != null ? h('span', {}, `${wk}/${hb.freq.n} this week`) : null, auto ? h('span', { class: 'ok' }, `auto · ${hb.link.split(':')[0]}`) : null, !due ? h('span', {}, 'rest day') : null,
+        hb.link && ctx.appUrl?.(hb.link.split(':')[0]) ? h('a', { class: 'open-link', href: ctx.appUrl(hb.link.split(':')[0]), target: '_blank', rel: 'noopener', onClick: (e) => e.stopPropagation() }, `Open ${hb.link.split(':')[0]} ▸`) : null),
       dots ? habitDots(hb) : null),
     st.cur > 0 ? h('div', { class: `streak ${st.cur >= 7 ? 'hot' : ''}`, title: `Best ${st.best}` }, h('b', {}, st.cur), h('small', {}, st.unit === 'wk' ? 'wk' : 'day')) : null);
 }
@@ -161,8 +167,13 @@ function starterCard() {
     h('div', { class: 'kit' }, kit.map(k => h('span', { class: 'chip' }, k.emoji || '◆', ' ', k.name || k.title))),
     h('div', { class: 'row' }, h('button', { class: 'btn primary', onClick: () => { up(st => { let x = st; for (const k of kit) x = k.kind === 'habit' ? M.addHabit(x, k) : M.addAim(x, { ...k, milestones: k.milestones.map(t => ({ title: t })) }); return x; }); toast('Kit added'); } }, 'Add the kit'), h('span', { class: 'dim tiny' }, 'or just capture a first task above')));
 }
+function nowCard() {
+  const s = S(), list = L.nowPlaying(s).slice(0, 3);
+  return h('div', { class: 'card' }, h('div', { class: 'row' }, h('div', { class: 'title grow' }, 'Now'), h('button', { class: 'btn sm ghost', onClick: () => { ui.seg = 'library'; ctx.render(); } }, 'Library'), h('button', { class: 'btn sm ghost', onClick: quickNote }, '+ Note'), h('button', { class: 'btn sm ghost', onClick: quickLog }, '+ Log')),
+    list.length ? h('div', { class: 'now-row' }, list.map(m => { const k = L.kindOf(m.kind); return h('button', { class: 'now-chip', style: { '--c': k.color }, onClick: () => { ui.seg = 'library'; ctx.render(); } }, h('span', {}, k.emoji), h('b', {}, m.title), m.total ? h('small', {}, `${m.progress || 0}/${m.total}`) : null); })) : h('div', { class: 'dim small' }, 'Nothing in progress. Log what you are reading, watching or playing.'));
+}
 function overview() {
-  return [brainHero(), captureBar(), starterCard(), inboxCard(), focusCard(), balanceCard(), trendCard()];
+  return [brainHero(), captureBar(), starterCard(), inboxCard(), focusCard(), nowCard(), balanceCard(), trendCard()];
 }
 
 // ───────────────────────────────────────── Tasks
@@ -179,9 +190,12 @@ function taskSheet(id, preset = {}) {
   const s = S(), cur = s.tasks?.[id], f = { title: '', due: '', est: 0, pri: 0, aimId: '', area: '', notes: '', ...preset, ...(cur || {}) };
   const sh = ctx.sheet([]); const title = h('input', { type: 'text', value: f.title, placeholder: 'What needs doing?', maxlength: 140 }), notes = h('textarea', { rows: 2, placeholder: 'Notes' }, f.notes);
   const due = h('input', { type: 'date', value: f.due }), est = h('input', { type: 'number', min: 0, max: 480, step: 5, value: f.est || '', placeholder: 'minutes' });
+  const remind = h('input', { type: 'datetime-local', value: f.remindAt || '' });
+  const at = (d, hh, mm = 0) => { const x = new Date(d); x.setHours(hh, mm, 0, 0); const p2 = (n) => String(n).padStart(2, '0'); return `${x.getFullYear()}-${p2(x.getMonth() + 1)}-${p2(x.getDate())}T${p2(x.getHours())}:${p2(x.getMinutes())}`; };
   const blk = cur && M.taskBlock(s, cur);
   sh.box.append(h('h3', {}, cur ? 'Task' : 'New task'), field('', title),
     h('div', { class: 'grid2' }, field('Due', due, h('div', { class: 'seg mini' }, [['Today', 0], ['Tomorrow', 1], ['Next wk', 7]].map(([l, d]) => h('button', { type: 'button', onClick: () => { due.value = keyOf(addDays(now(), d)); } }, l)))), field('Time needed (min)', est)),
+    field('Alarm', remind, h('div', { class: 'seg mini' }, [['In 1 h', () => at(new Date(Date.now() + 3600000), new Date(Date.now() + 3600000).getHours(), new Date(Date.now() + 3600000).getMinutes())], ['This evening', () => at(now(), 20)], ['Tomorrow 9:00', () => at(addDays(now(), 1), 9)], ['Clear', () => '']].map(([l, fn]) => h('button', { type: 'button', onClick: () => { remind.value = fn(); } }, l))), h('div', { class: 'dim tiny' }, 'Rings on your phone through Google Calendar (sign in to Google to use it).')),
     field('Priority', pick([[0, 'Normal'], [1, 'High'], [2, 'Urgent']], f.pri, v => { f.pri = +v; })),
     field('Area', areaPick(f.area, v => { f.area = v; })), field('Objective', aimSelect(f.aimId, v => { f.aimId = v; })), field('Notes', notes),
     f.srcApp ? h('div', { class: 'dim tiny' }, `Sent by ${f.srcApp}`) : null,
@@ -190,7 +204,7 @@ function taskSheet(id, preset = {}) {
       h('button', { class: 'btn', onClick: () => sh.close() }, 'Cancel'),
       h('button', { class: 'btn primary', onClick: () => {
         if (!title.value.trim()) return toast('Give it a title');
-        const v = { title: title.value.trim(), due: due.value, est: +est.value || 0, pri: f.pri, aimId: f.aimId, area: f.area, notes: notes.value };
+        const v = { title: title.value.trim(), due: due.value, est: +est.value || 0, pri: f.pri, aimId: f.aimId, area: f.area, notes: notes.value, remindAt: remind.value };
         up(st => cur ? M.updateTask(st, id, v) : M.addTask(st, { ...v, src: f.src, srcApp: f.srcApp }));
         sh.close(); if (v.est && v.due) ctx.regenerate?.();
       } }, 'Save')));
@@ -225,6 +239,7 @@ function habitSheet(id) {
       f.freq.type === 'days' ? h('div', { class: 'seg wrap tight' }, DAY_SHORT.map((l, i) => h('button', { type: 'button', class: f.freq.days.includes(i) ? 'active' : '', onClick: (e) => { f.freq.days = f.freq.days.includes(i) ? f.freq.days.filter(x => x !== i) : [...f.freq.days, i]; e.currentTarget.classList.toggle('active'); } }, l[0] + l[1]))) : null,
       f.freq.type === 'weekly' ? h('div', { class: 'row' }, h('button', { type: 'button', class: 'btn sm', onClick: () => { f.freq.n = Math.max(1, f.freq.n - 1); paintFreq(); } }, '−'), h('b', {}, `${f.freq.n}× a week`), h('button', { type: 'button', class: 'btn sm', onClick: () => { f.freq.n = Math.min(7, f.freq.n + 1); paintFreq(); } }, '+')) : null);
   }; paintFreq();
+  const remindT = h('input', { type: 'time', value: f.remindTime || '' });
   const linkSel = h('select', {}, h('option', { value: '' }, 'Manual (I tick it)'), ...Object.entries(a).filter(([, v]) => v).map(([k, v]) => h('option', { value: v.app || k }, `${v.title || k} says I'm done today`)), ...M.metricSeries(s).map(m => h('option', { value: m.key }, `${m.label} (${m.app}) reaches its goal`)));
   linkSel.value = f.link || '';
   const stats = cur && (() => { const st = M.habitStreak(s, cur, n, a), cells = []; const start = weekStartOf(addDays(n, -7 * 19)); for (let i = 0; i < 140; i++) { const d = addDays(start, i), k = keyOf(d); cells.push(d > n ? { key: k, blank: true } : { key: k, v: M.habitDue(cur, d) ? (M.habitDone(s, cur, k, a, keyOf(n)) ? 1 : 0) : null, title: fmtDate(d), today: k === keyOf(n) }); }
@@ -233,10 +248,11 @@ function habitSheet(id) {
     field('Area', areaPick(f.area, v => { f.area = v; })), field('Objective it serves', aimSelect(f.aimId, v => { f.aimId = v; })),
     field('Counts automatically from', linkSel), h('div', { class: 'grid2' }, field('Goal for metric', thr), field('Time to set aside (min)', mins)),
     h('div', { class: 'dim tiny' }, 'If you give it minutes, Citrus finds a slot around your shifts each day.'),
+    field('Alarm at (on its days)', remindT, h('div', { class: 'dim tiny' }, 'Rings on your phone through Google Calendar; leave empty for none.')),
     h('div', { class: 'row end' }, cur ? [confirmBtn('Delete', () => { up(st => M.deleteHabit(st, id)); sh.close(); }), h('button', { class: 'btn', onClick: () => { up(st => M.updateHabit(st, id, { archived: true })); sh.close(); } }, 'Pause')] : null, h('span', { class: 'grow' }),
       h('button', { class: 'btn', onClick: () => sh.close() }, 'Cancel'), h('button', { class: 'btn primary', onClick: () => {
         if (!name.value.trim()) return toast('Name the habit');
-        const v = { name: name.value.trim(), emoji: emoji.value.trim(), freq: f.freq, area: f.area, aimId: f.aimId, link: linkSel.value, threshold: +thr.value || 0, minutes: +mins.value || 0 };
+        const v = { name: name.value.trim(), emoji: emoji.value.trim(), freq: f.freq, area: f.area, aimId: f.aimId, link: linkSel.value, threshold: +thr.value || 0, minutes: +mins.value || 0, remindTime: remindT.value || '' };
         up(st => cur ? M.updateHabit(st, id, v) : M.addHabit(st, v)); sh.close(); if (v.minutes) ctx.regenerate?.();
       } }, 'Save')));
   setTimeout(() => !cur && name.focus(), 60);
@@ -440,7 +456,7 @@ export function renderMind() {
     const badge = id === 'overview' ? M.inboxPending(S(), apps(), now()).length : 0;
     return h('button', { class: ui.seg === id ? 'active' : '', role: 'tab', 'aria-selected': ui.seg === id, onClick: () => { ui.seg = id; ctx.render(); window.scrollTo(0, 0); } }, label, badge ? h('span', { class: 'pill-n' }, badge) : null);
   }));
-  const body = { overview, tasks: tasksView, habits: habitsView, aims: aimsView, reflect: reflectView, year: yearView }[ui.seg]();
+  const body = { overview, tasks: tasksView, habits: habitsView, aims: aimsView, reflect: reflectView, year: yearView, library: renderLibrary, notes: renderNotes }[ui.seg]();
   ui.pop = '';   // the enter animation plays once
   return [seg, h('div', { class: `mind-body seg-${ui.seg}` }, ...body.flat().filter(Boolean))];
 }
@@ -451,6 +467,7 @@ export function searchItems() {
   for (const t of Object.values(s.tasks || {})) out.push({ kind: 'Task', title: t.title, sub: t.done ? 'done' : t.due ? dueLabel(t.due) : 'no date', run: () => taskSheet(t.id) });
   for (const x of M.activeHabits(s)) out.push({ kind: 'Habit', title: `${x.emoji || ''} ${x.name}`.trim(), sub: M.habitFreqLabel(x), run: () => habitSheet(x.id) });
   for (const a of Object.values(s.aims || {})) out.push({ kind: 'Objective', title: a.title, sub: pctTxt(M.aimProgress(s, a)), run: () => aimSheet(a.id) });
+  out.push(...mediaSearchItems());
   for (const r of Object.values(s.resolutions || {})) out.push({ kind: 'Resolution', title: r.title, sub: String(r.year), run: () => resolutionSheet(r.id, r.year) });
   for (const r of M.reflectionsList(s).slice(0, 60)) out.push({ kind: 'Reflection', title: M.methodOf(r.method)?.name || r.method, sub: `${fmtDate(fromKey(r.date))} ${previewOf(r)}`, run: () => reflectSheet(r.method, { entry: r }) });
   return out;

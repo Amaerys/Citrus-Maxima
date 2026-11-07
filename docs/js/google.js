@@ -177,9 +177,12 @@ function normalizeEvent(e, calendarId) {
   const end = allDay ? new Date(e.end.date + 'T00:00:00') : new Date(e.end.dateTime);
   return { id: e.id, calendarId, title: e.summary || '(no title)', start, end, allDay, location: e.location || '', citrus: e.extendedProperties?.private?.citrus || '', htmlLink: e.htmlLink, color: e.colorId };
 }
-export async function createEvent(calendarId, { title, start, end, description = '', location = '', tag = '', colorId, key = '' }) {
+export async function createEvent(calendarId, { title, start, end, description = '', location = '', tag = '', colorId, key = '', reminders = null, recurrence = null, timeZone = '' }) {
   const body = { summary: title, description, location, start: { dateTime: start.toISOString() }, end: { dateTime: end.toISOString() }, extendedProperties: { private: { citrus: tag || 'plan', ...(key ? { key } : {}) } } };
   if (colorId) body.colorId = colorId;
+  // alarms: minutes before the start, as pop-ups (your phone's Calendar app rings them even when Citrus is closed)
+  if (Array.isArray(reminders)) body.reminders = { useDefault: false, overrides: reminders.slice(0, 5).map(m => ({ method: 'popup', minutes: Math.max(0, Math.min(40320, +m || 0)) })) };
+  if (Array.isArray(recurrence) && recurrence.length) { const tz = timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; body.recurrence = recurrence; body.start = { dateTime: start.toISOString(), timeZone: tz }; body.end = { dateTime: end.toISOString(), timeZone: tz }; }
   const j = await gfetch(`${CAL}/calendars/${encodeURIComponent(calendarId)}/events`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   return normalizeEvent(j, calendarId);
 }

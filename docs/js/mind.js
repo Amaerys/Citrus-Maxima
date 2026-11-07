@@ -54,7 +54,7 @@ export function parseCapture(raw, now = new Date()) {
 export function addTask(s, f) {
   const title = String(f.title || '').trim().slice(0, 140); if (!title) return s;
   const id = f.id || uid(), now = Date.now();
-  const t = { id, title, done: false, doneAt: 0, due: f.due || '', est: Math.max(0, Math.min(480, +f.est || 0)), pri: Math.max(0, Math.min(2, +f.pri || 0)), aimId: f.aimId || '', area: f.area || '', notes: String(f.notes || '').slice(0, 600), src: f.src || '', srcApp: f.srcApp || '', createdAt: now, at: now };
+  const t = { id, title, done: false, doneAt: 0, due: f.due || '', remindAt: f.remindAt || '', est: Math.max(0, Math.min(480, +f.est || 0)), pri: Math.max(0, Math.min(2, +f.pri || 0)), aimId: f.aimId || '', area: f.area || '', notes: String(f.notes || '').slice(0, 600), src: f.src || '', srcApp: f.srcApp || '', createdAt: now, at: now };
   return { ...s, tasks: { ...s.tasks, [id]: t } };
 }
 export function updateTask(s, id, patch) { const t = s.tasks?.[id]; return t ? { ...s, tasks: { ...s.tasks, [id]: { ...t, ...patch, at: Date.now() } } } : s; }
@@ -99,7 +99,7 @@ export function habitFreqLabel(h) {
 export function addHabit(s, f) {
   const name = String(f.name || '').trim().slice(0, 60); if (!name) return s;
   const id = f.id || uid(), now = Date.now();
-  const h = { id, name, emoji: String(f.emoji || '').slice(0, 4), freq: f.freq || { type: 'daily' }, aimId: f.aimId || '', area: f.area || '', link: f.link || '', threshold: +f.threshold || 0, minutes: Math.max(0, Math.min(180, +f.minutes || 0)), archived: false, createdAt: f.createdAt || now, at: now };
+  const h = { id, name, emoji: String(f.emoji || '').slice(0, 4), freq: f.freq || { type: 'daily' }, aimId: f.aimId || '', area: f.area || '', link: f.link || '', threshold: +f.threshold || 0, minutes: Math.max(0, Math.min(180, +f.minutes || 0)), remindTime: /^\d\d:\d\d$/.test(f.remindTime || '') ? f.remindTime : '', archived: false, createdAt: f.createdAt || now, at: now };
   return { ...s, habits: { ...s.habits, [id]: h } };
 }
 export function updateHabit(s, id, patch) { const h = s.habits?.[id]; return h ? { ...s, habits: { ...s.habits, [id]: { ...h, ...patch, at: Date.now() } } } : s; }
@@ -430,6 +430,7 @@ export function mindSummary(s, now, apps) {
     tasks: { overdue: b.overdue.length, today: b.today.length, top: focusTasks(s, now, 5).map(t => ({ title: t.title, due: t.due || '', pri: t.pri || 0 })) },
     habits: { due: habits.filter(h => habitDue(h, now)).length, done: habits.filter(h => habitDue(h, now) && habitDone(s, h, todayKey, apps, todayKey)).length, pending: habits.filter(h => habitDue(h, now) && !habitDone(s, h, todayKey, apps, todayKey)).map(h => h.name).slice(0, 6) },
     streaks, reflectedToday: reflectedOn(s, todayKey),
+    library: { now: Object.values(s.media || {}).filter(m => m.status === 'doing').slice(0, 5).map(m => ({ kind: m.kind, title: m.title, progress: m.progress || 0, total: m.total || 0 })) },
     receipts: receipts(s),
   };
 }

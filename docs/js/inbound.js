@@ -8,7 +8,7 @@ import { safeUrl } from './util.js';
 
 export const CONTRACT = 2;
 const DATE = /^\d{4}-\d{2}-\d{2}$/, TIME = /^([01]\d|2[0-3]):[0-5]\d$/, SLUG = /[^a-z0-9_-]+/g;
-const CAP = { asks: 30, pending: 10, metrics: 12, progress: 12, inbox: 25 };
+const CAP = { asks: 30, pending: 10, metrics: 12, progress: 12, inbox: 25, actions: 6 };
 
 const validDate = (v) => typeof v === 'string' && DATE.test(v) && !isNaN(new Date(v + 'T00:00:00'));
 export const slug = (v) => String(v ?? '').toLowerCase().trim().replace(SLUG, '-').replace(/^-+|-+$/g, '').slice(0, 40);
@@ -43,6 +43,14 @@ export function normalizeStatus(st, fallbackName = '') {
     return { key, label: str(p.label || p.key, 40), pct: Math.max(0, Math.min(100, pct)), date: dayOf(p.date) };
   }).filter(p => p && p.date);
 
+  // deep links: buttons Citrus shows for the app ("Start reviews"), opened with ?from=citrus appended
+  const aseen = new Set();
+  const actions = list(st.actions, 'actions').map((a, i) => {
+    const id = slug(a?.id), url = safeUrl(a?.url), label = str(a?.label, 28).trim();
+    if (!id || !url || !label || aseen.has(id)) { issues.push(`actions[${i}]: needs id, label and an http(s) url, ignored`); return null; }
+    aseen.add(id); return { id, label, url, icon: str(a.icon, 4), minutes: Math.max(0, Math.min(240, Math.round(+a.minutes || 0))) };
+  }).filter(Boolean);
+
   const seen = new Set();
   const inbox = list(st.inbox, 'inbox').map((it, i) => {
     if (!it || typeof it !== 'object') { issues.push(`inbox[${i}]: not an object, ignored`); return null; }
@@ -60,7 +68,7 @@ export function normalizeStatus(st, fallbackName = '') {
 
   return {
     app, title: str(st.title, 40), icon: str(st.icon, 4), color: /^#[0-9a-f]{3,8}$/i.test(st.color || '') ? st.color : '', url: safeUrl(st.url || st.extra?.url),
-    summary: str(st.summary), updatedAt, asks, pending, metrics, progress, inbox, issues,
+    summary: str(st.summary), updatedAt, asks, pending, metrics, progress, inbox, actions, issues,
     next: st.next && typeof st.next === 'object' ? { title: str(st.next.title, 80), minutes: Math.max(0, +st.next.minutes || 0) } : null,
     today,
     due: Number.isFinite(+st.due) ? +st.due : undefined, estimatedMinutes: Number.isFinite(+st.estimatedMinutes) ? +st.estimatedMinutes : undefined,

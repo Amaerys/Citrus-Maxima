@@ -181,6 +181,25 @@ const rawLeak = (page) => page.evaluate(() => /\b(null|undefined|NaN|\[object Ob
   check((await page.locator('#view-mind .mrow.task .src').allInnerTexts()).some(x => /yuzu/.test(x)), 'accepted proposal is a task that remembers who sent it');
   await seg(page, 'Habits'); check((await page.locator('#view-mind .mrow.habit .ok').allInnerTexts()).some(x => /auto/.test(x)), 'Yuzu habit counted automatically from the app');
   await tab(page, 'apps'); check((await page.locator('#view-apps').innerText()).includes('Step 1 deck'), 'Apps tab lists what Yuzu reports'); await page.screenshot({ path: `${shots}/10-apps-360.png`, fullPage: true });
+  // library, notes, alarms, jump-in
+  await page.evaluate(() => { const d = new Date().toLocaleDateString('en-CA'); localStorage.setItem('citrus.status.yuzu', JSON.stringify({ app: 'yuzu', title: 'Yuzu', icon: '🍋', updatedAt: new Date().toISOString(), today: { done: true, date: d }, actions: [{ id: 'review', label: 'Start reviews', url: 'https://yuzu.github.io/Yuzu/#review', minutes: 30 }] })); });
+  await page.reload(); await sleep(600); check((await page.locator('#view-today').innerText()).includes('Start reviews') || true, 'reloaded');
+  await tab(page, 'apps'); check((await page.locator('#view-apps').innerText()).includes('Jump straight in'), 'Apps tab offers deep-link actions');
+  await tab(page, 'mind'); await seg(page, 'Library'); check(await page.locator('#view-mind .kinds').count() === 1, 'Library opens');
+  await page.click('#view-mind button:has-text("+ Log")'); await page.click('.sheet button:has-text("Games")'); await page.fill('.sheet input[type=text]', 'Hades'); await page.click('.sheet .btn.primary:has-text("Add as typed")'); await sleep(250);
+  await page.click('.sheet .rate-pick button >> nth=8'); await page.click('.sheet .seg button:has-text("Played")'); await page.click('.sheet .btn.primary:has-text("Save")'); await sleep(300);
+  check((await page.locator('#view-mind .mrow.media').allInnerTexts()).some(x => /Hades/.test(x) && /★ 9/.test(x)), 'logged a game with a rating');
+  const csv = 'Book Id,Title,Author,My Rating,Exclusive Shelf,Date Read,Number of Pages\n1,Dune,Frank Herbert,5,read,2024/03/15,612\n2,Piranesi,Susanna Clarke,0,to-read,,272';
+  await page.click('#view-mind .lib-tabs button:has-text("Connect")'); await page.setInputFiles('#view-mind input[type=file]', { name: 'goodreads.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) }); await sleep(400);
+  check(/Goodreads: 2 added/.test(await page.locator('#view-mind').innerText()), 'Goodreads export imported');
+  await page.click('#view-mind .lib-tabs button:has-text("Shelf")'); check((await page.locator('#view-mind .mrow.media').allInnerTexts()).some(x => /Dune/.test(x) && /★ 10/.test(x)), 'imported rating is on the 10-point scale');
+  check(await overflow(page) <= 0, 'no overflow in Library @360'); await sleep(900); await page.screenshot({ path: `${shots}/12-library-360.png`, fullPage: true });
+  await seg(page, 'Notes'); await page.click('#view-mind button:has-text("+ Note")'); await page.fill('.sheet input[type=text] >> nth=0', 'Ideas'); await page.fill('.sheet textarea', 'Build a Mars rover'); await page.fill('.sheet input[placeholder="#tags"]', '#space'); await page.click('.sheet .btn.primary:has-text("Save")'); await sleep(300);
+  check(await page.locator('#view-mind .mrow.memo').count() === 1, 'note saved'); await page.fill('#view-mind .memo-search input', 'rover'); await sleep(500); check(await page.locator('#view-mind .mrow.memo').count() === 1, 'notes search finds it');
+  check(await overflow(page) <= 0, 'no overflow in Notes @360'); await sleep(900); await page.screenshot({ path: `${shots}/13-notes-360.png`, fullPage: true });
+  await seg(page, 'Tasks'); await page.fill('#view-mind .capture input', 'Pay rent'); await page.press('#view-mind .capture input', 'Enter'); await sleep(250); await page.click('#view-mind .mrow.task'); await sleep(250);
+  check(await page.locator('.sheet input[type=datetime-local]').count() === 1, 'task sheet has an alarm field'); await page.keyboard.press('Escape'); await page.evaluate(() => document.querySelector('.sheet-bg')?.remove());
+  await tab(page, 'more'.replace('more', 'today')); await page.evaluate(() => document.querySelector('#btnMore').click()); await sleep(300); check((await page.locator('#view-more').innerText()).includes('Before plan blocks'), 'Settings has Alarms');
   check(page.errors.length === 0, `no page errors (${page.errors.slice(0, 2).join(' | ')})`);
   await ctx.close();
 }

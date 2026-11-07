@@ -49,10 +49,10 @@ async function boot() {
   window.addEventListener('offline', () => { rt.online = false; renderSync(); });
   MU.initMind({
     S, update: (fn) => store.update(fn), sheet, apps: mergedApps, appMeta: (n) => appMeta(n, mergedApps()[n] || {}), render: () => render(), regenerate: () => { regenerate(); render(); },
-    go: (v) => show(v),
-    addEvent: async (it) => { const cal = S().settings.calendarIds?.[0] || 'primary'; const d = fromKey(it.date); await calendarCreate(cal, { title: it.title, start: atMin(d, it.start), end: atMin(d, it.end || it.start + (it.minutes || 30)), description: it.text || '' }, { src: 'inbox' }); },
+    go: (v) => show(v), launch: (app, id) => launch(app, id), appUrl: (n) => launchUrl(n, mergedApps()[n] || {}, null),
+    addEvent: async (it) => { const cal = S().settings.calendarIds?.[0] || 'primary'; const d = fromKey(it.date), hm = (v) => { const [a, b] = String(v).split(':').map(Number); return a * 60 + b; }, st = hm(it.start); await calendarCreate(cal, { title: it.title, start: atMin(d, st), end: atMin(d, it.end ? hm(it.end) : st + (it.minutes || 30)), description: it.text || '', reminders: planAlarm() }, { src: 'inbox' }); },
   });
-  store.subscribe(() => render());
+  store.subscribe(() => { render(); remindSoon(); });
   store.onRemoteSync(scheduleRemoteSave);
   loadCachedEvents();
   if (S().me && Object.keys(S().rotas).length) regenerate();
@@ -93,6 +93,7 @@ function handleIncoming() {
     let inc = null;
     if (q.get('title') || q.get('text') || q.get('url')) inc = { title: q.get('title') || '', text: q.get('text') || '', url: safeUrl(q.get('url') || (/^https?:\/\/\S+$/.test(q.get('text') || '') ? q.get('text') : '')), source: q.get('from') || '' };
     else if (hash.startsWith('#capture=')) inc = { title: decodeURIComponent(hash.slice(9)), source: new URLSearchParams(location.search).get('from') || '' };
+    if (!inc && q.get('from')) { const from = q.get('from'); history.replaceState(null, '', location.pathname + (location.hash || '#today')); const nm = appMeta(from, mergedApps()[from] || {}).title; toast(`Back from ${nm}`); setTimeout(() => refreshAll(false), 400); return; }
     if (!inc) return;
     history.replaceState(null, '', location.pathname + '#today');
     setTimeout(() => MU.captureSheet(inc), 300);
@@ -271,7 +272,7 @@ async function refreshAll(manual, { full = false } = {}) {
   } catch (e) {
     rt.lastProblems = [e.message];
     if (manual) toast(e.message, 'err');
-  } finally { rt.syncing = false; renderSync(); render(); }
+  } finally { rt.syncing = false; renderSync(); render(); remindSoon(); }
 }
 
 /** Turn a page of Drive changes into the smallest sync that covers them. null = can't tell, do a full pass. */
@@ -391,7 +392,7 @@ async function pushShiftsToCalendar() {
       const w = shiftWindow(date, info.mine.shift);
       if (!w) continue;
       const with_ = info.withMe.map(e => firstName(e.person.name)).join(', ');
-      wanted.push({ title: `${info.mine.code} · ${info.mine.shift.label}`, start: w.start, end: w.end, location: info.mine.shift.site, description: with_ ? `With: ${with_}` : '' });
+      wanted.push({ title: `${info.mine.code} · ${info.mine.shift.label}`, start: w.start, end: w.end, location: info.mine.shift.site, description: with_ ? `With: ${with_}` : '', reminders: shiftAlarm() });
     }
     await G.syncTaggedEvents(calId, 'shift', from, to, wanted);
   }
@@ -487,6 +488,80 @@ async function uploadRotas(fileList) {
 function importButton(label = 'Import rota files') {
   const input = h('input', { type: 'file', accept: '.xlsx', multiple: true, style: { display: 'none' }, onChange: (e) => importFiles([...e.target.files]) });
   return h('span', {}, input, h('button', { class: 'btn', onClick: () => input.click() }, '📄 ', label));
+}
+
+
+// ---------------- seamless hops between apps ----------------
+// An app opened from Citrus gets ?from=citrus (and &do=<action id> for a deep link) so it can jump straight to the thing and offer "← Citrus".
+function launchUrl(app, st, action) {
+  const base = action?.url || appMeta(app, st).url; if (!base) return '';
+  try { const u = new URL(base); u.searchParams.set('from', 'citrus'); if (action) u.searchParams.set('do', action.id); return u.href; } catch { return ''; }
+}
+function launch(app, actionId) {
+  const st = mergedApps()[app] || {}, a = (st.actions || []).find(x => x.id === actionId), url = launchUrl(app, st, a);
+  if (url) window.open(url, '_blank', 'noopener'); else toast('No link for that app yet');
+}
+function actionChips(app, st, limit = 4) {
+  const meta = appMeta(app, st), list = (st.actions || []).slice(0, limit);
+  return h('div', { class: 'act-row' }, list.map(a => h('button', { class: 'act', style: { '--c': meta.color }, onClick: (e) => { e.preventDefault(); e.stopPropagation(); launch(app, a.id); } }, a.icon ? `${a.icon} ` : '', a.label, a.minutes ? h('small', {}, ` ${a.minutes}m`) : null)));
+}
+function actionsCard(apps) {
+  const rows = Object.entries(apps).filter(([, st]) => (st.actions || []).length); if (!rows.length) return null;
+  return h('div', { class: 'card' }, h('div', { class: 'title' }, 'Jump straight in'), rows.map(([name, st]) => { const m = appMeta(name, st); return h('div', { class: 'jump' }, h('div', { class: 'recv-h' }, h('span', { style: { color: m.color } }, m.icon), h('b', {}, m.title)), actionChips(name, st, 6)); }));
+}
+
+// ---------------- alarms: Google Calendar pop-up reminders (your phone rings them even when Citrus is closed) ----------------
+const planAlarm = () => { const m = S().settings.alarmPlan ?? 10; return m > 0 ? [m] : null; };
+const shiftAlarm = () => { const m = S().settings.alarmShift ?? 0; return m > 0 ? [m] : null; };
+const hashOf = (t) => { let x = 5381; for (let i = 0; i < t.length; i++) x = ((x << 5) + x + t.charCodeAt(i)) | 0; return (x >>> 0).toString(36); };
+const RR_DAYS = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
+// What should currently be ringing: tasks with an alarm time, habits with a daily alarm time
+function wantedReminders(s, now = new Date()) {
+  const want = {};
+  for (const t of Object.values(s.tasks || {})) {
+    if (t.done || !t.remindAt) continue; const d = new Date(t.remindAt); if (isNaN(d) || d < now) continue;
+    const sig = `${t.remindAt}|${t.title}`; want[`task:${t.id}`] = { title: `⏰ ${t.title}`, start: d, end: new Date(d.getTime() + 15 * 60000), desc: t.notes || '', sig, window: [addDays(d, -1), addDays(d, 1)] };
+  }
+  for (const hb of M.activeHabits(s)) {
+    if (!/^\d\d:\d\d$/.test(hb.remindTime || '')) continue; const [hh, mm] = hb.remindTime.split(':').map(Number), f = hb.freq || {};
+    const days = f.type === 'days' && (f.days || []).length ? f.days : [0, 1, 2, 3, 4, 5, 6];
+    let d = new Date(now); d.setHours(hh, mm, 0, 0); if (d < now) d = addDays(d, 1); for (let i = 0; i < 8 && !days.includes(d.getDay()); i++) d = addDays(d, 1);
+    const rule = days.length === 7 ? 'RRULE:FREQ=DAILY' : `RRULE:FREQ=WEEKLY;BYDAY=${days.map(x => RR_DAYS[x]).join(',')}`;
+    const sig = `${hb.remindTime}|${hb.name}|${days.join('')}`;
+    want[`habit:${hb.id}`] = { title: `${hb.emoji || '●'} ${hb.name}`, start: d, end: new Date(d.getTime() + 10 * 60000), desc: 'Habit reminder from Citrus', sig, recurrence: [rule], window: [addDays(d, -1), addDays(d, 8)] };
+  }
+  return want;
+}
+let remBusy = false, remTimer = null;
+function reminderDrift() { const s = S(), want = wantedReminders(s), have = s.reminders || {}; return Object.keys(want).some(k => have[k]?.sig !== want[k].sig) || Object.keys(have).some(k => !want[k]); }
+function remindSoon() { if (!G.isSignedIn() || !rt.online) return; clearTimeout(remTimer); remTimer = setTimeout(() => { if (reminderDrift()) reconcileReminders(); }, 2500); }
+async function reconcileReminders() {
+  if (remBusy || !G.isSignedIn() || !rt.online) return; remBusy = true;
+  try {
+    const s = S(), cal = s.settings.calendarIds?.[0] || 'primary', want = wantedReminders(s), cur = { ...(s.reminders || {}) }; let changed = false;
+    for (const [k, r] of Object.entries(cur)) if (!want[k] || want[k].sig !== r.sig) {
+      if (r.eventId) { try { await G.deleteEvent(r.calendarId || cal, r.eventId); } catch (e) { if (e.network) return; } }
+      delete cur[k]; changed = true;
+    }
+    for (const [k, w] of Object.entries(want)) {
+      if (cur[k]) continue;
+      const key = `rem-${k}-${hashOf(w.sig)}`;
+      try {
+        let ev = await G.findEventByKey(cal, key, w.window[0], w.window[1]).catch(() => null);   // another device may have made it
+        if (!ev) ev = await G.createEvent(cal, { title: w.title, start: w.start, end: w.end, description: w.desc, tag: 'reminder', key, reminders: [0], recurrence: w.recurrence || null });
+        cur[k] = { eventId: ev.id, sig: w.sig, calendarId: cal, at: Date.now() }; changed = true;
+      } catch (e) { console.warn('reminder', k, e.message); }
+    }
+    if (changed) store.update(x => ({ ...x, reminders: cur }), { silent: true });
+  } finally { remBusy = false; }
+}
+function alarmsCard() {
+  const s = S(), sel = (key, opts, def) => { const el = h('select', { onChange: () => store.update(x => ({ ...x, settings: { ...x.settings, [key]: +el.value } })) }, opts.map(([v, l]) => h('option', { value: v }, l))); el.value = String(s.settings[key] ?? def); return el; };
+  return h('div', { class: 'card' }, h('div', { class: 'title' }, 'Alarms'),
+    h('div', { class: 'small muted' }, 'A web page cannot ring a closed phone, so Citrus puts reminders on Google Calendar and your Calendar app rings them. Needs Google sign-in.'),
+    h('div', { class: 'field' }, h('label', {}, 'Before plan blocks you accept'), sel('alarmPlan', [[0, 'No alarm'], [5, '5 minutes'], [10, '10 minutes'], [15, '15 minutes'], [30, '30 minutes']], 10)),
+    h('div', { class: 'field' }, h('label', {}, 'Before shifts Citrus puts on your calendar (applies to shifts added from now)'), sel('alarmShift', [[0, 'No alarm'], [60, '1 hour'], [90, '90 minutes'], [120, '2 hours'], [180, '3 hours']], 0)),
+    h('div', { class: 'tiny dim' }, 'Task alarms and habit alarms are set on the task / habit itself. Active now: ' + Object.keys(s.reminders || {}).length));
 }
 
 // ---------------- sheets (bottom modals) ----------------
@@ -777,6 +852,7 @@ function blockRow(b, date) {
       h('div', { class: 'row' }, h('span', { class: 't grow' }, b.title), h('span', { class: 'small muted' }, `${fmtMin(b.start)}–${fmtMin(b.end)} · ${fmtDur(b.end - b.start)}`)),
       b.reason ? h('div', { class: 'r' }, b.reason) : null,
       h('div', { class: 'actions' },
+        blockOpen(b),
         b._acc ? [
           b.status === 'done' ? h('span', { class: 'chip off' }, '✓ done') : h('button', { class: 'btn sm', onClick: () => setBlockStatus(k, b, 'done') }, '✓ Done'),
           h('button', { class: 'btn sm ghost', onClick: () => moveBlock(k, b) }, 'Move'),
@@ -789,6 +865,11 @@ function blockRow(b, date) {
   return row;
 }
 
+function blockOpen(b) {
+  if (/^app:(task|habit)-/.test(b.goalId || '')) return null;
+  const app = b.app || guessApp(b.title); if (!app) return null; const st = mergedApps()[app] || {}, url = launchUrl(app, st, (st.actions || [])[0]);
+  return url ? h('button', { class: 'btn sm', onClick: () => launch(app, (st.actions || [])[0]?.id) }, `Open ${appMeta(app, st).title} ▸`) : null;
+}
 async function acceptBlock(k, b, { silent = false } = {}) {
   const block = { ...b, status: 'accepted', at: Date.now() }; delete block._acc;
   store.update(s => ({ ...s, plan: { ...s.plan, [k]: [...(s.plan[k] || []).filter(p => p.id !== b.id), block] }, prefs: learn(s, b, +1) }), { silent: true });
@@ -796,7 +877,7 @@ async function acceptBlock(k, b, { silent = false } = {}) {
   if (G.isSignedIn() && S().settings.pushPlan !== false) {
     try {
       const date = fromKey(k);
-      const ev = await calendarCreate(S().settings.calendarIds?.[0] || 'primary', { title: b.title, start: atMin(date, b.start), end: atMin(date, b.end), description: b.reason, tag: 'plan' }, { blockId: b.id, dateKey: k });
+      const ev = await calendarCreate(S().settings.calendarIds?.[0] || 'primary', { title: b.title, start: atMin(date, b.start), end: atMin(date, b.end), description: b.reason, tag: 'plan', reminders: planAlarm() }, { blockId: b.id, dateKey: k });
       if (ev) store.update(s => ({ ...s, plan: { ...s.plan, [k]: (s.plan[k] || []).map(p => p.id === b.id ? { ...p, eventId: ev.id, calendarId: ev.calendarId } : p) } }), { silent: true });
     } catch (e) { if (!silent) toast('Saved locally; calendar: ' + e.message, 'err'); }
   }
@@ -874,6 +955,7 @@ function appsCard() {
           done ? h('span', { class: 'chip off', style: { padding: '1px 7px', fontSize: '10px' } }, 'done today') : minutes ? h('span', { class: 'chip', style: { padding: '1px 7px', fontSize: '10px' } }, `~${minutes} min`) : null),
         h('div', { class: 'meta' }, st.summary || st.next?.title || 'no summary'),
         pending.length ? h('div', { class: 'tiny', style: { color: meta.color } }, pending.join(' · ')) : null,
+        actionChips(name, st, 3),
         h('div', { class: 'tiny dim' }, [age(st.updatedAt), asksToday.length ? `asks for ${asksToday.map(a => a.slot === 'before' ? 'time before your shift' : fmtDur(+a.minutes || 0)).join(', ')}` : ''].filter(Boolean).join(' · '))),
       meta.url ? h('a', { class: 'btn sm', href: meta.url, target: '_blank', rel: 'noopener' }, 'Open') : null))));
 }
@@ -1197,6 +1279,7 @@ function renderApps() {
   const pending = Object.entries(apps).flatMap(([n, st]) => (st.pending || []).slice(0, 3).map(p => ({ app: appMeta(n, st), text: p })));
   return [h('h1', {}, 'Apps'), h('p', { class: 'muted small', style: { margin: '6px 0 14px' } }, 'Everything reports into Drive › My Apps › hub. Tap a tile to open the app; badges are minutes asked for today or items due.'),
     h('div', { class: 'apps-grid' }, ...tiles),
+    actionsCard(apps),
     MU.receivedCard(),
     issuesCard(apps),
     pending.length ? h('div', { class: 'card', style: { marginTop: '14px' } }, h('div', { class: 'title' }, 'Waiting on you'), h('div', { class: 'list' }, ...pending.map(p => h('div', { class: 'item' }, h('div', { class: 'avatar', style: { background: p.app.color + '33', color: p.app.color, fontSize: '18px' } }, p.app.icon), h('div', { class: 'grow' }, h('div', { class: 'name' }, p.text), h('div', { class: 'meta' }, p.app.title)))))) : null,
@@ -1248,6 +1331,7 @@ function renderMore() {
   "extra": { "streak": 14, "url": "https://yuzu-cards.github.io/Yuzu/" }
 }`),
     Object.keys(mergedApps()).length ? h('div', { class: 'small', style: { marginTop: '8px' } }, 'Seen: ', Object.keys(mergedApps()).join(', ')) : null));
+  out.push(alarmsCard());
   out.push(receiveTesterCard());
   out.push(diagnosticsCard());
   // Appearance + backup
@@ -1279,7 +1363,10 @@ function openSearch() {
     const dm = /^(\d{1,2})[\/\-.](\d{1,2})(?:[\/\-.](\d{2,4}))?$/.exec(q);
     if (dm) { const y = dm[3] ? (+dm[3] < 100 ? 2000 + +dm[3] : +dm[3]) : new Date().getFullYear(); const d = new Date(y, +dm[2] - 1, +dm[1]); if (!isNaN(d)) items.push({ label: `${DAY_NAMES[d.getDay()]} ${fmtDate(d)}`, meta: dayInfo(s, d).mine?.shift.label || 'day', run: () => { rt.rotaSel = d; rt.rotaMonth = new Date(d.getFullYear(), d.getMonth(), 1); show('rota'); daySheet(d); } }); }
     for (const p of allPeople(s)) if (p.name.toLowerCase().includes(q) || (p.title || '').toLowerCase().includes(q)) items.push({ label: p.name, meta: p.title, run: () => personSheet(p) });
-    for (const [name, st] of Object.entries(mergedApps())) { const m = appMeta(name, st); if (m.title.toLowerCase().includes(q)) items.push({ label: `${m.icon} ${m.title}`, meta: st.summary || 'open', run: () => { if (m.url) window.open(m.url, '_blank', 'noopener'); } }); }
+    for (const [name, st] of Object.entries(mergedApps())) {
+      const m = appMeta(name, st); if (m.title.toLowerCase().includes(q) || /^open\b/.test(q) && q.includes(m.title.toLowerCase())) items.push({ label: `${m.icon} Open ${m.title}`, meta: st.summary || 'open', run: () => launch(name) });
+      for (const a of st.actions || []) if (`${m.title} ${a.label}`.toLowerCase().includes(q)) items.push({ label: `${m.icon} ${m.title}: ${a.label}`, meta: 'jump straight in', run: () => launch(name, a.id) });
+    }
     for (const g of s.goals) if (g.name.toLowerCase().includes(q)) items.push({ label: g.name, meta: `${g.hoursPerWeek} h/week`, run: () => { show('plan'); goalsSheet(); } });
     for (const [k, t] of Object.entries(s.notes || {})) if (t && t.toLowerCase().includes(q)) items.push({ label: t.slice(0, 60), meta: `note · ${fmtDate(fromKey(k))}`, run: () => { rt.rotaSel = fromKey(k); show('rota'); daySheet(fromKey(k)); } });
     for (const it of MU.searchItems()) if (`${it.title} ${it.kind}`.toLowerCase().includes(q)) items.push({ label: it.title, meta: `${it.kind} · ${it.sub}`, run: () => { show('mind'); it.run(); } });
