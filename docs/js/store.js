@@ -43,6 +43,17 @@ function defaults() {
     settings: { clientId: '753489712404-ra7ahu34gjl305b4ss1765idmqg7am5s.apps.googleusercontent.com', calendarIds: ['primary'], shiftCalendarId: '', pushShifts: false, driveFolder: 'My Apps', theme: 'dark' },
     google: { email: '', lastSync: 0 },
     apps: {},                 // other apps' status files from Drive: name -> json
+    // ---- Mind (see mind.js): every collection is a map id -> record with an `at` edit time, so devices merge key by key
+    tasks: {},                // id -> {title, done, due, est, pri, aimId, area, notes}
+    aims: {},                 // id -> objective {title, why, area, deadline, milestones[], status}
+    habits: {},               // id -> {name, emoji, freq, aimId, area, link, minutes, archived}
+    habitLog: {},             // habitId -> dateKey -> {v: 1|0, at}   (per-day cell, latest tap wins)
+    reflections: {},          // 'method:date' -> {method, date, mood, energy, answers, scores}
+    resolutions: {},          // id -> {year, title, area, why, target, progress, aimId, checkins{q1..q4}}
+    yearMeta: {},             // year -> {theme, at}
+    // ---- received from other apps (see inbound.js)
+    metricLog: {},            // 'app:key' -> dateKey -> {v, goal, label, unit, kind, at}   numbers and progress the apps report
+    inboxLog: {},             // 'app:id' -> {status: accepted|dismissed, at, taskId}      what you decided about their proposals
   };
 }
 
@@ -55,7 +66,7 @@ function load() {
     if (!raw) return defaults();
     const s = JSON.parse(raw);
     if (!s || typeof s !== 'object') return defaults();
-    for (const k of ['rotas', 'plan', 'prefs', 'notes', 'swaps', 'deleted', 'apps']) if (!s[k] || typeof s[k] !== 'object' || Array.isArray(s[k])) delete s[k];
+    for (const k of ['rotas', 'plan', 'prefs', 'notes', 'swaps', 'deleted', 'apps', 'tasks', 'aims', 'habits', 'habitLog', 'reflections', 'resolutions', 'yearMeta', 'metricLog', 'inboxLog']) if (!s[k] || typeof s[k] !== 'object' || Array.isArray(s[k])) delete s[k];
     for (const [id, r] of Object.entries(s.rotas || {})) if (!r || !Array.isArray(r.people) || !r.legend) delete s.rotas[id];
     for (const [k, list] of Object.entries(s.plan || {})) if (!Array.isArray(list)) delete s.plan[k];
     if (!Array.isArray(s.goals)) delete s.goals; if (!Array.isArray(s.outbox)) delete s.outbox;
@@ -142,6 +153,26 @@ export function mergeStates(local, remote) {
   out.swaps = mergeMap('swap', older.swaps, newer.swaps, v => v?.at || 0);
   out.notes = mergeMap('note', older.notes, newer.notes, () => 0);
   out.prefs = { ...(older.prefs || {}), ...(newer.prefs || {}) };
+  // Mind: same rule everywhere — newest edit wins per record, tombstones remove deleted ones
+  const at = v => v?.at || 0;
+  out.tasks = mergeMap('task', older.tasks, newer.tasks, at);
+  out.aims = mergeMap('aim', older.aims, newer.aims, at);
+  out.habits = mergeMap('habit', older.habits, newer.habits, at);
+  out.reflections = mergeMap('refl', older.reflections, newer.reflections, at);
+  out.resolutions = mergeMap('res', older.resolutions, newer.resolutions, at);
+  out.yearMeta = mergeMap('year', older.yearMeta, newer.yearMeta, at);
+  out.inboxLog = mergeMap('inbox', older.inboxLog, newer.inboxLog, at);
+  out.metricLog = {};
+  for (const src of [older.metricLog || {}, newer.metricLog || {}]) for (const [sk, cells] of Object.entries(src)) {
+    const m = (out.metricLog[sk] ||= {});
+    for (const [d, c] of Object.entries(cells || {})) if (!m[d] || (c?.at || 0) >= (m[d].at || 0)) m[d] = c;
+  }
+  out.habitLog = {};   // one cell per habit and day, the latest tap wins; logs of deleted habits go with them
+  for (const src of [older.habitLog || {}, newer.habitLog || {}]) for (const [hid, cells] of Object.entries(src)) {
+    const m = (out.habitLog[hid] ||= {});
+    for (const [d, c] of Object.entries(cells || {})) if (!m[d] || (c?.at || 0) >= (m[d].at || 0)) m[d] = c;
+  }
+  for (const hid of Object.keys(out.habitLog)) if (!out.habits[hid]) delete out.habitLog[hid];
   out.deleted = Object.fromEntries(Object.entries(deleted).filter(([, t]) => Date.now() - t < 90 * 86400000)); // forget tombstones after 90 days
   out.settings = { ...(older.settings || {}), ...(newer.settings || {}), clientId: newer.settings?.clientId || older.settings?.clientId || '' };
   out.outbox = local.outbox || [];

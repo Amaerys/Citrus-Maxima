@@ -59,6 +59,28 @@ All apps use the same client with the full `drive` scope (plus `calendar` where 
 ```
 
 Citrus treats every field as untrusted: strings are shown as text, only `http(s)` URLs become links, malformed fields are ignored.
+Problems it found are listed in Citrus › Apps › "sending something Citrus can't fully read", and Settings › Receive tester checks a pasted file.
+
+### Contract v2 — what apps can ALSO send (all optional; caps in brackets)
+
+```json
+{
+  "today": { "date": "2026-11-07", "done": true },          // lets a habit linked to your app tick itself ("done today")
+  "metrics": [                                              // [12] numbers Citrus keeps as history (sparklines, habits, objectives)
+    { "key": "cards-due", "label": "Cards due", "value": 132, "goal": 0, "unit": "cards", "date": "2026-11-07" }
+  ],
+  "progress": [                                             // [12] 0–100 % that an objective can read live
+    { "key": "step1-deck", "label": "Step 1 deck", "pct": 35, "date": "2026-11-07" }
+  ],
+  "inbox": [                                                // [25] proposals; the user taps Take or dismiss — never auto-added
+    { "id": "stable-unique-id", "type": "task", "title": "Fix 3 leech cards", "date": "2026-11-08", "minutes": 10, "pri": 1, "url": "https://…", "expires": "2026-11-10" }
+  ]
+}
+```
+- `type`: `task` (becomes a task that remembers who sent it), `note` (joins that day's notes), `event` (needs `date` + `start`/`end` in minutes; added to the calendar).
+- `id` must be stable: sending the same id again never duplicates. Citrus tells you what happened in `plan.json › mind.receipts`.
+- A habit in Citrus can be linked to `yuzu` (your `today.done`) or to `yuzu:cards-due` (that metric reaching its goal). An objective can read a `progress` series.
+- Phone Share menu and links: `…/Citrus/?from=<app>#capture=Buy%20milk` opens a confirm sheet (no data is written without a tap).
 
 ## plan.json (written by Citrus)
 
@@ -68,5 +90,13 @@ Citrus treats every field as untrusted: strings are shown as text, only `http(s)
                              "blocks": [ { "app": "yuzu", "title": "Yuzu: reviews", "start": "21:30", "end": "22:00", "minutes": 30, "status": "accepted" } ] } },
   "blocks": [ …same blocks, flat… ] }
 ```
+
+Citrus also writes `contract: 2` and `mind`:
+```json
+"mind": { "score": 62, "tasks": { "overdue": 1, "today": 3, "top": [ { "title": "…", "due": "2026-11-07", "pri": 1 } ] },
+          "habits": { "due": 5, "done": 2, "pending": ["Gym"] }, "streaks": [ { "name": "Yuzu reviews", "days": 9 } ],
+          "reflectedToday": false, "receipts": [ { "app": "yuzu", "id": "stable-unique-id", "status": "accepted|done|dismissed" } ] }
+```
+Blocks for Citrus's own tasks/habits have `app: "citrus"`.
 
 Apps pick out their own blocks with `blocks.filter(b => b.app === "<id>")`. `status` is `accepted` (on the calendar) or `suggested`.

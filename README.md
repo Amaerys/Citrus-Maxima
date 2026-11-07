@@ -10,13 +10,16 @@ Live: https://amaerys.github.io/Citrus-Maxima/
 - **Rota** — the month grid (cyan ring = MCI 2nd physician, purple dot = your correction), day sheets with full coverage, "who could cover?", and **Correct this day** for swaps.
 - **Team** — everyone across the rotas, call / WhatsApp, shifts you share.
 - **Plan** — weekly goals, your rules (sleep, commute, buffers, protected time), suggestions placed around shifts and nights; apps' own requests come first. Accepted blocks go to Google Calendar.
+- **Mind** — the brain of the app. A living tree of eight life areas (each pulses when active today) around a brain score; segments: *Overview* (capture bar that understands "call bank tomorrow 20m !", focus, balance radar, 8-week trend, insights, proposals from your apps), *Tasks*, *Habits* (daily / certain days / X per week, streaks, 16-week heat, auto-counting from Yuzu/Orange/… ), *Aims* (milestones; progress can follow a live number from an app), *Reflect* (evening check-in, gratitude, stoic review, weekly review, start/stop/continue, wheel of life, pre-mortem, free write, mood & energy, a 4-in/6-out breathing exercise), *Year* (resolutions with a theme, quarterly check-ins, year in review). Tasks and habits with a time estimate are placed in your plan around shifts; finishing the block finishes the task.
 - **Apps** — a launcher for Yuzu, Mephisto, Orange, Sinus, Kumquat, Embergine with what each needs today.
 - **Settings** — Google, calendars, "me", diagnostics, backup / restore, theme.
 
 Morning brief: a daily scheduled task (05:47, Asia/Riyadh) reads `hub/citrus/plan.json`, the app statuses and your calendar from Drive and pushes a short brief to the phone.
 Plan tab shows 3 days by default ("Plan my week" = 7, or 10); plan.json always covers 10 days for the other apps. From the 22nd Citrus reminds you if next month's rota isn't loaded.
 
-Keyboard on desktop: `1–5` tabs, `/` search, `r` sync, `,` settings, `Esc` close.
+Receiving: apps can also send metrics, progress and an inbox of proposals (HUB.md, contract v2); the phone's Share menu and `#capture=` links create tasks after a confirm tap. Settings › Receive tester checks a pasted status file.
+
+Keyboard on desktop: `1–6` tabs, `/` search, `r` sync, `,` settings, `Esc` close.
 
 ## Google
 
@@ -37,6 +40,9 @@ docs/                 the site (GitHub Pages serves /docs)
   js/app.js           screens, sync orchestration, outbox
   js/google.js        sign-in (tap-to-renew), Calendar, Drive: changes feed, fingerprinted writes, revision-checked
                       state, lost-answer recovery, twin healing, daily backups, Check Drive (scan & repair)
+  js/mind.js          tasks, habits, objectives, reflections, resolutions, inbox: pure rules and numbers
+  js/mind-ui.js       Mind screens, sheets, Today card;  js/mind-viz.js SVG tree, rings, heat, radar
+  js/inbound.js       status.json contract v2 validator
   js/store.js         state, localStorage, merge between devices (tombstones for deletions)
   js/model.js         rota → who / where / when, swaps
   js/planner.js       free slots, rules, suggestions

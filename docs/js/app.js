@@ -4,6 +4,9 @@ import * as G from './google.js';
 import { parseRotaFile, serializeRota } from './rota-parser.js';
 import { dayInfo, myDay, allPeople, isMe, sharedShifts, monthSummary, shiftWindow, UNIT_LABEL } from './model.js';
 import { suggest, dayBusy, learn, weekStartOf, weekProgress } from './planner.js';
+import { normalizeStatus, validateStatus, CONTRACT } from './inbound.js';
+import * as M from './mind.js';
+import * as MU from './mind-ui.js';
 import { h, toast, safeUrl, keyOf, fromKey, addDays, startOfDay, sameDay, fmtDate, fmtDateShort, fmtTime, fmtMin, fmtDur, relDay, pad2, DAY_SHORT, DAY_NAMES, MONTHS, telLink, firstName, atMin, minsOf, uid } from './util.js';
 
 // ---------------- runtime state (not persisted) ----------------
@@ -36,19 +39,26 @@ async function boot() {
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '') || document.activeElement?.isContentEditable;
     if (e.key === 'Escape') { document.querySelector('.search')?.remove(); document.querySelector('.sheet-bg')?.remove(); return; }
     if (typing) return;
-    const tabs = ['today', 'rota', 'team', 'plan', 'apps'];
-    if (/^[1-5]$/.test(e.key)) { show(tabs[+e.key - 1]); e.preventDefault(); }
+    const tabs = ['today', 'rota', 'team', 'plan', 'mind', 'apps'];
+    if (/^[1-6]$/.test(e.key)) { show(tabs[+e.key - 1]); e.preventDefault(); }
     else if (e.key === '/') { openSearch(); e.preventDefault(); }
     else if (e.key === 'r') refreshAll(true);
     else if (e.key === ',') show('more');
   });
   window.addEventListener('online', () => { rt.online = true; renderSync(); flushOutbox().then(render).catch(() => {}); });
   window.addEventListener('offline', () => { rt.online = false; renderSync(); });
+  MU.initMind({
+    S, update: (fn) => store.update(fn), sheet, apps: mergedApps, appMeta: (n) => appMeta(n, mergedApps()[n] || {}), render: () => render(), regenerate: () => { regenerate(); render(); },
+    go: (v) => show(v),
+    addEvent: async (it) => { const cal = S().settings.calendarIds?.[0] || 'primary'; const d = fromKey(it.date); await calendarCreate(cal, { title: it.title, start: atMin(d, it.start), end: atMin(d, it.end || it.start + (it.minutes || 30)), description: it.text || '' }, { src: 'inbox' }); },
+  });
   store.subscribe(() => render());
   store.onRemoteSync(scheduleRemoteSave);
   loadCachedEvents();
   if (S().me && Object.keys(S().rotas).length) regenerate();
-  show(location.hash.replace('#', '') || 'today');
+  const hashView = location.hash.replace('#', '');
+  show(hashView.startsWith('capture=') ? 'today' : hashView || 'today');
+  handleIncoming();
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
   const cid = S().settings.clientId;
   G.onAuthChange(() => { renderSync(); render(); });
@@ -76,6 +86,19 @@ async function boot() {
   renderSync();
 }
 
+// Things sent to Citrus: the phone's Share menu (manifest share_target: ?title&text&url) and links like #capture=Buy%20milk
+function handleIncoming() {
+  try {
+    const q = new URLSearchParams(location.search), hash = location.hash;
+    let inc = null;
+    if (q.get('title') || q.get('text') || q.get('url')) inc = { title: q.get('title') || '', text: q.get('text') || '', url: safeUrl(q.get('url') || (/^https?:\/\/\S+$/.test(q.get('text') || '') ? q.get('text') : '')), source: q.get('from') || '' };
+    else if (hash.startsWith('#capture=')) inc = { title: decodeURIComponent(hash.slice(9)), source: new URLSearchParams(location.search).get('from') || '' };
+    if (!inc) return;
+    history.replaceState(null, '', location.pathname + '#today');
+    setTimeout(() => MU.captureSheet(inc), 300);
+  } catch (e) { console.warn('incoming', e); }
+}
+
 // Shown at the top of every screen when the Google session needs a tap to come back
 function authBanner() {
   if (!G.auth.needsSignIn || !rt.online) return null;
@@ -83,7 +106,7 @@ function authBanner() {
     h('button', { class: 'btn sm primary', onClick: async () => { try { await G.signIn({ renew: G.wasSignedIn() }); refreshAll(true); } catch (e) { try { await G.signIn(); refreshAll(true); } catch (e2) { toast(e2.message, 'err'); } } } }, 'Reconnect'));
 }
 
-const VIEWS = ['today', 'rota', 'team', 'plan', 'apps', 'more'];
+const VIEWS = ['today', 'rota', 'team', 'plan', 'mind', 'apps', 'more'];
 function show(view) {
   if (!VIEWS.includes(view)) view = 'today';
   rt.view = view;
@@ -95,7 +118,8 @@ function show(view) {
 }
 
 function render() {
-  const fn = { today: renderToday, rota: renderRota, team: renderTeam, plan: renderPlan, apps: renderApps, more: renderMore }[rt.view] || renderToday;
+  ingestApps();   // numbers the apps report become history before anything is drawn
+  const fn = { today: renderToday, rota: renderRota, team: renderTeam, plan: renderPlan, mind: MU.renderMind, apps: renderApps, more: renderMore }[rt.view] || renderToday;
   const el = $(`#view-${rt.view}`);
   el.replaceChildren(...[authBanner(), fn()].flat().filter(Boolean));
 }
@@ -175,7 +199,13 @@ async function syncApps(only = null) {
     if (!d || (st.updatedAt || '') > (d.updatedAt || '')) { try { await G.uploadAppStatus(root, name, st); drive[name] = st; } catch (e) { console.warn('mirror', name, e.message); } }
   }
   store.update(s => ({ ...s, apps: drive }), { remote: false, silent: true });
+  ingestApps();
   return maps;
+}
+// What the apps report becomes history (numbers, progress) so habits can follow them and aims can read them
+function ingestApps() {
+  const s = S(), next = M.recordMetrics(s, mergedApps());
+  if (next !== s) store.update(() => next, { silent: true });
 }
 async function syncCalendar(force) {
   if (!force && Date.now() - (rt.calendarAt || 0) < 4 * 60000) return;   // calendar has no cheap "anything new?", so it's throttled
@@ -379,25 +409,6 @@ function localAppStatuses() {
   } catch {}
   return out;
 }
-// Status files come from other apps: never trust their shape. Returns a clean copy keyed by the lowercase app name.
-function normalizeStatus(st, fallbackName = '') {
-  if (!st || typeof st !== 'object' || Array.isArray(st)) return null;
-  const str = (v, max = 300) => (typeof v === 'string' ? v : v == null ? '' : String(v)).slice(0, max);
-  const app = str(st.app || st._folder || fallbackName, 40).toLowerCase().trim();
-  if (!app) return null;
-  const asks = (Array.isArray(st.asks) ? st.asks : []).filter(a => a && typeof a === 'object' && /^\d{4}-\d{2}-\d{2}$/.test(a.date))
-    .map(a => ({ date: a.date, title: str(a.title, 80), minutes: Math.max(0, Math.min(240, +a.minutes || 0)), slot: a.slot === 'before' ? 'before' : 'free' })).slice(0, 30);
-  const pending = (Array.isArray(st.pending) ? st.pending : typeof st.pending === 'string' ? [st.pending] : []).map(p => str(p, 120)).filter(Boolean).slice(0, 10);
-  const updatedAt = !isNaN(Date.parse(st.updatedAt)) ? new Date(st.updatedAt).toISOString() : '';
-  return {
-    app, title: str(st.title, 40), icon: str(st.icon, 4), color: /^#[0-9a-f]{3,8}$/i.test(st.color || '') ? st.color : '', url: safeUrl(st.url || st.extra?.url),
-    summary: str(st.summary), updatedAt, asks, pending,
-    next: st.next && typeof st.next === 'object' ? { title: str(st.next.title, 80), minutes: Math.max(0, +st.next.minutes || 0) } : null,
-    today: st.today && typeof st.today === 'object' ? { done: !!st.today.done } : null,
-    due: Number.isFinite(+st.due) ? +st.due : undefined, estimatedMinutes: Number.isFinite(+st.estimatedMinutes) ? +st.estimatedMinutes : undefined,
-    extra: st.extra && typeof st.extra === 'object' ? { streak: +st.extra.streak || undefined } : {},
-  };
-}
 // Drive copies merged with fresher same-device copies, all normalized
 function mergedApps() {
   const apps = {};
@@ -577,6 +588,7 @@ function renderToday() {
   hero.append(h('div', { class: 'hero-grid' }, words, info.hasRota && s.me ? dayDial(now) : null));
   hero.append(weekStrip(now));
   main.push(hero);
+  main.push(MU.mindCard());
 
   if (today) {
     main.push(h('div', { class: 'card' }, h('div', { class: 'title' }, `With you at ${today.shift.site || 'your site'}`),
@@ -806,7 +818,7 @@ async function removeBlock(k, b) {
   publishPlanSoon();
 }
 function setBlockStatus(k, b, status) {
-  store.update(s => ({ ...s, plan: { ...s.plan, [k]: (s.plan[k] || []).map(p => p.id === b.id ? { ...p, status, at: Date.now() } : p) } }));
+  store.update(s => { const n = { ...s, plan: { ...s.plan, [k]: (s.plan[k] || []).map(p => p.id === b.id ? { ...p, status, at: Date.now() } : p) } }; return status === 'done' ? M.completeFromBlock(n, b.goalId, k) : n; });
 }
 function moveBlock(k, b, isSuggestion = false) {
   const st = h('input', { type: 'time', value: fmtMin(b.start) }), en = h('input', { type: 'time', value: fmtMin(b.end % 1440) }), dt = h('input', { type: 'date', value: k });
@@ -839,7 +851,8 @@ const APP_META = {
 function appMeta(name, st = {}) {
   const key = String(st.app || name || '').toLowerCase();
   const m = APP_META[key] || {};
-  return { key, title: st.title || m.title || name, icon: st.icon || m.icon || (name[0] || '?').toUpperCase(), color: st.color || m.color || '#9aa0b1', url: safeUrl(st.url || st.extra?.url) || m.url || '' };
+  const mind = /^task-/.test(key) ? '◆' : /^habit-/.test(key) ? '●' : '';
+  return { key, title: st.title || m.title || name, icon: st.icon || m.icon || mind || (name[0] || '?').toUpperCase(), color: st.color || m.color || '#9aa0b1', url: safeUrl(st.url || st.extra?.url) || m.url || '' };
 }
 function appsCard() {
   const apps = mergedApps();
@@ -1029,7 +1042,7 @@ function rotaReminderCard() {
 function regenerate() {
   const s = S();
   const from = rt.planFrom || startOfDay(new Date());
-  rt.suggestions = suggest(s, from, 10, rt.events, mergedApps(), appMeta);
+  rt.suggestions = suggest(s, from, 10, rt.events, { ...mergedApps(), ...M.mindAsks(s, from, 10) }, appMeta);
   publishPlanSoon();
 }
 // hub/citrus/plan.json: what Citrus planned for the next days, per app, plus your shifts — read by Mephisto & co.
@@ -1045,11 +1058,11 @@ async function publishPlan() {
     const { today } = myDay(s, date);
     const shift = today ? { code: today.code, label: today.shift.label, site: today.shift.site, start: fmtMin(today.shift.hours.start), end: fmtMin(today.shift.hours.end), overnight: !!today.shift.hours.overnight, mci: !!today.mci } : null;
     const list = [...(s.plan[k] || []).filter(p => p.status === 'accepted' || p.status === 'done'), ...(rt.suggestions[k] || [])].sort((a, b) => a.start - b.start)
-      .map(p => ({ app: p.app || guessApp(p.title), title: p.title, date: k, start: fmtMin(p.start), end: fmtMin(p.end), minutes: p.end - p.start, status: p.status, goalId: p.goalId }));
+      .map(p => ({ app: /^app:(task|habit)-/.test(p.goalId || '') ? 'citrus' : (p.app || guessApp(p.title)), title: p.title, date: k, start: fmtMin(p.start), end: fmtMin(p.end), minutes: p.end - p.start, status: p.status, goalId: p.goalId }));
     days[k] = { shift, blocks: list };
     blocks.push(...list);
   }
-  try { await G.writePlan(s.settings.driveFolder, { app: 'citrus', updatedAt: new Date().toISOString(), from: keyOf(from), days, blocks }); } catch (e) { console.warn('plan.json', e.message); }
+  try { await G.writePlan(s.settings.driveFolder, { app: 'citrus', contract: CONTRACT, updatedAt: new Date().toISOString(), from: keyOf(from), days, blocks, mind: M.mindSummary(s, new Date(), mergedApps()) }); } catch (e) { console.warn('plan.json', e.message); }
 }
 function guessApp(title) { const t = String(title || '').toLowerCase(); for (const k of Object.keys(APP_META)) if (t.includes(k)) return k; if (/german|deutsch/.test(t)) return 'mephisto'; if (/gym|workout|lift/.test(t)) return 'orange'; if (/ecg|ekg/.test(t)) return 'sinus'; if (/card|review|anki/.test(t)) return 'yuzu'; return ''; }
 
@@ -1184,9 +1197,11 @@ function renderApps() {
   const pending = Object.entries(apps).flatMap(([n, st]) => (st.pending || []).slice(0, 3).map(p => ({ app: appMeta(n, st), text: p })));
   return [h('h1', {}, 'Apps'), h('p', { class: 'muted small', style: { margin: '6px 0 14px' } }, 'Everything reports into Drive › My Apps › hub. Tap a tile to open the app; badges are minutes asked for today or items due.'),
     h('div', { class: 'apps-grid' }, ...tiles),
+    MU.receivedCard(),
+    issuesCard(apps),
     pending.length ? h('div', { class: 'card', style: { marginTop: '14px' } }, h('div', { class: 'title' }, 'Waiting on you'), h('div', { class: 'list' }, ...pending.map(p => h('div', { class: 'item' }, h('div', { class: 'avatar', style: { background: p.app.color + '33', color: p.app.color, fontSize: '18px' } }, p.app.icon), h('div', { class: 'grow' }, h('div', { class: 'name' }, p.text), h('div', { class: 'meta' }, p.app.title)))))) : null,
     h('div', { class: 'card', style: { marginTop: '14px' } }, h('div', { class: 'title' }, 'How the apps talk to Citrus'),
-      h('div', { class: 'small muted' }, 'Each app writes hub/<app>/status.json (summary, what it needs today as “asks”, pending items). Citrus places the asks in your plan around shifts and writes hub/citrus/plan.json back, which the apps read to show when their block is. Statuses older than 36 h are shown greyed.')),
+      h('div', { class: 'small muted' }, 'Each app writes hub/<app>/status.json (summary, what it needs today as “asks”, pending items). Citrus places the asks in your plan around shifts, keeps the numbers (metrics, progress) as history for habits and objectives, offers any inbox items as tasks you can take, and writes hub/citrus/plan.json back (blocks, the day\'s tasks and habits, and what you did with each proposal). Statuses older than 36 h are shown greyed.')),
   ];
 }
 
@@ -1233,6 +1248,7 @@ function renderMore() {
   "extra": { "streak": 14, "url": "https://yuzu-cards.github.io/Yuzu/" }
 }`),
     Object.keys(mergedApps()).length ? h('div', { class: 'small', style: { marginTop: '8px' } }, 'Seen: ', Object.keys(mergedApps()).join(', ')) : null));
+  out.push(receiveTesterCard());
   out.push(diagnosticsCard());
   // Appearance + backup
   out.push(h('div', { class: 'card' }, h('div', { class: 'title' }, 'App'),
@@ -1266,6 +1282,7 @@ function openSearch() {
     for (const [name, st] of Object.entries(mergedApps())) { const m = appMeta(name, st); if (m.title.toLowerCase().includes(q)) items.push({ label: `${m.icon} ${m.title}`, meta: st.summary || 'open', run: () => { if (m.url) window.open(m.url, '_blank', 'noopener'); } }); }
     for (const g of s.goals) if (g.name.toLowerCase().includes(q)) items.push({ label: g.name, meta: `${g.hoursPerWeek} h/week`, run: () => { show('plan'); goalsSheet(); } });
     for (const [k, t] of Object.entries(s.notes || {})) if (t && t.toLowerCase().includes(q)) items.push({ label: t.slice(0, 60), meta: `note · ${fmtDate(fromKey(k))}`, run: () => { rt.rotaSel = fromKey(k); show('rota'); daySheet(fromKey(k)); } });
+    for (const it of MU.searchItems()) if (`${it.title} ${it.kind}`.toLowerCase().includes(q)) items.push({ label: it.title, meta: `${it.kind} · ${it.sub}`, run: () => { show('mind'); it.run(); } });
     items = items.slice(0, 12);
     res.replaceChildren(...items.map((it, i) => h('div', { class: `item ${i === 0 ? 'hl' : ''}`, onClick: () => { wrap.remove(); it.run(); } }, h('div', { class: 'grow' }, h('div', { class: 'name' }, it.label), it.meta ? h('div', { class: 'meta' }, it.meta) : null))));
   };
@@ -1306,6 +1323,23 @@ function reviewCard() {
 }
 
 // ---------------- diagnostics ----------------
+// Problems found in what apps send (so you can tell the app's session what to fix)
+function issuesCard(apps) {
+  const rows = Object.values(apps).flatMap(a => (a.issues || []).map(i => ({ a, i }))); if (!rows.length) return null;
+  return h('div', { class: 'card warn' }, h('div', { class: 'title' }, 'Apps sending something Citrus can\'t fully read'), h('div', { class: 'list' }, rows.slice(0, 8).map(({ a, i }) => h('div', { class: 'item' }, h('div', { class: 'grow' }, h('div', { class: 'name' }, appMeta(a.app, a).title), h('div', { class: 'meta' }, i))))), h('div', { class: 'tiny dim' }, 'The rest of that app\'s status still works. HUB.md has the contract.'));
+}
+// Paste a status.json to see exactly what Citrus would read from it — for the app sessions building the other side
+function receiveTesterCard() {
+  const ta = h('textarea', { rows: 5, placeholder: 'Paste an app\'s status.json here…', spellcheck: false }), out = h('div', { class: 'tester-out' });
+  return h('div', { class: 'card' }, h('div', { class: 'title' }, 'Receive tester'), h('div', { class: 'tiny dim' }, `Contract v${CONTRACT}. Checks a status file the way Citrus reads it.`), ta,
+    h('div', { class: 'row' }, h('button', { class: 'btn sm', onClick: () => {
+      const r = validateStatus(ta.value); out.replaceChildren();
+      if (r.error) { out.append(h('div', { class: 'late' }, r.error)); return; }
+      const p = r.parsed, bits = [`${p.asks.length} asks`, `${p.metrics.length} metrics`, `${p.progress.length} progress`, `${p.inbox.length} inbox items`, `${p.pending.length} pending`];
+      out.append(h('div', { class: r.ok ? 'ok' : 'warnc' }, r.ok ? `✓ ${p.app}: ${bits.join(' · ')}` : `${p.app}: ${bits.join(' · ')}`), ...r.issues.map(i => h('div', { class: 'tiny late' }, i)));
+    } }, 'Check')), out);
+}
+
 function diagnosticsCard() {
   const s = S();
   const rows = [
@@ -1320,6 +1354,8 @@ function diagnosticsCard() {
     ['Queued calendar writes', String((s.outbox || []).length)],
     ['Rotas loaded', Object.keys(s.rotas).length ? Object.values(s.rotas).map(r => `${UNIT_LABEL[r.unitKind]} ${MONTHS[r.month - 1].slice(0, 3)}`).join(', ') : 'none'],
     ['Apps reporting', Object.keys(mergedApps()).join(', ') || 'none'],
+    ['Mind', `${Object.keys(s.tasks || {}).length} tasks · ${Object.keys(s.habits || {}).length} habits · ${Object.keys(s.aims || {}).length} objectives · ${Object.keys(s.reflections || {}).length} reflections · ${Object.keys(s.metricLog || {}).length} app series`],
+    ['App contract problems', Object.values(mergedApps()).flatMap(a => (a.issues || []).map(i => `${a.app}: ${i}`)).slice(0, 4).join(' · ') || 'none'],
     ['Online', rt.online ? 'yes' : 'no'],
     ['Installed', window.matchMedia('(display-mode: standalone)').matches ? 'yes (home screen)' : 'browser tab'],
   ];

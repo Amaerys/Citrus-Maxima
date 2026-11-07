@@ -1,21 +1,60 @@
 {
   "name": "Citrus Maxima",
   "short_name": "Citrus",
-  "description": "Personal scheduler, rota viewer and hub for your apps.",
+  "description": "Personal scheduler, rota viewer and mind: tasks, habits, objectives, reflection, and the hub for your apps.",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
   "background_color": "#0e0f13",
   "theme_color": "#0e0f13",
   "shortcuts": [
-    { "name": "Today", "url": "./index.html#today" },
-    { "name": "Rota", "url": "./index.html#rota" },
-    { "name": "Plan", "url": "./index.html#plan" },
-    { "name": "Apps", "url": "./index.html#apps" }
+    {
+      "name": "Today",
+      "url": "./index.html#today"
+    },
+    {
+      "name": "Rota",
+      "url": "./index.html#rota"
+    },
+    {
+      "name": "Plan",
+      "url": "./index.html#plan"
+    },
+    {
+      "name": "Mind",
+      "url": "./index.html#mind"
+    },
+    {
+      "name": "Apps",
+      "url": "./index.html#apps"
+    }
   ],
   "icons": [
-    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
-    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
-  ]
+    {
+      "src": "icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "share_target": {
+    "action": "./index.html",
+    "method": "GET",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url"
+    }
+  }
 }

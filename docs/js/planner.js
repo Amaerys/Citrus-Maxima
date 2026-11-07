@@ -147,7 +147,7 @@ export function suggest(state, from, days, eventsByDay = {}, apps = {}, metaFn =
         if (!choice) continue;
         const { len, start } = choice;
         const meta = metaFn ? metaFn(appName, st) : { title: st.title || appName, color: st.color || '#9aa0b1' };
-        const block = { id: `${key}-${gid}-${start}`, goalId: gid, app: appKey, title: ask.title || meta.title, kind: 'app', color: meta.color, start, end: start + len, status: 'suggested', date: key, reason: `${meta.title} asked for ${fmtDur(minutes)}${len < minutes ? ` (only ${fmtDur(len)} free)` : ''}${wantBefore ? (start + len <= shiftStart ? ' before your shift' : ' before your shift — no room, placed after') : ''}${st.summary ? ' · ' + String(st.summary).slice(0, 80) : ''}`, tag: slotTag(ctx, { start }) };
+        const block = { id: `${key}-${gid}-${start}`, goalId: gid, app: appKey, title: ask.title || meta.title, kind: 'app', color: meta.color, start, end: start + len, status: 'suggested', date: key, reason: `${ask.reason || `${meta.title} asked for ${fmtDur(minutes)}`}${len < minutes ? ` (only ${fmtDur(len)} free)` : ''}${wantBefore ? (start + len <= shiftStart ? ' before your shift' : ' before your shift — no room, placed after') : ''}${st.summary ? ' · ' + String(st.summary).slice(0, 80) : ''}`, tag: slotTag(ctx, { start }) };
         dayList.push(block);
         busy.push({ start: block.start, end: block.end + 20, label: block.title, kind: 'plan' }); busy.sort((x, y) => x.start - y.start);
         askedApps.add(appKey);
