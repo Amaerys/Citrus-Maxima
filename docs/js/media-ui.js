@@ -232,7 +232,7 @@ function connect() {
       field('This IMDb file is my…', h('select', { 'aria-label': 'IMDb list type', onChange: (e) => { ui.importMode = e.target.value; } }, MODES.map(([v, l]) => h('option', { value: v, ...((ui.importMode || 'auto') === v ? { selected: true } : {}) }, l)))),
       h('label', { class: 'check small' }, h('input', { type: 'checkbox', checked: !ui.noImdbDates, onChange: (e) => { ui.noImdbDates = !e.target.checked; } }), ' Use IMDb’s “Date Rated” as the date I watched it (it is when you rated, which can be later than when you watched; untick to leave films undated)'),
       h('label', { class: 'check small' }, h('input', { type: 'checkbox', checked: !ui.noSync, onChange: (e) => { ui.noSync = !e.target.checked; } }), ' Re-importing a file corrects status, date and rating of items that came from the same service'),
-      h('div', { class: 'row' }, file, h('button', { class: 'btn primary', onClick: () => file.click() }, 'Choose CSV file')), ui.importMsg ? h('div', { class: 'ok small', style: { marginTop: '8px' } }, ui.importMsg) : null),
+      h('div', { class: 'row' }, file, h('button', { class: 'btn primary', onClick: () => file.click() }, 'Choose CSV file'), h('button', { class: 'btn', disabled: !!ui.enBusy, onClick: () => addEnglishTitles(false), title: 'Films are saved under their original title; this adds the English one in brackets when it differs' }, ui.enBusy ? 'Looking up…' : `English titles${L.needsEnglish(S()).length ? ` (${L.needsEnglish(S()).length})` : ''}`)), ui.importMsg ? h('div', { class: 'ok small', style: { marginTop: '8px' } }, ui.importMsg) : null),
     h('div', { class: 'card' }, h('div', { class: 'title' }, '🎮 Steam library'), h('div', { class: 'dim small' }, 'Steam blocks direct calls from a web page, so it takes one copy-paste. Set Game details to Public in Steam › Profile › Privacy first. Hours played, last-played dates and covers come through; played games become Played, under an hour becomes Dropped, anything opened in the last two weeks is Playing, and unopened games go to your Backlog. Your own ratings and statuses are never overwritten, and re-importing refreshes hours.'),
       field('Steam profile (SteamID64 or custom URL name)', sid), h('div', { class: 'tiny' }, link),
       h('details', { class: 'tiny' }, h('summary', {}, 'No luck? Use a free API key instead'), h('div', { class: 'dim small' }, 'Make a key at steamcommunity.com/dev/apikey. It is only used to build the link and is never saved.'), field('', key), link2),
@@ -240,6 +240,14 @@ function connect() {
       meta.steamAt ? h('div', { class: 'dim tiny' }, `Last import ${new Date(meta.steamAt).toLocaleDateString('en-GB')}`) : null),
     h('div', { class: 'card' }, h('div', { class: 'title' }, 'Anything else'), h('div', { class: 'dim small' }, 'Log by hand with search: books from Open Library, anime from AniList; shows, movies and games by title. Everything syncs through Drive with the rest of Citrus.'), h('div', { class: 'row' }, h('button', { class: 'btn', onClick: () => addSheet() }, '+ Log something'))),
   ];
+}
+/** Looks up English titles on Wikidata for films imported under their original title, then writes "Original (English)". */
+async function addEnglishTitles(quiet = false) {
+  const ids = L.needsEnglish(S()).map(m => m.extId); if (!ids.length) { if (!quiet) toast('Every film already has its English title checked'); return; }
+  if (ui.enBusy) return; ui.enBusy = true; ctx.render(); if (!quiet) toast(`Looking up ${ids.length} titles…`);
+  try { const r = await L.fetchEnglishTitles(ids); let named = 0; up(st => { const x = L.applyEnglish(st, r); named = x.named; return x.state; }); toast(named ? `Added English titles to ${named} films` : 'Titles checked; the originals were already English or unknown', 'ok'); }
+  catch (e) { toast(`Could not reach Wikidata (${e.message}). Try again later; nothing was changed.`, 'err'); }
+  ui.enBusy = false; ctx.render();
 }
 const MODES = [['auto', 'Auto: rated titles are watched, the rest are watchlist'], ['done', 'Watched / read (even without a rating)'], ['planned', 'Watchlist / want to watch'], ['dropped', 'Dropped / did not finish']];
 function importText(text, name) {
@@ -259,7 +267,7 @@ function importPreview() {
     h('div', { class: 'dim tiny' }, r.items.slice(0, 4).map(i => i.title).join(' · '), sm.n > 4 ? ` … +${sm.n - 4} more` : ''),
     h('div', { class: 'row' }, h('button', { class: 'btn primary', onClick: () => {
       let res; up(s => { const x = L.upsertMany(s, r.items, { sync: !ui.noSync, dropped: p.mode === 'dropped' }); res = x; return x.state; });
-      ui.importMsg = `${r.source}: ${res.added} added, ${res.updated} updated, ${res.skipped} unchanged (${p.name})`; ui.pending = null; toast(ui.importMsg, 'ok'); ctx.render(); } }, 'Import'),
+      ui.importMsg = `${r.source}: ${res.added} added, ${res.updated} updated, ${res.skipped} unchanged (${p.name})`; ui.pending = null; toast(ui.importMsg, 'ok'); ctx.render(); if (r.source === 'IMDb') setTimeout(() => addEnglishTitles(true), 400); } }, 'Import'),
       h('button', { class: 'btn ghost', onClick: () => { ui.pending = null; ctx.render(); } }, 'Cancel')));
 }
 
