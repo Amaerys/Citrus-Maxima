@@ -211,7 +211,8 @@ function suggRow(x) {
 function connect() {
   const s = S(), meta = s.mediaMeta || {};
   const aniIn = h('input', { type: 'text', value: meta.anilist || '', placeholder: 'AniList username', autocomplete: 'off', spellcheck: false });
-  const file = h('input', { type: 'file', accept: '.csv,text/csv', style: { display: 'none' }, onChange: async () => { const f = file.files[0]; if (!f) return; importText(await f.text(), f.name); file.value = ''; } });
+  const readFile = async (f) => { if (/\.gz$/i.test(f.name) || f.type === 'application/gzip') { if (!('DecompressionStream' in window)) throw new Error('This browser cannot open .gz files. Unzip it first and choose the .xml file.'); return new Response(f.stream().pipeThrough(new DecompressionStream('gzip'))).text(); } return f.text(); };
+  const file = h('input', { type: 'file', accept: '.csv,.xml,.gz,text/csv,text/xml,application/gzip', style: { display: 'none' }, onChange: async () => { const f = file.files[0]; if (!f) return; try { importText(await readFile(f), f.name); } catch (e) { toast(e.message, 'err'); } file.value = ''; } });
   const key = h('input', { type: 'password', placeholder: 'Steam Web API key (stays in this box)', autocomplete: 'off' }), sid = h('input', { type: 'text', value: meta.steamId || '', placeholder: 'e.g. 76561198000000000 or gaben', autocomplete: 'off', spellcheck: false }), link = h('div', { class: 'tiny' }), paste = h('textarea', { rows: 3, placeholder: 'Paste the page’s text here…', spellcheck: false });
   const link2 = h('div', { class: 'tiny' }), id17 = () => sid.value.trim();
   const paintLink = () => { link.replaceChildren(); link2.replaceChildren(); const v = id17();
@@ -228,7 +229,7 @@ function connect() {
         try { const items = await L.fetchAniList(u); let r; up(s => { const x = L.upsertMany(s, items); r = x; return L.setMeta(x.state, { anilist: u, anilistAt: Date.now() }); }); ui.importMsg = `AniList: ${r.added} added, ${r.updated} updated, ${r.skipped} unchanged`; toast(ui.importMsg, 'ok'); }
         catch (e) { toast(e.message, 'err'); } ui.busy = ''; ctx.render();
       } }, meta.anilist ? 'Sync now' : 'Connect'), meta.anilistAt ? h('span', { class: 'dim tiny' }, `last ${new Date(meta.anilistAt).toLocaleDateString('en-GB')}`) : null)),
-    h('div', { class: 'card' }, h('div', { class: 'title' }, '📚🎬 Goodreads · IMDb files'), h('div', { class: 'dim small' }, 'Neither offers a connection for apps, so Citrus reads their export files. Goodreads: My Books → Import and export → Export library. IMDb: your Ratings or Watchlist page → ⋯ → Export. Re-import any time; duplicates are merged. Kindle books you track on Goodreads come through this way.'),
+    h('div', { class: 'card' }, h('div', { class: 'title' }, '📚🎬 Goodreads · IMDb · MyAnimeList files'), h('div', { class: 'dim small' }, 'Neither offers a connection for apps, so Citrus reads their export files. MyAnimeList too: Profile → Export My List gives a .xml.gz for anime and another for manga; choose each file here as it is. Goodreads: My Books → Import and export → Export library. IMDb: your Ratings or Watchlist page → ⋯ → Export. Re-import any time; duplicates are merged. Kindle books you track on Goodreads come through this way.'),
       field('This IMDb file is my…', h('select', { 'aria-label': 'IMDb list type', onChange: (e) => { ui.importMode = e.target.value; } }, MODES.map(([v, l]) => h('option', { value: v, ...((ui.importMode || 'auto') === v ? { selected: true } : {}) }, l)))),
       h('label', { class: 'check small' }, h('input', { type: 'checkbox', checked: !ui.noImdbDates, onChange: (e) => { ui.noImdbDates = !e.target.checked; } }), ' Use IMDb’s “Date Rated” as the date I watched it (it is when you rated, which can be later than when you watched; untick to leave films undated)'),
       h('label', { class: 'check small' }, h('input', { type: 'checkbox', checked: !ui.noSync, onChange: (e) => { ui.noSync = !e.target.checked; } }), ' Re-importing a file corrects status, date and rating of items that came from the same service'),
@@ -257,8 +258,8 @@ function importText(text, name) {
 }
 /** Shows exactly how a file will be read before anything is saved. */
 function importPreview() {
-  const p = ui.pending; if (!p) return null; const r = p.r, sm = L.summariseImport(r.items), imdb = r.source === 'IMDb', gr = r.source === 'Goodreads';
-  const word = (k) => ({ done: imdb ? 'Watched' : gr ? 'Read' : 'Finished', doing: gr ? 'Currently reading' : 'In progress', planned: gr ? 'Want to read' : imdb ? 'Watchlist' : 'Plan to', dropped: gr ? 'Did not finish' : 'Dropped', paused: 'Paused' }[k]);
+  const p = ui.pending; if (!p) return null; const r = p.r, sm = L.summariseImport(r.items), imdb = r.source === 'IMDb', gr = r.source === 'Goodreads', mal = r.source === 'MyAnimeList';
+  const word = (k) => ({ done: imdb ? 'Watched' : gr ? 'Read' : 'Completed', doing: gr ? 'Currently reading' : mal ? 'Watching / reading' : 'In progress', planned: gr ? 'Want to read' : imdb ? 'Watchlist' : 'Plan to', dropped: gr ? 'Did not finish' : 'Dropped', paused: 'Paused' }[k]);
   const rows = ['done', 'doing', 'planned', 'dropped', 'paused'].filter(k => sm[k]).map(k => h('div', { class: 'row' }, h('div', { class: 'grow' }, word(k)), h('b', {}, String(sm[k]))));
   const fmt = (k) => k ? fmtDate(fromKey(k)) : '';
   return h('div', { class: 'card preview' }, h('div', { class: 'title' }, `${r.source} file: ${sm.n} items`), h('div', { class: 'dim tiny' }, p.name),

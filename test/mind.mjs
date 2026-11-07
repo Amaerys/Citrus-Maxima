@@ -216,6 +216,15 @@ const rawLeak = (page) => page.evaluate(() => /\b(null|undefined|NaN|\[object Ob
   check(await overflow(page) <= 0, 'no overflow in Games @360'); await sleep(900); await page.screenshot({ path: `${shots}/12d-games-360.png`, fullPage: true });
   await page.click('#view-mind .lib-tabs button:has-text("Discover")'); await sleep(300); check(/Pick from your backlog/.test(await page.locator('#view-mind').innerText()), 'Games Discover offers a backlog pick');
   await page.click('#view-mind .lib-tabs button:has-text("Connect")'); await sleep(200); check(await overflow(page) <= 0, 'no overflow in Connect @360'); await page.screenshot({ path: `${shots}/12e-connect-360.png`, fullPage: true });
+  // MyAnimeList: plain .xml and gzipped .xml.gz, both through the file picker
+  const zlib = await import('node:zlib');
+  const mal = '<?xml version="1.0"?><myanimelist><anime><series_animedb_id>1</series_animedb_id><series_title><![CDATA[Cowboy Bebop]]></series_title><series_episodes>26</series_episodes><my_watched_episodes>26</my_watched_episodes><my_finish_date>2020-02-03</my_finish_date><my_score>10</my_score><my_status>Completed</my_status></anime><anime><series_animedb_id>2</series_animedb_id><series_title><![CDATA[Naruto]]></series_title><series_episodes>220</series_episodes><my_watched_episodes>40</my_watched_episodes><my_score>0</my_score><my_status>Dropped</my_status></anime></myanimelist>';
+  await page.click('#view-mind .lib-tabs button:has-text("Connect")'); await page.setInputFiles('#view-mind input[type=file] >> nth=0', { name: 'animelist.xml', mimeType: 'text/xml', buffer: Buffer.from(mal) }); await sleep(400);
+  check(/MyAnimeList file: 2 items/.test(await page.locator('#view-mind .preview').innerText()), 'preview explains the MAL xml'); await page.click('#view-mind .preview button:has-text("Cancel")'); await sleep(200);
+  await page.setInputFiles('#view-mind input[type=file] >> nth=0', { name: 'animelist_123.xml.gz', mimeType: 'application/gzip', buffer: zlib.gzipSync(Buffer.from(mal)) }); await sleep(600);
+  check(/MyAnimeList file: 2 items/.test(await page.locator('#view-mind .preview').innerText()), 'gzipped MAL export opens'); await page.click('#view-mind .preview button:has-text("Import")'); await sleep(300);
+  await page.click('#view-mind .lib-tabs button:has-text("Shelf")'); await page.click('#view-mind .kinds button:has-text("Anime")'); await sleep(300);
+  const at = await page.locator('#view-mind .mrow.media').allInnerTexts(); check(at.some(x => /Cowboy Bebop/.test(x) && /★ 10/.test(x)) && at.some(x => /Naruto/.test(x)), 'MAL anime on the shelf with ratings');
   await page.click('#view-mind .lib-tabs button:has-text("Shelf")'); await sleep(200);
   await page.click('#view-mind .kinds button:has-text("Movies")'); await sleep(300);
   const before = await page.locator('#view-mind .mrow.media').count(); await page.fill('#view-mind .shelf-filter input[type=search]', 'Prisoners'); await sleep(600);

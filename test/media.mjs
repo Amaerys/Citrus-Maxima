@@ -163,6 +163,23 @@ t('pile ranking: favours authors and shelves you rated highly, collapses edition
   console.log('  ✓ imdb list types, did-not-finish, sync correction, preview summary');
 }
 
+
+
+// MyAnimeList export
+{
+  const xml = '<?xml version="1.0"?><myanimelist><myinfo><user_name>x</user_name></myinfo><anime><series_animedb_id>1</series_animedb_id><series_title><![CDATA[Cowboy Bebop]]></series_title><series_episodes>26</series_episodes><my_watched_episodes>26</my_watched_episodes><my_start_date>2020-01-02</my_start_date><my_finish_date>2020-02-03</my_finish_date><my_score>10</my_score><my_status>Completed</my_status></anime><anime><series_animedb_id>2</series_animedb_id><series_title><![CDATA[Naruto]]></series_title><series_episodes>220</series_episodes><my_watched_episodes>40</my_watched_episodes><my_finish_date>0000-00-00</my_finish_date><my_score>0</my_score><my_status>Dropped</my_status></anime><anime><series_animedb_id>3</series_animedb_id><series_title><![CDATA[Trigun]]></series_title><series_episodes>26</series_episodes><my_watched_episodes>0</my_watched_episodes><my_score>0</my_score><my_status>Plan to Watch</my_status></anime><anime><series_animedb_id>4</series_animedb_id><series_title><![CDATA[Done No Date]]></series_title><my_finish_date>0000-00-00</my_finish_date><my_score>7</my_score><my_status>Completed</my_status></anime></myanimelist>';
+  const r = L.parseExport(xml), by = Object.fromEntries(r.items.map(i => [i.title, i]));
+  assert.equal(r.source, 'MyAnimeList'); assert.equal(r.items.length, 4); assert.deepEqual([by['Cowboy Bebop'].status, by['Cowboy Bebop'].rating, by['Cowboy Bebop'].finishedAt, by['Cowboy Bebop'].total], ['done', 10, '2020-02-03', 26]);
+  assert.deepEqual([by['Naruto'].status, by['Naruto'].progress, by['Naruto'].rating], ['dropped', 40, 0]); assert.equal(by['Trigun'].status, 'planned'); assert.equal(by['Done No Date'].finishedAt, '');
+  const mx = '<myanimelist><manga><manga_mangadb_id>9</manga_mangadb_id><manga_title><![CDATA[Berserk]]></manga_title><manga_volumes>41</manga_volumes><manga_chapters>364</manga_chapters><my_read_chapters>120</my_read_chapters><my_score>9</my_score><my_status>Reading</my_status></manga></myanimelist>'; const m = L.parseExport(mx).items[0];
+  assert.deepEqual([m.kind, m.status, m.total, m.progress], ['manga', 'doing', 364, 120]); assert.ok(L.parseExport('<myanimelist></myanimelist>').error);
+  const s = L.upsertMany({ media: {}, deleted: {} }, r.items).state; assert.equal(Object.values(s.media).find(x => x.title === 'Done No Date').finishedAt, '');
+  console.log('  ✓ MyAnimeList anime + manga export');
+}
+
+
+
+await Promise.all(pend);
 // original titles + English in brackets
 await (async () => {
   try {
@@ -179,5 +196,13 @@ await (async () => {
     console.log('  ✓ original titles with English in brackets (Wikidata, mocked)');
   } catch (e) { fails++; console.log('  ✗ original titles', e.message); }
 })();
-
-await Promise.all(pend); console.log(fails ? `\n${fails} failed` : '\nlibrary logic ok'); process.exit(fails ? 1 : 0);
+// MAL items get AniList recommendations through idMal
+await (async () => { try {
+  const real = globalThis.fetch; let q = '';
+  globalThis.fetch = async (u, o) => { q = JSON.parse(o.body).query; return { ok: true, json: async () => ({ data: { Media: { recommendations: { nodes: [{ mediaRecommendation: { id: 7, title: { romaji: 'Samurai Champloo' }, episodes: 26, seasonYear: 2004, genres: ['Action'], averageScore: 85 } }] } } } }) }; };
+  const s = L.upsertMany({ media: {}, deleted: {} }, [{ kind: 'anime', title: 'Cowboy Bebop', src: 'mal', extId: '1', status: 'done', rating: 10 }]).state;
+  const out = await L.animeSuggestions(s, [], 'anime'); globalThis.fetch = real;
+  assert.ok(/idMal:\$id/.test(q), 'queries by idMal'); assert.equal(out[0].item.title, 'Samurai Champloo'); assert.ok(/Cowboy Bebop/.test(out[0].reason));
+  console.log('  ✓ MAL items get AniList recommendations');
+} catch (e) { fails++; console.log('  ✗ MAL recommendations', e.message); } })();
+console.log(fails ? `\n${fails} failed` : '\nlibrary logic ok'); process.exit(fails ? 1 : 0);

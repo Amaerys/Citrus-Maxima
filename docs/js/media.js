@@ -18,7 +18,7 @@ export const statusWord = (kind, st) => ({ planned: READ(kind) ? 'Want to read' 
 const norm = (t) => String(t || '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
 
 // ───────────────────────────── records
-const IMPORTED = new Set(['goodreads', 'imdb', 'anilist', 'steam']);
+const IMPORTED = new Set(['goodreads', 'imdb', 'anilist', 'steam', 'mal']);
 export function addMedia(s, f) {
   const title = String(f.title || '').trim().slice(0, 140); if (!title) return s;
   const kind = KINDS.some(k => k.id === f.kind) ? f.kind : 'book', now = Date.now(), id = f.id || uid();
@@ -168,7 +168,20 @@ const dateKeyOf = (v) => { const m = /^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/.exec
 const unExcel = (v) => String(v || '').replace(/^="?|"$/g, '');
 /** Detects which export it is by its columns. Returns {source, items} or {error}. */
 const DE_GENRE = { Krimi: 'Crime', Kriegsfilm: 'War', Familienfilm: 'Family', Abenteuer: 'Adventure', Komödie: 'Comedy', Liebesfilm: 'Romance', Dokumentarfilm: 'Documentary', Biografie: 'Biography', Geschichte: 'History', Historienfilm: 'History', Musikfilm: 'Music', Sport: 'Sport', Sportfilm: 'Sport', Western: 'Western', Zeichentrick: 'Animation', Kurzfilm: 'Short', Fantasy: 'Fantasy', Science: 'Sci-Fi', 'Sci-Fi': 'Sci-Fi', Musical: 'Musical', Mystery: 'Mystery', Horror: 'Horror', Thriller: 'Thriller', Drama: 'Drama', Animation: 'Animation', Action: 'Action', Reality: 'Reality', Talkshow: 'Talk-Show', Nachrichten: 'News' };
+/** MyAnimeList export (animelist / mangalist XML). */
+export function parseMAL(text) {
+  const t = String(text || ''), blocks = [...t.matchAll(/<(anime|manga)>([\s\S]*?)<\/\1>/g)];
+  const tag = (x, n) => { const r = new RegExp(`<${n}>\\s*(?:<!\\[CDATA\\[)?([\\s\\S]*?)(?:\\]\\]>)?\\s*</${n}>`, 'i').exec(x); return r ? r[1].trim() : ''; };
+  const date = (v) => /^\d{4}-\d\d-\d\d$/.test(v) && !v.startsWith('0000') && !/-00/.test(v) ? v : '';
+  const ST = { completed: 'done', watching: 'doing', reading: 'doing', 'on-hold': 'paused', dropped: 'dropped', 'plan to watch': 'planned', 'plan to read': 'planned' };
+  const items = blocks.map(([, kindTag, body]) => { const manga = kindTag === 'manga', id = tag(body, manga ? 'manga_mangadb_id' : 'series_animedb_id'), title = tag(body, manga ? 'manga_title' : 'series_title'); if (!title) return null;
+    const status = ST[tag(body, 'my_status').toLowerCase()] || 'planned', score = Math.min(10, +tag(body, 'my_score') || 0);
+    return { kind: manga ? 'manga' : 'anime', title, total: +(manga ? tag(body, 'manga_chapters') || tag(body, 'manga_volumes') : tag(body, 'series_episodes')) || 0, progress: +(manga ? tag(body, 'my_read_chapters') : tag(body, 'my_watched_episodes')) || 0,
+      status, rating: score, finishedAt: status === 'done' ? date(tag(body, 'my_finish_date')) : '', startedAt: date(tag(body, 'my_start_date')), review: tag(body, 'my_comments').replace(/^<!\[CDATA\[|\]\]>$/g, '').slice(0, 800), genres: [], src: 'mal', extId: id }; }).filter(Boolean);
+  return items.length ? { source: 'MyAnimeList', items } : { error: 'No anime or manga entries found in that file.' };
+}
 export function parseExport(text, { mode = 'auto' } = {}) {
+  if (/<myanimelist>|<series_animedb_id>|<manga_mangadb_id>/i.test(String(text).slice(0, 4000))) return parseMAL(text);
   const rows = parseCSV(text); if (!rows.length) return { error: 'That file has no rows.' };
   const cols = Object.keys(rows[0]);
   if (cols.includes('Exclusive Shelf') && cols.includes('Title')) {
@@ -216,10 +229,10 @@ export async function searchAnime(q, kind = 'anime') {
   return (d.Page?.media || []).map(m => ({ kind, title: m.title.english || m.title.romaji, year: m.seasonYear || m.startDate?.year || 0, total: (kind === 'manga' ? m.chapters || m.volumes : m.episodes) || 0, genres: m.genres || [], cover: m.coverImage?.medium || '', src: 'anilist', extId: m.id }));
 }
 export async function animeSuggestions(s, dismissed = [], kind = 'anime') {
-  const top = rec(s.media).filter(m => m.kind === kind && m.src === 'anilist' && m.extId && m.status === 'done' && m.rating >= 8).sort((a, b) => b.rating - a.rating).slice(0, 5);
+  const top = rec(s.media).filter(m => m.kind === kind && (m.src === 'anilist' || m.src === 'mal') && m.extId && m.status === 'done' && m.rating >= 8).sort((a, b) => b.rating - a.rating).slice(0, 5);
   const have = new Set(rec(s.media).filter(m => m.kind === kind).map(m => norm(m.title))), seen = new Set(), out = [];
   for (const m of top) {
-    let d; try { d = await anilist(`query($id:Int){Media(id:$id){recommendations(perPage:6,sort:RATING_DESC){nodes{rating mediaRecommendation{id title{romaji english} episodes chapters volumes seasonYear startDate{year} genres coverImage{medium} averageScore}}}}}`, { id: +m.extId }); } catch { continue; }
+    let d; try { d = await anilist(`query($id:Int){Media(${m.src === 'mal' ? 'idMal' : 'id'}:$id,type:${kind === 'manga' ? 'MANGA' : 'ANIME'}){recommendations(perPage:6,sort:RATING_DESC){nodes{rating mediaRecommendation{id title{romaji english} episodes chapters volumes seasonYear startDate{year} genres coverImage{medium} averageScore}}}}}`, { id: +m.extId }); } catch { continue; }
     for (const n of d.Media?.recommendations?.nodes || []) {
       const r = n.mediaRecommendation; if (!r) continue; const title = r.title.english || r.title.romaji;
       if (have.has(norm(title)) || seen.has(r.id) || dismissed.includes(`anilist:${r.id}`)) continue; seen.add(r.id);
