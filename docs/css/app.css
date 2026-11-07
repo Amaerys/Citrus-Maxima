@@ -349,3 +349,12 @@ nav.tabs button.active { color: var(--orange); }
 .explore { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; } .chip.xp { cursor: pointer; padding: 6px 10px; transition: transform .12s; } .chip.xp:active { transform: scale(.95); }
 .quotes { margin: 10px 0; } .quote-row { display: flex; align-items: flex-start; gap: 6px; padding: 6px 0; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); } .quote-row i { flex: 1; } .quote-of { margin-top: 10px; padding: 10px 12px; border-left: 3px solid var(--orange); background: var(--orange-soft); border-radius: 0 10px 10px 0; font-size: 13px; }
 .col { display: grid; gap: 4px; justify-items: center; align-self: end; }
+
+/* Library: filters, analysis notes */
+.shelf-filter { display: grid; gap: 8px; }
+.shelf-filter input[type=search] { width: 100%; }
+.filter-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.filter-row select { min-width: 0; width: 100%; }
+@media (min-width: 700px) { .filter-row { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.fb { padding: 6px 0 6px 10px; border-left: 2px solid var(--cyan); margin: 6px 0; color: var(--text); line-height: 1.4; }
+.tags .chip[onclick], .tags .chip { cursor: pointer; }

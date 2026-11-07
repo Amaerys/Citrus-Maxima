@@ -7,12 +7,14 @@ export const KINDS = [
   { id: 'anime', name: 'Anime', emoji: '🍥', color: '#ff8fa3', unit: 'ep' },
   { id: 'show', name: 'Shows', emoji: '📺', color: '#8e9bff', unit: 'ep' },
   { id: 'movie', name: 'Movies', emoji: '🎬', color: '#ffc857', unit: '' },
+  { id: 'manga', name: 'Comics & manga', emoji: '🗯', color: '#c98bff', unit: 'ch' },
   { id: 'book', name: 'Books', emoji: '📚', color: '#5fd38d', unit: 'p' },
   { id: 'game', name: 'Games', emoji: '🎮', color: '#4fb3ff', unit: 'h' },
 ];
+const READ = (k) => k === 'book' || k === 'manga';
 export const kindOf = (id) => KINDS.find(k => k.id === id) || KINDS[0];
 export const STATUS = { planned: 'Plan to', doing: 'In progress', done: 'Finished', paused: 'Paused', dropped: 'Dropped' };
-export const statusWord = (kind, st) => ({ planned: kind === 'book' ? 'Want to read' : kind === 'game' ? 'Backlog' : 'Plan to watch', doing: kind === 'book' ? 'Reading' : kind === 'game' ? 'Playing' : 'Watching', done: kind === 'book' ? 'Read' : kind === 'game' ? 'Played' : 'Watched', paused: 'Paused', dropped: 'Dropped' }[st]);
+export const statusWord = (kind, st) => ({ planned: READ(kind) ? 'Want to read' : kind === 'game' ? 'Backlog' : 'Plan to watch', doing: READ(kind) ? 'Reading' : kind === 'game' ? 'Playing' : 'Watching', done: READ(kind) ? 'Read' : kind === 'game' ? 'Played' : 'Watched', paused: 'Paused', dropped: 'Dropped' }[st]);
 const norm = (t) => String(t || '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
 
 // ───────────────────────────── records
@@ -21,7 +23,7 @@ export function addMedia(s, f) {
   const kind = KINDS.some(k => k.id === f.kind) ? f.kind : 'book', now = Date.now(), id = f.id || uid();
   const m = { id, kind, title, status: STATUS[f.status] ? f.status : 'planned', rating: Math.max(0, Math.min(10, +f.rating || 0)), progress: Math.max(0, +f.progress || 0), total: Math.max(0, +f.total || 0),
     year: +f.year || 0, creator: String(f.creator || '').slice(0, 80), genres: (f.genres || []).map(g => String(g).slice(0, 30)).slice(0, 6), cover: f.cover ? safeUrl(f.cover) : '', src: f.src || 'manual', extId: f.extId ? String(f.extId) : '',
-    format: ['paper', 'ebook', 'audio'].includes(f.format) ? f.format : '', log: Array.isArray(f.log) ? f.log.slice(-400) : [], quotes: Array.isArray(f.quotes) ? f.quotes.slice(-100) : [], startedAt: f.startedAt || '', finishedAt: f.finishedAt || '', minutes: Math.max(0, +f.minutes || 0), review: String(f.review || '').slice(0, 800), createdAt: f.createdAt || now, at: now };
+    format: ['paper', 'ebook', 'audio'].includes(f.format) ? f.format : '', log: Array.isArray(f.log) ? f.log.slice(-400) : [], quotes: Array.isArray(f.quotes) ? f.quotes.slice(-100) : [], startedAt: f.startedAt || '', finishedAt: f.finishedAt || '', minutes: Math.max(0, +f.minutes || 0), review: String(f.review || '').slice(0, 800), runtime: Math.max(0, Math.min(900, +f.runtime || 0)), pub: Math.max(0, Math.min(10, +f.pub || 0)), createdAt: f.createdAt || now, at: now };
   if (m.status === 'done' && !m.finishedAt) m.finishedAt = keyOf(new Date());
   return { ...s, media: { ...s.media, [id]: m } };
 }
@@ -46,6 +48,7 @@ export function upsertMedia(s, f) {
   if (!cur.extId && f.extId) { patch.extId = String(f.extId); patch.src = f.src; } if (!cur.cover && f.cover) patch.cover = safeUrl(f.cover) || undefined;
   if (!cur.genres?.length && f.genres?.length) patch.genres = f.genres; if (!cur.finishedAt && f.finishedAt) patch.finishedAt = f.finishedAt;
   if (f.minutes && f.minutes > (cur.minutes || 0)) patch.minutes = f.minutes;
+  if (!cur.runtime && f.runtime) patch.runtime = f.runtime; if (!cur.pub && f.pub) patch.pub = f.pub;
   if (f.progress && f.progress > (cur.progress || 0)) patch.progress = f.progress;
   if (cur.status === 'planned' && f.status && f.status !== 'planned') patch.status = f.status;
   return Object.keys(patch).length ? { state: updateMedia(s, cur.id, patch), added: 0, updated: 1 } : { state: s, added: 0 };
@@ -148,7 +151,7 @@ export function parseExport(text) {
     const items = rows.filter(r => r.Title && !/episode|episode|video ?game|videospiel|podcast/i.test(r['Title Type'])).map(r => {
       const rated = +r['Your Rating'] || 0, type = r['Title Type'];
       return { kind: /serie|mini/i.test(type) ? 'show' : 'movie', title: r.Title, creator: r.Directors || r.Creators || '', year: +r.Year || 0, genres: (r.Genres || '').split(',').map(x => x.trim()).filter(Boolean).map(g => DE_GENRE[g] || g),
-        status: rated ? 'done' : 'planned', rating: rated, finishedAt: dateKeyOf(r['Date Rated']), src: 'imdb', extId: r.Const };
+        status: rated ? 'done' : 'planned', rating: rated, finishedAt: dateKeyOf(r['Date Rated']), src: 'imdb', extId: r.Const, runtime: +r['Runtime (mins)'] || 0, pub: +r['IMDb Rating'] || 0 };
     });
     return { source: 'IMDb', items };
   }
@@ -163,29 +166,32 @@ async function anilist(query, variables) {
   return j.data;
 }
 const ST = { COMPLETED: 'done', CURRENT: 'doing', REPEATING: 'doing', PLANNING: 'planned', PAUSED: 'paused', DROPPED: 'dropped' };
+const aniEntry = (e, kind) => { const c = e.completedAt || {}, m = e.media;
+  return { kind, title: m.title.english || m.title.romaji, year: m.seasonYear || m.startDate?.year || 0, total: (kind === 'manga' ? m.chapters || m.volumes : m.episodes) || 0, progress: e.progress || 0, genres: m.genres || [], cover: m.coverImage?.medium || '',
+    status: ST[e.status] || 'planned', rating: e.score ? Math.round(e.score / 10) : 0, finishedAt: c.year ? `${c.year}-${String(c.month || 1).padStart(2, '0')}-${String(c.day || 1).padStart(2, '0')}` : '', src: 'anilist', extId: m.id, creator: '' }; };
 export async function fetchAniList(user) {
-  const d = await anilist(`query($u:String){MediaListCollection(userName:$u,type:ANIME){lists{entries{status score(format:POINT_100) progress completedAt{year month day} media{id title{romaji english} episodes seasonYear genres coverImage{medium}}}}}}`, { u: user });
-  const out = [];
-  for (const l of d.MediaListCollection?.lists || []) for (const e of l.entries || []) {
-    const c = e.completedAt || {};
-    out.push({ kind: 'anime', title: e.media.title.english || e.media.title.romaji, year: e.media.seasonYear || 0, total: e.media.episodes || 0, progress: e.progress || 0, genres: e.media.genres || [], cover: e.media.coverImage?.medium || '',
-      status: ST[e.status] || 'planned', rating: e.score ? Math.round(e.score / 10) : 0, finishedAt: c.year ? `${c.year}-${String(c.month || 1).padStart(2, '0')}-${String(c.day || 1).padStart(2, '0')}` : '', src: 'anilist', extId: e.media.id });
+  const out = []; let firstErr = null;
+  for (const [type, kind] of [['ANIME', 'anime'], ['MANGA', 'manga']]) {
+    try {
+      const d = await anilist(`query($u:String){MediaListCollection(userName:$u,type:${type}){lists{entries{status score(format:POINT_100) progress completedAt{year month day} media{id title{romaji english} episodes chapters volumes seasonYear startDate{year} genres coverImage{medium}}}}}}`, { u: user });
+      for (const l of d.MediaListCollection?.lists || []) for (const e of l.entries || []) out.push(aniEntry(e, kind));
+    } catch (e) { if (!firstErr) firstErr = e; if (type === 'ANIME') throw e; }
   }
   return out;
 }
-export async function searchAnime(q) {
-  const d = await anilist(`query($q:String){Page(perPage:8){media(search:$q,type:ANIME,sort:SEARCH_MATCH){id title{romaji english} episodes seasonYear genres coverImage{medium}}}}`, { q });
-  return (d.Page?.media || []).map(m => ({ kind: 'anime', title: m.title.english || m.title.romaji, year: m.seasonYear || 0, total: m.episodes || 0, genres: m.genres || [], cover: m.coverImage?.medium || '', src: 'anilist', extId: m.id }));
+export async function searchAnime(q, kind = 'anime') {
+  const d = await anilist(`query($q:String){Page(perPage:8){media(search:$q,type:${kind === 'manga' ? 'MANGA' : 'ANIME'},sort:SEARCH_MATCH){id title{romaji english} episodes chapters volumes seasonYear startDate{year} genres coverImage{medium}}}}`, { q });
+  return (d.Page?.media || []).map(m => ({ kind, title: m.title.english || m.title.romaji, year: m.seasonYear || m.startDate?.year || 0, total: (kind === 'manga' ? m.chapters || m.volumes : m.episodes) || 0, genres: m.genres || [], cover: m.coverImage?.medium || '', src: 'anilist', extId: m.id }));
 }
-export async function animeSuggestions(s, dismissed = []) {
-  const top = rec(s.media).filter(m => m.kind === 'anime' && m.src === 'anilist' && m.extId && m.status === 'done' && m.rating >= 8).sort((a, b) => b.rating - a.rating).slice(0, 5);
-  const have = new Set(rec(s.media).filter(m => m.kind === 'anime').map(m => norm(m.title))), seen = new Set(), out = [];
+export async function animeSuggestions(s, dismissed = [], kind = 'anime') {
+  const top = rec(s.media).filter(m => m.kind === kind && m.src === 'anilist' && m.extId && m.status === 'done' && m.rating >= 8).sort((a, b) => b.rating - a.rating).slice(0, 5);
+  const have = new Set(rec(s.media).filter(m => m.kind === kind).map(m => norm(m.title))), seen = new Set(), out = [];
   for (const m of top) {
-    let d; try { d = await anilist(`query($id:Int){Media(id:$id){recommendations(perPage:6,sort:RATING_DESC){nodes{rating mediaRecommendation{id title{romaji english} episodes seasonYear genres coverImage{medium} averageScore}}}}}`, { id: +m.extId }); } catch { continue; }
+    let d; try { d = await anilist(`query($id:Int){Media(id:$id){recommendations(perPage:6,sort:RATING_DESC){nodes{rating mediaRecommendation{id title{romaji english} episodes chapters volumes seasonYear startDate{year} genres coverImage{medium} averageScore}}}}}`, { id: +m.extId }); } catch { continue; }
     for (const n of d.Media?.recommendations?.nodes || []) {
       const r = n.mediaRecommendation; if (!r) continue; const title = r.title.english || r.title.romaji;
       if (have.has(norm(title)) || seen.has(r.id) || dismissed.includes(`anilist:${r.id}`)) continue; seen.add(r.id);
-      out.push({ key: `anilist:${r.id}`, item: { kind: 'anime', title, year: r.seasonYear || 0, total: r.episodes || 0, genres: r.genres || [], cover: r.coverImage?.medium || '', src: 'anilist', extId: r.id, status: 'planned' }, reason: `Because you rated ${m.title} ${m.rating}/10`, score: r.averageScore ? `${r.averageScore}%` : '' });
+      out.push({ key: `anilist:${r.id}`, item: { kind, title, year: r.seasonYear || r.startDate?.year || 0, total: (kind === 'manga' ? r.chapters || r.volumes : r.episodes) || 0, genres: r.genres || [], cover: r.coverImage?.medium || '', src: 'anilist', extId: r.id, status: 'planned' }, reason: `Because you rated ${m.title} ${m.rating}/10`, score: r.averageScore ? `${r.averageScore}%` : '' });
     }
   }
   return out.slice(0, 12);
@@ -308,3 +314,86 @@ export function cacheGet(kind) { try { const c = JSON.parse(localStorage.getItem
 export function cacheSet(kind, list) { try { localStorage.setItem(`citrus.sugg.${kind}`, JSON.stringify({ at: Date.now(), list })); } catch {} }
 export function cacheClear() { try { for (const k of KINDS) localStorage.removeItem(`citrus.sugg.${k.id}`); } catch {} }
 export function dismissSuggestion(s, key) { return setMeta(s, { dismissed: [...new Set([...(s.mediaMeta?.dismissed || []), key])].slice(-300) }); }
+
+
+// ───────────────────────────── analysis for every kind: stats, taste, ranking, feedback, year in review (all offline, from your own ratings)
+const splitNames = (x) => String(x || '').split(',').map(v => v.trim()).filter(Boolean);
+const countOf = (arr) => { const o = {}; arr.forEach(k => { if (k) o[k] = (o[k] || 0) + 1; }); return Object.entries(o).sort((a, b) => b[1] - a[1]); };
+const listOf = (s, kinds) => rec(s.media).filter(m => !kinds || (Array.isArray(kinds) ? kinds : [kinds]).includes(m.kind));
+const yearOf = (m) => (m.finishedAt || '').slice(0, 4);
+/** Genres/makers (directors, authors, studios) you rate highly or poorly, weighted by how far each rating is from "meh". */
+export function tasteOf(s, kinds) {
+  const gen = {}, mk = {}, loved = [];
+  for (const m of listOf(s, kinds)) {
+    if (m.status !== 'done' || !m.rating) continue; const w = (m.rating - 5.5) / 4.5; if (w >= 0.5) loved.push(m);
+    for (const g of m.genres || []) gen[g] = (gen[g] || 0) + w;
+    for (const d of splitNames(m.creator)) mk[d] = (mk[d] || 0) + w;
+  }
+  const rank = (o) => Object.entries(o).sort((a, b) => b[1] - a[1]);
+  return { genres: rank(gen), makers: rank(mk).filter(([, w]) => w >= 1), genreW: gen, makerW: mk, loved: loved.sort((a, b) => b.rating - a.rating) };
+}
+export const screenTaste = (s) => tasteOf(s, ['movie', 'show']);
+/** Everything the Insights card needs for a set of kinds (optionally one finish-year). */
+export function statsOf(s, kinds, { year = '' } = {}, now = new Date()) {
+  const all = listOf(s, kinds).filter(m => m.status === 'done'), done = year ? all.filter(m => yearOf(m) === String(year)) : all, rated = done.filter(m => m.rating);
+  const hist = Array(10).fill(0); rated.forEach(m => hist[Math.min(9, m.rating - 1)]++);
+  const gAvg = {}; rated.forEach(m => (m.genres || []).forEach(g => { (gAvg[g] ||= []).push(m.rating); }));
+  const genreAvg = Object.entries(gAvg).filter(([, a]) => a.length >= 3).map(([g, a]) => [g, a.reduce((x, y) => x + y, 0) / a.length, a.length]).sort((a, b) => b[1] - a[1]);
+  const mins = done.reduce((t, m) => t + (m.kind === 'movie' ? m.runtime || 0 : m.kind === 'book' ? m.minutes || 0 : m.kind === 'game' ? (m.progress || 0) * 60 : 0), 0);
+  const vs = rated.filter(m => m.pub), gap = vs.length ? vs.reduce((t, m) => t + (m.rating - m.pub), 0) / vs.length : null, hot = vs.map(m => ({ m, d: m.rating - m.pub })).sort((a, b) => b.d - a.d);
+  const yr = String(year || now.getFullYear()), inYear = all.filter(m => yearOf(m) === yr);
+  return { n: done.length, byKind: Object.fromEntries(KINDS.map(k => [k.id, done.filter(m => m.kind === k.id).length])), avg: rated.length ? rated.reduce((t, m) => t + m.rating, 0) / rated.length : null, ratedN: rated.length, hist,
+    months: Array.from({ length: 12 }, (_, i) => inYear.filter(m => +m.finishedAt.slice(5, 7) === i + 1).length), years: countOf(all.map(yearOf)).sort((a, b) => a[0].localeCompare(b[0])), hours: Math.round(mins / 60),
+    pages: done.filter(m => m.kind === 'book').reduce((t, m) => t + (m.total || 0), 0), genres: countOf(done.flatMap(m => m.genres || [])).slice(0, 10), genreAvg, makers: countOf(done.flatMap(m => splitNames(m.creator))).filter(([, n]) => n > 1).slice(0, 8),
+    decades: countOf(done.filter(m => m.year).map(m => `${Math.floor(m.year / 10) * 10}s`)).sort((a, b) => a[0].localeCompare(b[0])), gap, overrated: hot.slice(-3).reverse().filter(x => x.d <= -2).map(x => x.m), underrated: hot.slice(0, 3).filter(x => x.d >= 2).map(x => x.m),
+    top: rated.slice().sort((a, b) => b.rating - a.rating || (b.finishedAt || '').localeCompare(a.finishedAt || '')).slice(0, 8), worst: rated.filter(m => m.rating <= 4).sort((a, b) => a.rating - b.rating).slice(0, 4) };
+}
+export const screenStats = (s, now = new Date()) => { const t = statsOf(s, ['movie', 'show'], {}, now); return { ...t, movies: t.byKind.movie, shows: t.byKind.show, yearCount: t.months.reduce((a, b) => a + b, 0) }; };
+/** Plain-language read-outs of your taste: patterns, not just numbers. */
+export function feedbackOf(s, kinds, now = new Date()) {
+  const st = statsOf(s, kinds, {}, now), out = []; if (st.ratedN < 5) return ['Rate five or more finished items and Citrus will start telling you what it notices.'];
+  const harsh = st.hist.slice(0, 5).reduce((a, b) => a + b, 0) / st.ratedN, kind = st.hist.slice(7).reduce((a, b) => a + b, 0) / st.ratedN;
+  out.push(kind > 0.55 ? `You’re a generous rater: ${Math.round(kind * 100)}% of your ratings are 8 or higher, so a 10 from you says less than a 7 from a tough critic.` : harsh > 0.4 ? `You’re a tough critic: ${Math.round(harsh * 100)}% of your ratings are 5 or lower.` : `Your ratings are balanced, with an average of ${st.avg.toFixed(1)}.`);
+  if (st.genreAvg.length > 1) { const hi = st.genreAvg[0], lo = st.genreAvg[st.genreAvg.length - 1]; out.push(`${hi[0]} is where you’re happiest (avg ${hi[1].toFixed(1)} over ${hi[2]}).${hi[1] - lo[1] >= 1 ? ` ${lo[0]} lets you down most (avg ${lo[1].toFixed(1)}).` : ''}`); }
+  if (st.genres[0] && st.n > 20 && st.genres[0][1] / st.n > 0.5) out.push(`${Math.round(st.genres[0][1] / st.n * 100)}% of what you finish is ${st.genres[0][0]}. Something far outside it might surprise you.`);
+  if (st.gap != null && Math.abs(st.gap) >= 0.4) out.push(st.gap > 0 ? `You rate ${st.gap.toFixed(1)} points above the public score on average.` : `You rate ${(-st.gap).toFixed(1)} points below the public score on average.`);
+  const t = tasteOf(s, kinds); if (t.makers.length) out.push(`Names you keep coming back to and rating well: ${t.makers.slice(0, 3).map(([n]) => n).join(', ')}.`);
+  const yrs = st.years.filter(([y]) => y), best = yrs.slice().sort((a, b) => b[1] - a[1])[0]; if (best && yrs.length > 1) out.push(`${best[0]} was your biggest year so far, with ${best[1]} finished.`);
+  return out;
+}
+/** Your own backlog, ordered by fit: genres and makers you rated highly, nudged by the public score. */
+export function rankPlanned(s, kinds, n = 10) {
+  const t = tasteOf(s, kinds), out = [];
+  for (const m of listOf(s, kinds)) {
+    if (m.status !== 'planned') continue;
+    const gs = m.genres || [], g = gs.length ? gs.reduce((x, k) => x + (t.genreW[k] || 0), 0) / Math.sqrt(gs.length) : 0;
+    const d = splitNames(m.creator).reduce((x, k) => x + Math.max(0, t.makerW[k] || 0), 0), q = m.pub ? (m.pub - 6.5) / 3 : 0, score = g + d * 0.6 + q;
+    if (score <= 0) continue;
+    const topG = gs.filter(k => (t.genreW[k] || 0) > 0).sort((a, b) => t.genreW[b] - t.genreW[a]).slice(0, 2), dd = splitNames(m.creator).find(k => (t.makerW[k] || 0) >= 1);
+    out.push({ key: `watch:${m.id}`, media: m, score, reason: dd ? `You rated ${dd} highly` : topG.length ? `Matches what you love: ${topG.join(', ')}` : 'Well rated by others' });
+  }
+  return out.sort((a, b) => b.score - a.score).slice(0, n);
+}
+export const watchlistRanking = (s, n = 10) => rankPlanned(s, ['movie', 'show'], n);
+/** Year in review across everything: totals per kind, highs and lows, busiest month, taste of the year. */
+export function yearReview(s, year, now = new Date()) {
+  const y = String(year), done = rec(s.media).filter(m => m.status === 'done' && yearOf(m) === y), rated = done.filter(m => m.rating), st = statsOf(s, null, { year: y }, now);
+  const best = rated.slice().sort((a, b) => b.rating - a.rating || (b.finishedAt || '').localeCompare(a.finishedAt || ''));
+  const per = KINDS.map(k => { const l = done.filter(m => m.kind === k.id), r = l.filter(m => m.rating); return { kind: k, n: l.length, avg: r.length ? r.reduce((t, m) => t + m.rating, 0) / r.length : null, top: r.slice().sort((a, b) => b.rating - a.rating)[0] || null }; }).filter(x => x.n);
+  const busy = st.months.indexOf(Math.max(...st.months)), prev = rec(s.media).filter(m => m.status === 'done' && yearOf(m) === String(+y - 1)).length;
+  const pages = done.filter(m => m.kind === 'book').reduce((t, m) => t + (m.total || 0), 0);
+  const lines = [];
+  if (done.length) lines.push(`You finished ${done.length} things in ${y}${prev ? ` (${done.length >= prev ? '+' : ''}${done.length - prev} vs ${+y - 1})` : ''}.`);
+  if (st.genres[0]) lines.push(`Your year leaned ${st.genres.slice(0, 2).map(g => g[0]).join(' and ')}.`);
+  if (st.months[busy] > 1) lines.push(`${['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][busy]} was your busiest month, with ${st.months[busy]}.`);
+  if (pages) lines.push(`${pages.toLocaleString('en')} pages read.`);
+  if (st.hours) lines.push(`About ${st.hours} hours of films, reading and play logged.`);
+  return { year: y, n: done.length, avg: st.avg, per, best: best.slice(0, 5), worst: rated.filter(m => m.rating <= 4).slice(0, 3), months: st.months, genres: st.genres.slice(0, 6), makers: st.makers.slice(0, 4), lines, pages, hours: st.hours, years: [...new Set(rec(s.media).filter(m => m.status === 'done' && yearOf(m)).map(yearOf))].sort().reverse() };
+}
+/** Shelf filter: free text, genre, rating floor, finish year, sort. */
+export function filterShelf(list, { q = '', genre = '', min = 0, year = '', sort = 'recent' } = {}) {
+  const nq = norm(q); let out = list.filter(m => (!nq || norm(`${m.title} ${m.creator}`).includes(nq)) && (!genre || (m.genres || []).includes(genre)) && (!min || m.rating >= min) && (!year || yearOf(m) === String(year)));
+  const by = { recent: (a, b) => (b.finishedAt || '').localeCompare(a.finishedAt || '') || b.at - a.at, rating: (a, b) => b.rating - a.rating || (b.finishedAt || '').localeCompare(a.finishedAt || ''), title: (a, b) => a.title.localeCompare(b.title), year: (a, b) => b.year - a.year }[sort];
+  return by ? out.slice().sort(by) : out;
+}
+export const genresOf = (list) => countOf(list.flatMap(m => m.genres || [])).slice(0, 24);

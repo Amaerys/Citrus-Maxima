@@ -61,3 +61,6 @@ scripts-bump.sh       bump the service-worker cache name before a release
 ```
 
 Run tests: `node test/parse.test.mjs`, `node test/e2e.mjs`, `node test/beta.mjs`, `node test/drive.mjs` (test/data/ holds the rota files; not committed).
+
+### Library analysis
+Every kind (anime, comics & manga, shows, movies, books, games) has the same toolkit: a Shelf with search / genre / rating / year / sort filters, an analysis card (rating spread, genres by your average, decades, creators, you-vs-public score, plain-language observations), Discover (your plan-to list ranked by taste, plus AniList/Open Library lanes where a free catalogue exists), and a Review tab with a year in review across everything. AniList import covers anime and manga. All analysis is computed on-device from your own ratings.

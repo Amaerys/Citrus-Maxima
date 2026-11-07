@@ -89,4 +89,37 @@ t('pile ranking: favours authors and shelves you rated highly, collapses edition
   console.log('ok german imdb');
 }
 
+// screen taste, stats, watchlist
+{
+  let st = { media: {}, deleted: {} };
+  const add = (o) => { st = L.addMedia(st, o); };
+  add({ kind: 'movie', title: 'A', status: 'done', rating: 9, genres: ['Thriller', 'Crime'], creator: 'D V', year: 2013, runtime: 120, pub: 8, finishedAt: '2026-03-01' });
+  add({ kind: 'movie', title: 'B', status: 'done', rating: 3, genres: ['Comedy'], creator: 'X', year: 1999, runtime: 90, pub: 7, finishedAt: '2026-04-01' });
+  add({ kind: 'movie', title: 'C', status: 'planned', genres: ['Thriller'], creator: 'D V', year: 2020, pub: 7.5 });
+  add({ kind: 'movie', title: 'D', status: 'planned', genres: ['Comedy'], creator: 'Y', year: 2020, pub: 6 });
+  const sc = L.screenStats(st, new Date('2026-06-01')), wl = L.watchlistRanking(st);
+  assert.equal(sc.movies, 2); assert.equal(sc.hours, 4); assert.equal(sc.yearCount, 2); assert.equal(sc.hist[8], 1);
+  assert.equal(wl[0].media.title, 'C'); assert.ok(!wl.some(x => x.media.title === 'D')); assert.equal(sc.overrated[0].title, 'B');
+  console.log('  ✓ screen stats + watchlist ranking');
+}
+
+// all-kinds analysis: stats, feedback, year in review, filters
+{
+  let st = { media: {}, deleted: {} };
+  const add = (o) => { st = L.addMedia(st, { status: 'done', ...o }); };
+  add({ kind: 'book', title: 'B1', rating: 9, genres: ['Fantasy'], creator: 'Au', total: 300, finishedAt: '2026-02-01' });
+  add({ kind: 'book', title: 'B2', rating: 8, genres: ['Fantasy', 'Epic'], creator: 'Au', total: 500, finishedAt: '2026-02-20' });
+  add({ kind: 'manga', title: 'M1', rating: 9, genres: ['Action'], finishedAt: '2026-03-02' });
+  add({ kind: 'game', title: 'G1', rating: 4, genres: ['RPG'], progress: 30, finishedAt: '2025-12-01' });
+  add({ kind: 'movie', title: 'F1', rating: 8, genres: ['Drama'], runtime: 100, finishedAt: '2026-05-01' });
+  add({ kind: 'movie', title: 'F2', rating: 7, genres: ['Drama'], runtime: 100, finishedAt: '2026-05-02' });
+  const ys = L.yearReview(st, 2026), all = L.statsOf(st, null), bk = L.statsOf(st, ['book']);
+  assert.equal(ys.n, 5); assert.equal(ys.pages, 800); assert.deepEqual(ys.per.map(x => x.kind.id).sort(), ['book', 'manga', 'movie']); assert.equal(ys.best[0].rating, 9);
+  assert.equal(all.n, 6); assert.equal(bk.pages, 800); assert.equal(L.feedbackOf(st, null).length > 1, true);
+  assert.equal(L.filterShelf(L.mediaList(st), { genre: 'Fantasy', sort: 'rating' }).map(m => m.title).join(), 'B1,B2');
+  assert.equal(L.filterShelf(L.mediaList(st), { year: 2025 }).length, 1); assert.equal(L.filterShelf(L.mediaList(st), { min: 9 }).length, 2); assert.equal(L.filterShelf(L.mediaList(st), { q: 'f1' }).length, 1);
+  assert.equal(L.statusWord('manga', 'done'), 'Read');
+  console.log('  ✓ all-kinds stats, feedback, year in review, filters');
+}
+
 await Promise.all(pend); console.log(fails ? `\n${fails} failed` : '\nlibrary logic ok'); process.exit(fails ? 1 : 0);

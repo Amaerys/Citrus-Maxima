@@ -7,7 +7,7 @@ let ctx = null;
 export function initMedia(c) { ctx = c; }
 const S = () => ctx.S();
 const up = (fn) => ctx.update(fn);
-const ui = { kind: '', tab: 'shelf', q: '', tag: '', busy: '', sugg: {}, suggErr: '', importMsg: '' };
+const ui = { f: { q: '', genre: '', min: 0, year: '', sort: 'recent' }, year: '', kind: '', tab: 'shelf', q: '', tag: '', busy: '', sugg: {}, suggErr: '', importMsg: '' };
 
 const field = (label, ...inputs) => h('div', { class: 'field' }, label ? h('label', {}, label) : null, ...inputs);
 function pick(options, value, onPick, cls = '') {
@@ -24,7 +24,7 @@ function kindBar() {
     h('button', { class: ui.kind === id ? 'active' : '', style: color ? { '--c': color } : null, onClick: () => { ui.kind = id; ctx.render(); } }, label)));
 }
 function subBar() {
-  return h('div', { class: 'seg lib-tabs' }, [['shelf', 'Shelf'], ['discover', 'Discover'], ['connect', 'Connect']].map(([id, l]) => h('button', { class: ui.tab === id ? 'active' : '', onClick: () => { ui.tab = id; ctx.render(); } }, l)));
+  return h('div', { class: 'seg lib-tabs' }, [['shelf', 'Shelf'], ['discover', 'Discover'], ['review', 'Review'], ['connect', 'Connect']].map(([id, l]) => h('button', { class: ui.tab === id ? 'active' : '', onClick: () => { ui.tab = id; ctx.render(); } }, l)));
 }
 function mediaRow(m) {
   const k = L.kindOf(m.kind), pct = m.total ? Math.min(1, m.progress / m.total) : null;
@@ -51,13 +51,68 @@ function readingDash() {
 }
 function booksInsights() {
   const s = S(), st = L.readingStats(s, new Date()); if (!st.booksYear) return null;
-  return h('div', { class: 'card' }, h('div', { class: 'title' }, `Your ${new Date().getFullYear()} in books`), h('div', { class: 'stat-grid' }, [[st.booksYear, 'books'], [st.pagesYear.toLocaleString('en'), 'pages'], [st.avgDays ? `${st.avgDays}d` : '–', 'avg to finish'], [st.longest ? st.longest.total : '–', 'longest (pages)']].map(([v, l]) => h('div', { class: 'stat' }, h('b', {}, String(v)), h('small', {}, l)))),
+  return h('div', { class: 'card' }, h('div', { class: 'title' }, `Your ${new Date().getFullYear()} in books`), h('div', { class: 'stat-grid' }, [[st.booksYear, 'books'], [st.pagesYear.toLocaleString('en'), 'pages'], [st.avgDays ? `${st.avgDays}d` : '–', 'avg to finish'], [st.longest ? st.longest.total : '–', 'longest (pages)']].map(([v, l]) => h('div', { class: 'stat' }, h('b', {}, String(v)), h('span', {}, l)))),
     st.authors.length ? h('div', { class: 'dim small' }, 'Most read: ', st.authors.map(([a, n]) => `${a} (${n})`).join(', ')) : null, st.genres.length ? h('div', { class: 'tags' }, st.genres.map(([g, n]) => h('span', { class: 'chip' }, `${g} · ${n}`))) : null,
     L.allQuotes(s).length ? h('div', { class: 'quote-of' }, (() => { const q = L.allQuotes(s)[Math.floor(Date.now() / 86400000) % L.allQuotes(s).length]; return [h('i', {}, `“${q.t}”`), h('small', {}, ` — ${q.author || q.book}`)]; })()) : null);
 }
+const KN = (kinds) => kinds ? (Array.isArray(kinds) ? kinds : [kinds]) : null;
+const chips = (arr, fn) => h('div', { class: 'tags' }, arr.map(fn));
+const worksChip = (m) => h('span', { class: 'chip', onClick: () => mediaSheet(m.id) }, `${m.title} · ${m.rating}`);
+/** Stats + patterns for the selected kind (or everything). Same card for books, games, anime, films … */
+function insights() {
+  const s = S(), kinds = ui.kind ? [ui.kind] : null, st = L.statsOf(s, kinds, {}, new Date()); if (!st.n) return null;
+  const mx = Math.max(1, ...st.hist), tp = L.tasteOf(s, kinds), fb = L.feedbackOf(s, kinds, new Date()), k1 = ui.kind ? L.kindOf(ui.kind) : null;
+  const cells = [[st.n, 'finished'], [st.avg != null ? st.avg.toFixed(1) : '–', 'avg rating'], ...(ui.kind === 'book' || !ui.kind ? [[st.pages ? st.pages.toLocaleString('en') : '–', 'pages']] : []), ...(st.hours ? [[`${st.hours}h`, 'logged time']] : [])].slice(0, 4);
+  return h('div', { class: 'card' }, h('div', { class: 'title' }, k1 ? `Your ${k1.name.toLowerCase()}, analysed` : 'Everything, analysed'),
+    h('div', { class: 'stat-grid' }, cells.map(([v, l]) => h('div', { class: 'stat' }, h('b', {}, String(v)), h('span', {}, l)))),
+    fb.map(t => h('div', { class: 'fb small' }, t)),
+    st.ratedN ? [h('div', { class: 'dim tiny' }, 'How you rate (1–10)'), bars(st.hist.map((v, i) => ({ v: v / mx, label: String(i + 1), title: `${v} rated ${i + 1}` })), { h: 44, color: 'var(--cyan)' })] : null,
+    st.years.length > 1 ? [h('div', { class: 'dim tiny' }, 'Finished per year'), chips(st.years.slice(-8), ([y, n]) => h('span', { class: 'chip', onClick: () => { ui.f.year = y; ui.tab = 'shelf'; ctx.render(); } }, `${y} · ${n}`))] : null,
+    st.decades.length > 1 ? [h('div', { class: 'dim tiny' }, 'By release decade'), chips(st.decades, ([d, n]) => h('span', { class: 'chip' }, `${d} · ${n}`))] : null,
+    st.genreAvg.length ? [h('div', { class: 'dim tiny' }, 'Genres by your average rating'), chips(st.genreAvg.slice(0, 8), ([g, a, n]) => h('span', { class: 'chip hot', onClick: () => { ui.f.genre = g; ctx.render(); } }, `${g} · ${a.toFixed(1)} (${n})`))] : st.genres.length ? [h('div', { class: 'dim tiny' }, 'Genres'), chips(st.genres.slice(0, 8), ([g, n]) => h('span', { class: 'chip', onClick: () => { ui.f.genre = g; ctx.render(); } }, `${g} · ${n}`))] : null,
+    st.makers.length ? h('div', { class: 'dim small' }, 'Most often: ', st.makers.map(([d, n]) => `${d} (${n})`).join(', ')) : null,
+    st.underrated.length ? [h('div', { class: 'dim tiny' }, 'You loved more than the crowd'), chips(st.underrated, worksChip)] : null,
+    st.overrated.length ? [h('div', { class: 'dim tiny' }, 'The crowd loved more than you'), chips(st.overrated, worksChip)] : null,
+    st.top.length ? [h('div', { class: 'dim tiny' }, 'Your top rated'), chips(st.top, worksChip)] : null,
+    tp.loved.length ? null : null);
+}
+/** Filters above the shelf: text, genre, minimum rating, year finished, sort. */
+function filterBar(list) {
+  const f = ui.f, genres = L.genresOf(list), years = [...new Set(list.map(m => (m.finishedAt || '').slice(0, 4)).filter(Boolean))].sort().reverse();
+  const sel = (val, opts, set, label) => h('select', { 'aria-label': label, onChange: (e) => { set(e.target.value); ctx.render(); } }, opts.map(([v, l]) => h('option', { value: v, ...(String(val) === String(v) ? { selected: true } : {}) }, l)));
+  const q = h('input', { type: 'search', placeholder: 'Search title or creator', value: f.q, 'aria-label': 'Search shelf', onInput: (e) => { f.q = e.target.value; clearTimeout(ui.qt); ui.qt = setTimeout(() => { ctx.render(); const el = document.querySelector('#view-mind .shelf-filter input'); if (el) { el.focus(); el.setSelectionRange(f.q.length, f.q.length); } }, 250); } });
+  const active = f.q || f.genre || f.min || f.year;
+  return h('div', { class: 'card slim shelf-filter' }, q, h('div', { class: 'filter-row' },
+    sel(f.genre, [['', 'Any genre'], ...genres.map(([g, n]) => [g, `${g} (${n})`])], v => f.genre = v, 'Genre'),
+    sel(f.min, [[0, 'Any rating'], [6, '6+'], [7, '7+'], [8, '8+'], [9, '9+'], [10, '10']], v => f.min = +v, 'Minimum rating'),
+    sel(f.year, [['', 'Any year'], ...years.map(y => [y, y])], v => f.year = v, 'Year finished'),
+    sel(f.sort, [['recent', 'Newest'], ['rating', 'Top rated'], ['title', 'A–Z'], ['year', 'Release year']], v => f.sort = v, 'Sort')),
+    active ? h('button', { class: 'btn sm ghost', onClick: () => { ui.f = { q: '', genre: '', min: 0, year: '', sort: f.sort }; ctx.render(); } }, 'Clear filters') : null);
+}
+/** Backlog ranked by your taste, for kinds without a free online catalogue (and as a first lane for the rest). */
+function backlogCard(kinds) {
+  const s = S(), dis = s.mediaMeta?.dismissed || [], wl = L.rankPlanned(s, kinds, 12).filter(x => !dis.includes(x.key)).slice(0, 8), ki = kinds.length === 1 ? L.kindOf(kinds[0]) : null;
+  return h('div', { class: 'card' }, h('div', { class: 'title' }, `${ki ? ki.emoji : '✨'} Next up from your list`),
+    wl.length ? [h('div', { class: 'dim tiny' }, 'Your plan-to list ranked by genres and creators you rated highly, nudged by the public score. Works offline.'),
+      h('div', { class: 'mlist' }, wl.map(x => { const m = x.media, k = L.kindOf(m.kind); return h('div', { class: 'mrow media', onClick: () => mediaSheet(m.id) }, m.cover ? h('img', { class: 'cover', src: m.cover, alt: '', loading: 'lazy', referrerpolicy: 'no-referrer' }) : h('span', { class: 'cover ph', style: { '--c': k.color } }, k.emoji), h('div', { class: 'grow' }, h('div', { class: 'mtitle' }, m.title), h('div', { class: 'msub' }, m.creator ? h('span', {}, m.creator) : null, m.year ? h('span', {}, String(m.year)) : null, m.pub ? h('span', { class: 'ok' }, `Public ${m.pub}`) : null), h('div', { class: 'dim tiny' }, x.reason)), h('button', { class: 'btn sm ghost', 'aria-label': 'Not interested', onClick: (e) => { e.stopPropagation(); up(st => L.dismissSuggestion(st, x.key)); } }, '✕')); }))]
+      : h('div', { class: 'dim small' }, `Rate a few finished items and put others on your plan-to list (add them, or import an IMDb watchlist, Goodreads to-read shelf, or Steam library). Citrus will rank them for you.`));
+}
+/** Year in review across all kinds. */
+function review() {
+  const s = S(), now = new Date(), ys = L.yearReview(s, ui.year || now.getFullYear(), now), years = [...new Set([String(now.getFullYear()), ...ys.years])];
+  const mx = Math.max(1, ...ys.months);
+  return [h('div', { class: 'seg wrap' }, years.map(y => h('button', { class: String(ui.year || now.getFullYear()) === y ? 'active' : '', onClick: () => { ui.year = y; ctx.render(); } }, y))),
+    !ys.n ? h('div', { class: 'card empty' }, `Nothing finished in ${ys.year} yet. Log and rate what you finish, and this page becomes your year in review.`) : [
+      h('div', { class: 'card space' }, h('div', { class: 'eyebrow' }, `${ys.year} in review`), h('div', { class: 'big' }, ys.n, h('small', {}, ' finished')), h('div', { class: 'dim tiny' }, ys.avg != null ? `Average rating ${ys.avg.toFixed(1)}/10` : ''),
+        ys.lines.map(t => h('div', { class: 'fb small' }, t)), bars(ys.months.map((v, i) => ({ v: v / mx, label: 'JFMAMJJASOND'[i], now: i === now.getMonth() && ys.year === String(now.getFullYear()), title: `${v}` })), { h: 44, color: 'var(--cyan)' })),
+      h('div', { class: 'card' }, h('div', { class: 'title' }, 'By category'), h('div', { class: 'mlist' }, ys.per.map(x => h('div', { class: 'mrow', onClick: () => { ui.kind = x.kind.id; ui.f = { q: '', genre: '', min: 0, year: ys.year, sort: 'rating' }; ui.tab = 'shelf'; ctx.render(); } }, h('span', { class: 'cover ph', style: { '--c': x.kind.color } }, x.kind.emoji), h('div', { class: 'grow' }, h('div', { class: 'mtitle' }, `${x.kind.name} · ${x.n}`), h('div', { class: 'msub' }, x.avg != null ? h('span', {}, `avg ${x.avg.toFixed(1)}`) : null, x.top ? h('span', { class: 'ok' }, `best: ${x.top.title}`) : null)))))),
+      ys.best.length ? h('div', { class: 'card' }, h('div', { class: 'title' }, 'Best of the year'), h('div', { class: 'mlist' }, ys.best.map(mediaRow))) : null,
+      ys.genres.length ? h('div', { class: 'card' }, h('div', { class: 'title' }, 'Your genres'), chips(ys.genres, ([g, n]) => h('span', { class: 'chip hot' }, `${g} · ${n}`)), ys.makers.length ? h('div', { class: 'dim small' }, 'Repeat names: ', ys.makers.map(([d, n]) => `${d} (${n})`).join(', ')) : null) : null,
+      ys.worst.length ? h('div', { class: 'card' }, h('div', { class: 'title' }, 'Not for you'), h('div', { class: 'mlist' }, ys.worst.map(mediaRow))) : null]];
+}
 function shelf() {
   const s = S(), list = L.mediaList(s, ui.kind), st = L.libraryStats(s, new Date()), y = new Date().getFullYear();
-  const groups = ['doing', 'planned', 'paused', 'done', 'dropped'].map(g => [g, list.filter(m => m.status === g).sort((a, b) => g === 'done' ? (b.finishedAt || '').localeCompare(a.finishedAt || '') : b.at - a.at)]).filter(([, l]) => l.length);
+  const shown = L.filterShelf(list, ui.f), groups = ['doing', 'planned', 'paused', 'done', 'dropped'].map(g => [g, shown.filter(m => m.status === g)]).filter(([, l]) => l.length);
   const goal = (k) => st.goal[k] || 0;
   const goalKinds = (ui.kind ? [ui.kind] : ['book']).filter(k => goal(k) || k === 'book');
   return [
@@ -66,6 +121,8 @@ function shelf() {
       goalKinds.map(k => { const g = goal(k), n = st.byKind[k].year; return h('button', { class: 'goal-ring', onClick: () => goalSheet(k), 'aria-label': `${L.kindOf(k).name} goal` }, ring(g ? n / g : null, { size: 64, stroke: 6, color: L.kindOf(k).color, label: g ? `${n}/${g}` : String(n), sub: L.kindOf(k).name.toLowerCase(), cls: 'breathing' })); })),
       st.doneYear ? bars(st.months.map((v, i) => ({ v: Math.min(1, v / Math.max(1, ...st.months)), label: 'JFMAMJJASOND'[i], now: i === new Date().getMonth(), title: `${v}` })), { h: 40, color: 'var(--cyan)' }) : null),
     ui.kind === 'book' ? booksInsights() : null,
+    insights(),
+    filterBar(list),
     h('div', { class: 'row' }, h('div', { class: 'title grow' }, 'Your shelf'), h('button', { class: 'btn sm primary', onClick: () => addSheet() }, '+ Log')),
     ...groups.map(([g, l]) => h('div', { class: 'card' }, h('div', { class: 'row' }, h('div', { class: 'title grow' }, g === 'doing' ? 'Now' : L.STATUS[g] === 'Plan to' ? 'Up next' : L.STATUS[g]), h('span', { class: 'dim tiny' }, l.length)), h('div', { class: 'mlist' }, l.slice(0, g === 'done' ? 30 : 60).map(mediaRow)))),
     !groups.length ? h('div', { class: 'card empty' }, h('p', {}, 'Log what you watch, read and play, rate it, and Citrus learns your taste. Import from Goodreads, IMDb, AniList or Steam under Connect.'), h('div', { class: 'row center' }, h('button', { class: 'btn primary', onClick: () => addSheet() }, 'Log something'), h('button', { class: 'btn', onClick: () => { ui.tab = 'connect'; ctx.render(); } }, 'Connect'))) : null,
@@ -77,7 +134,7 @@ async function loadSuggestions(kind) {
   ui.busy = kind; ui.suggErr = ''; ctx.render();
   try {
     const s = S(), dis = s.mediaMeta?.dismissed || [];
-    ui.sugg[kind] = kind === 'book' ? await L.worldSuggestions(s, dis) : await L.animeSuggestions(s, dis); L.cacheSet(kind, ui.sugg[kind]);
+    ui.sugg[kind] = kind === 'book' ? await L.worldSuggestions(s, dis) : await L.animeSuggestions(s, dis, kind); L.cacheSet(kind, ui.sugg[kind]);
   } catch (e) { ui.suggErr = e.message || 'Could not reach the service'; }
   ui.busy = ''; ctx.render();
 }
@@ -106,20 +163,20 @@ function bookDiscover() {
 }
 function discover() {
   const s = S(); if (ui.kind === 'book') return bookDiscover();
-  const kinds = (ui.kind ? [ui.kind] : ['anime']).filter(k => k === 'anime');
-  if (!ui.kind) return [...bookDiscover(), ...discoverKinds(kinds)];
-  return discoverKinds(kinds);
+  if (!ui.kind) return [backlogCard(null), ...bookDiscover(), ...discoverKinds(['anime', 'manga'])];
+  const online = ui.kind === 'anime' || ui.kind === 'manga';
+  return [backlogCard([ui.kind]), ...(online ? discoverKinds([ui.kind]) : [])];
 }
 function discoverKinds(kinds) {
   const s = S();
-  if (!kinds.length) return [h('div', { class: 'card empty' }, 'Suggestions are available for books (Open Library) and anime (AniList). Movies, shows and games: log them and rate them; they help the picks for the others.')];
+  if (!kinds.length) return [h('div', { class: 'card empty' }, 'Nothing to suggest yet.')];
   const out = [];
   for (const k of kinds) {
     if (ui.sugg[k] == null) ui.sugg[k] = L.cacheGet(k);
     const rated = L.mediaList(s, k).filter(m => m.status === 'done' && m.rating >= 8).length, list = (ui.sugg[k] || []).filter(x => !(s.mediaMeta?.dismissed || []).includes(x.key));
     const ki = L.kindOf(k);
     out.push(h('div', { class: 'card' }, h('div', { class: 'row' }, h('div', { class: 'title grow' }, `${ki.emoji} ${ki.name} for you`), h('button', { class: 'btn sm', disabled: ui.busy === k, onClick: () => loadSuggestions(k) }, ui.busy === k ? 'Finding…' : ui.sugg[k] ? 'Refresh' : 'Find some')),
-      !rated ? h('div', { class: 'dim small' }, `Rate a few ${ki.name.toLowerCase()} 8/10 or higher and Citrus will suggest more like them${k === 'anime' ? ' (anime from AniList only, because it needs their IDs)' : ''}.`) : null,
+      !rated ? h('div', { class: 'dim small' }, `Rate a few ${ki.name.toLowerCase()} 8/10 or higher and Citrus will suggest more like them${k === 'anime' || k === 'manga' ? ' (from AniList only, because it needs their IDs)' : ''}.`) : null,
       ui.suggErr && ui.busy === '' ? h('div', { class: 'late small' }, ui.suggErr) : null,
       list.length ? h('div', { class: 'mlist' }, list.map(x => suggRow(x))) : (rated && ui.sugg[k] ? h('div', { class: 'dim small' }, 'Nothing new right now — rate more, or refresh later.') : null)));
   }
@@ -142,7 +199,7 @@ function connect() {
   const paintLink = () => { link.replaceChildren(); if (key.value && /^\d{17}$/.test(sid.value.trim())) link.append(h('a', { class: 'btn sm', href: L.steamUrl(key.value.trim(), sid.value.trim()), target: '_blank', rel: 'noopener noreferrer' }, '1 · Open Steam data'), h('span', { class: 'dim' }, ' then copy everything on that page')); };
   key.addEventListener('input', paintLink); sid.addEventListener('input', paintLink);
   return [
-    h('div', { class: 'card' }, h('div', { class: 'title' }, '🍥 AniList'), h('div', { class: 'dim small' }, 'Live: your anime list, scores and progress. Public profiles only. Safe to run again — it never overwrites your own ratings.'),
+    h('div', { class: 'card' }, h('div', { class: 'title' }, '🍥 AniList'), h('div', { class: 'dim small' }, 'Live: your anime and manga lists, scores and progress. Public profiles only. Safe to run again — it never overwrites your own ratings.'),
       field('', aniIn), h('div', { class: 'row' }, h('button', { class: 'btn primary', disabled: !!ui.busy, onClick: async () => {
         const u = aniIn.value.trim(); if (!u) return toast('Enter your AniList username'); ui.busy = 'ani'; toast('Fetching…');
         try { const items = await L.fetchAniList(u); let r; up(s => { const x = L.upsertMany(s, items); r = x; return L.setMeta(x.state, { anilist: u, anilistAt: Date.now() }); }); ui.importMsg = `AniList: ${r.added} added, ${r.updated} updated, ${r.skipped} unchanged`; toast(ui.importMsg, 'ok'); }
@@ -169,7 +226,7 @@ function addSheet(preset = {}) {
   paintKind();
   const search = async () => {
     const t = q.value.trim(); if (!t) return; res.replaceChildren(h('div', { class: 'dim small' }, 'Searching…'));
-    try { const list = f.kind === 'book' ? await L.searchBooks(t) : f.kind === 'anime' ? await L.searchAnime(t) : []; res.replaceChildren(...list.map(it => h('div', { class: 'mrow media', onClick: () => { f.pre = it; sh.close(); mediaSheet(null, { ...it, status: f.status }); } }, it.cover ? h('img', { class: 'cover', src: it.cover, alt: '', referrerpolicy: 'no-referrer' }) : h('span', { class: 'cover ph' }, L.kindOf(it.kind).emoji), h('div', { class: 'grow' }, h('div', { class: 'mtitle' }, it.title), h('div', { class: 'msub' }, h('span', {}, it.creator || ''), h('span', {}, it.year || ''))))), !list.length ? h('div', { class: 'dim small' }, f.kind === 'book' || f.kind === 'anime' ? 'No match — use “Add as typed”.' : 'No search for this kind — use “Add as typed”.') : null); }
+    try { const list = f.kind === 'book' ? await L.searchBooks(t) : f.kind === 'anime' || f.kind === 'manga' ? await L.searchAnime(t, f.kind) : []; res.replaceChildren(...list.map(it => h('div', { class: 'mrow media', onClick: () => { f.pre = it; sh.close(); mediaSheet(null, { ...it, status: f.status }); } }, it.cover ? h('img', { class: 'cover', src: it.cover, alt: '', referrerpolicy: 'no-referrer' }) : h('span', { class: 'cover ph' }, L.kindOf(it.kind).emoji), h('div', { class: 'grow' }, h('div', { class: 'mtitle' }, it.title), h('div', { class: 'msub' }, h('span', {}, it.creator || ''), h('span', {}, it.year || ''))))), !list.length ? h('div', { class: 'dim small' }, f.kind === 'book' || f.kind === 'anime' ? 'No match — use “Add as typed”.' : 'No search for this kind — use “Add as typed”.') : null); }
     catch (e) { res.replaceChildren(h('div', { class: 'late small' }, e.message)); }
   };
   q.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); search(); } });
@@ -185,7 +242,7 @@ function mediaSheet(id, preset = {}) {
   const rateLabel = h('span', { class: 'dim tiny' }, '1–10, tap again to clear');
   const fmtBox = f.kind === 'book' || cur?.kind === 'book' ? field('Format', pick([['', 'Any'], ['paper', 'Paper'], ['ebook', 'E-book / Kindle'], ['audio', 'Audio']], f.format || '', v => { f.format = v; })) : null;
   const quotesBox = cur && cur.kind === 'book' ? h('div', { class: 'quotes' }, h('div', { class: 'title' }, 'Highlights'), (cur.quotes || []).map(q => h('div', { class: 'quote-row' }, h('i', {}, `“${q.t}”`), h('small', {}, q.p ? ` p.${q.p}` : ''), h('button', { class: 'btn sm ghost', 'aria-label': 'Remove', onClick: () => { up(st => L.removeQuote(st, id, q.id)); sh.close(); mediaSheet(id); } }, '✕')))) : null;
-  const dyn = h('div', {}), paintDyn = () => dyn.replaceChildren(f.kind === 'game' ? field('Hours played', hrs) : f.kind === 'movie' ? null : h('div', { class: 'grid2' }, field(`${f.kind === 'book' ? 'Page' : 'Episode'} now`, prog), field('Total', total)));
+  const dyn = h('div', {}), paintDyn = () => dyn.replaceChildren(f.kind === 'game' ? field('Hours played', hrs) : f.kind === 'movie' ? null : h('div', { class: 'grid2' }, field(`${f.kind === 'book' ? 'Page' : f.kind === 'manga' ? 'Chapter' : 'Episode'} now`, prog), field('Total', total)));
   const kindBox = cur ? null : pick(L.KINDS.map(x => [x.id, `${x.emoji} ${x.name}`, x.color]), f.kind, v => { f.kind = v; paintDyn(); paintStat(); });
   const statBox = h('div', {}), paintStat = () => { statBox.replaceChildren(pick(Object.keys(L.STATUS).map(x => [x, L.statusWord(f.kind, x)]), f.status, v => { f.status = v; })); }; paintDyn(); paintStat();
   sh.box.append(h('h3', {}, cur ? 'Details' : 'Log it'), kindBox, field('', title), field('', creator), statBox, dyn, fmtBox, field('Your rating', rate, rateLabel), field('Finished on', fin), field('Notes', review), quotesBox,
@@ -220,7 +277,7 @@ function goalSheet(kind) {
   sh.box.append(h('h3', {}, `${new Date().getFullYear()} ${k.name.toLowerCase()} goal`), field(`How many ${k.name.toLowerCase()} to finish this year?`, n), h('div', { class: 'row end' }, h('span', { class: 'grow' }), h('button', { class: 'btn', onClick: () => sh.close() }, 'Cancel'), h('button', { class: 'btn primary', onClick: () => { up(st => L.setGoal(st, kind, n.value)); sh.close(); } }, 'Save')));
 }
 export function renderLibrary() {
-  const body = ui.tab === 'shelf' ? shelf() : ui.tab === 'discover' ? discover() : connect();
+  const body = ui.tab === 'shelf' ? shelf() : ui.tab === 'discover' ? discover() : ui.tab === 'review' ? review() : connect();
   return [kindBar(), subBar(), ...body.flat().filter(Boolean)];
 }
 
