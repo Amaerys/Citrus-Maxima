@@ -1,6 +1,6 @@
 // Library: what you watch, read and play — records, imports (Goodreads / IMDb CSV, AniList, Steam), suggestions, notes.
 // Records are maps id → {…, at} like the rest of Mind, so devices merge key by key and deletions leave tombstones.
-import { keyOf, addDays, startOfDay, uid, safeUrl } from './util.js';
+import { keyOf, fromKey, addDays, startOfDay, uid, safeUrl } from './util.js';
 
 const rec = (o) => Object.values(o || {});
 export const KINDS = [
@@ -21,7 +21,7 @@ export function addMedia(s, f) {
   const kind = KINDS.some(k => k.id === f.kind) ? f.kind : 'book', now = Date.now(), id = f.id || uid();
   const m = { id, kind, title, status: STATUS[f.status] ? f.status : 'planned', rating: Math.max(0, Math.min(10, +f.rating || 0)), progress: Math.max(0, +f.progress || 0), total: Math.max(0, +f.total || 0),
     year: +f.year || 0, creator: String(f.creator || '').slice(0, 80), genres: (f.genres || []).map(g => String(g).slice(0, 30)).slice(0, 6), cover: f.cover ? safeUrl(f.cover) : '', src: f.src || 'manual', extId: f.extId ? String(f.extId) : '',
-    startedAt: f.startedAt || '', finishedAt: f.finishedAt || '', minutes: Math.max(0, +f.minutes || 0), review: String(f.review || '').slice(0, 800), createdAt: f.createdAt || now, at: now };
+    format: ['paper', 'ebook', 'audio'].includes(f.format) ? f.format : '', log: Array.isArray(f.log) ? f.log.slice(-400) : [], quotes: Array.isArray(f.quotes) ? f.quotes.slice(-100) : [], startedAt: f.startedAt || '', finishedAt: f.finishedAt || '', minutes: Math.max(0, +f.minutes || 0), review: String(f.review || '').slice(0, 800), createdAt: f.createdAt || now, at: now };
   if (m.status === 'done' && !m.finishedAt) m.finishedAt = keyOf(new Date());
   return { ...s, media: { ...s.media, [id]: m } };
 }
@@ -51,6 +51,47 @@ export function upsertMedia(s, f) {
   return Object.keys(patch).length ? { state: updateMedia(s, cur.id, patch), added: 0, updated: 1 } : { state: s, added: 0 };
 }
 export function upsertMany(s, list) { let st = s, added = 0, updated = 0; for (const f of list) { const r = upsertMedia(st, f); st = r.state; added += r.added || 0; updated += r.updated || 0; } return { state: st, added, updated, skipped: list.length - added - updated }; }
+
+
+// ───────────────────────────── reading log: sessions, pace, finish estimates, highlights
+export function logReading(s, id, { pages = 0, minutes = 0, date = '', pageNow = null } = {}) {
+  const b = s.media?.[id]; if (!b) return { state: s, finished: false };
+  const d = date || keyOf(new Date()), before = b.progress || 0;
+  let read = Math.max(0, Math.round(+pages || 0)); if (pageNow != null && pageNow !== '') read = Math.max(0, Math.round(+pageNow) - before);
+  const unit = b.kind === 'book' ? read : 0, mins = Math.max(0, Math.min(1440, Math.round(+minutes || 0)));
+  if (!read && !mins) return { state: s, finished: false };
+  const progress = b.total ? Math.min(b.total, before + read) : before + read, finished = !!b.total && progress >= b.total;
+  const log = [...(b.log || []), { d, p: read, m: mins }].slice(-400);
+  const st = updateMedia(s, id, { log, progress, status: finished ? 'done' : 'doing', ...(b.format === 'audio' && mins ? {} : {}) });
+  return { state: st, finished, unit };
+}
+export const sessionsOf = (s) => rec(s.media).flatMap(m => (m.log || []).map(x => ({ ...x, id: m.id })));
+export const readToday = (s, key) => rec(s.media).some(m => (m.log || []).some(x => x.d === key));
+export function readingStats(s, now = new Date()) {
+  const y = String(now.getFullYear()), all = sessionsOf(s), yr = all.filter(x => x.d.startsWith(y)), days = new Set(all.map(x => x.d));
+  let streak = 0, d = startOfDay(now); if (!days.has(keyOf(d))) d = addDays(d, -1); while (days.has(keyOf(d))) { streak++; d = addDays(d, -1); }
+  const from = keyOf(addDays(startOfDay(now), -13)), last14 = all.filter(x => x.d >= from);
+  const pace = last14.length ? last14.reduce((a, x) => a + x.p, 0) / 14 : 0, mpace = last14.length ? last14.reduce((a, x) => a + x.m, 0) / 14 : 0;
+  const done = rec(s.media).filter(m => m.kind === 'book' && m.status === 'done' && (m.finishedAt || '').startsWith(y));
+  const goal = s.mediaMeta?.goals?.book || 0, doy = Math.floor((startOfDay(now) - new Date(now.getFullYear(), 0, 0)) / 86400000), expected = goal ? goal * doy / 365 : 0;
+  const authors = {}, genres = {}; for (const m of done) { if (m.creator) authors[m.creator] = (authors[m.creator] || 0) + 1; for (const g of m.genres || []) { const k = lc(g); if (k && !BROAD.test(k)) genres[k] = (genres[k] || 0) + 1; } }
+  const top = (o) => Object.entries(o).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const span = done.filter(m => m.startedAt && m.finishedAt).map(m => Math.max(1, Math.round((fromKey(m.finishedAt) - fromKey(m.startedAt)) / 86400000) + 1));
+  return { pagesYear: done.reduce((a, m) => a + (m.total || 0), 0) || yr.reduce((a, x) => a + x.p, 0), loggedPages: yr.reduce((a, x) => a + x.p, 0), minutesYear: yr.reduce((a, x) => a + x.m, 0), streak, pace, mpace, readToday: days.has(keyOf(now)),
+    booksYear: done.length, goal, expected, ahead: goal ? done.length - expected : null, authors: top(authors), genres: top(genres), avgDays: span.length ? Math.round(span.reduce((a, x) => a + x, 0) / span.length) : null,
+    longest: done.filter(m => m.total).sort((a, b) => b.total - a.total)[0] || null, shortest: done.filter(m => m.total).sort((a, b) => a.total - b.total)[0] || null,
+    weekPages: Array.from({ length: 7 }, (_, i) => { const k = keyOf(addDays(startOfDay(now), i - 6)); return { k, p: all.filter(x => x.d === k).reduce((a, x) => a + x.p, 0) }; }) };
+}
+/** Date you'd finish at your recent pace (or 20 pages a day when there is no history). */
+export function finishEta(s, b, now = new Date()) {
+  if (b.kind !== 'book' || !b.total || b.status !== 'doing') return null;
+  const left = b.total - (b.progress || 0); if (left <= 0) return null;
+  const mine = (b.log || []).filter(x => x.d >= keyOf(addDays(startOfDay(now), -13))), pace = mine.length ? mine.reduce((a, x) => a + x.p, 0) / 14 : readingStats(s, now).pace || 20;
+  const days = Math.max(1, Math.ceil(left / Math.max(3, pace))); return { days, date: keyOf(addDays(startOfDay(now), days)), left, pace: Math.round(pace) };
+}
+export function addQuote(s, id, { text, page = 0 }) { const b = s.media?.[id], t = String(text || '').trim().slice(0, 600); return b && t ? updateMedia(s, id, { quotes: [...(b.quotes || []), { id: uid(), t, p: +page || 0, d: keyOf(new Date()) }].slice(-100) }) : s; }
+export function removeQuote(s, id, qid) { const b = s.media?.[id]; return b ? updateMedia(s, id, { quotes: (b.quotes || []).filter(q => q.id !== qid) }) : s; }
+export const allQuotes = (s) => rec(s.media).flatMap(m => (m.quotes || []).map(q => ({ ...q, book: m.title, author: m.creator, bookId: m.id }))).sort((a, b) => b.d.localeCompare(a.d));
 
 // ───────────────────────────── stats
 export function libraryStats(s, now = new Date()) {
@@ -98,7 +139,7 @@ export function parseExport(text) {
     const items = rows.filter(r => r.Title).map(r => {
       const shelf = r['Exclusive Shelf'], rating = +r['My Rating'] || 0, isbn = unExcel(r.ISBN13 || r.ISBN);
       return { kind: 'book', title: r.Title.replace(/\s*\([^)]*#\d+[^)]*\)\s*$/, ''), creator: r.Author, year: +r['Original Publication Year'] || +r['Year Published'] || 0, total: +r['Number of Pages'] || 0,
-        status: shelf === 'read' ? 'done' : shelf === 'currently-reading' ? 'doing' : shelf === 'to-read' ? 'planned' : 'planned', rating: rating * 2, finishedAt: dateKeyOf(r['Date Read']), review: r['My Review'] || '', src: 'goodreads', extId: r['Book Id'] || isbn };
+        genres: (r.Bookshelves || '').split(',').map(x => x.trim()).filter(x => x && !/^(to-read|read|currently-reading)$/.test(x)).slice(0, 8), status: shelf === 'read' ? 'done' : shelf === 'currently-reading' ? 'doing' : shelf === 'to-read' ? 'planned' : 'planned', rating: rating * 2, finishedAt: dateKeyOf(r['Date Read']), review: r['My Review'] || '', src: 'goodreads', extId: r['Book Id'] || isbn };
     });
     return { source: 'Goodreads', items };
   }
@@ -153,21 +194,104 @@ export async function animeSuggestions(s, dismissed = []) {
 const OL = 'https://openlibrary.org';
 const olJson = async (path) => { const r = await fetch(`${OL}${path}`); if (!r.ok) throw new Error(`Open Library ${r.status}`); return r.json(); };
 const olItem = (d) => ({ kind: 'book', title: d.title, creator: (d.author_name || [])[0] || '', year: d.first_publish_year || 0, total: d.number_of_pages_median || 0, genres: (d.subject || []).slice(0, 4), cover: d.cover_i ? `https://covers.openlibrary.org/b/id/${d.cover_i}-M.jpg` : '', src: 'openlibrary', extId: d.key || '' });
-export async function searchBooks(q) { const j = await olJson(`/search.json?q=${encodeURIComponent(q)}&limit=8&fields=key,title,author_name,first_publish_year,number_of_pages_median,cover_i,subject`); return (j.docs || []).map(olItem); }
-const GENERIC = /^(fiction|nonfiction|non-fiction|general|accessible book|protected daisy|in library|large type books|reading level|open library|new york times|english|american|literature|books and reading|lending library)/i;
-export async function bookSuggestions(s, dismissed = []) {
-  const books = rec(s.media).filter(m => m.kind === 'book'), liked = books.filter(m => m.status === 'done' && m.rating >= 8).sort((a, b) => b.rating - a.rating);
-  const have = new Set(books.map(m => norm(m.title))), seen = new Set(), out = [];
-  const push = (d, reason) => { const it = olItem(d); const k = `ol:${it.extId}`; if (!it.title || have.has(norm(it.title)) || seen.has(k) || dismissed.includes(k)) return; seen.add(k); out.push({ key: k, item: { ...it, status: 'planned' }, reason, score: d.ratings_average ? `${d.ratings_average.toFixed(1)}/5` : '' }); };
-  const authors = [...new Set(liked.map(m => m.creator).filter(Boolean))].slice(0, 3);
-  for (const a of authors) { try { const j = await olJson(`/search.json?author=${encodeURIComponent(a)}&sort=rating&limit=6&fields=key,title,author_name,first_publish_year,number_of_pages_median,cover_i,subject,ratings_average`); const src = liked.find(m => m.creator === a); for (const d of j.docs || []) push(d, `More from ${a}, who you rated ${src.rating}/10`); } catch {} }
-  for (const b of liked.slice(0, 3)) {
-    try {
-      const f = await olJson(`/search.json?title=${encodeURIComponent(b.title)}&limit=1&fields=subject`); const subs = (f.docs?.[0]?.subject || []).filter(x => !GENERIC.test(x)).slice(0, 2);
-      for (const sub of subs) { const j = await olJson(`/search.json?subject=${encodeURIComponent(sub)}&sort=rating&limit=6&fields=key,title,author_name,first_publish_year,number_of_pages_median,cover_i,subject,ratings_average`); for (const d of j.docs || []) push(d, `Similar to ${b.title} (${sub})`); }
-    } catch {}
+const OLF = 'key,title,author_name,author_key,first_publish_year,number_of_pages_median,cover_i,subject,ratings_average,ratings_count,want_to_read_count,edition_count';
+const lc = (x) => String(x || '').toLowerCase().trim();
+const olCand = (d) => ({ item: olItem(d), q: { avg: d.ratings_average || 0, n: d.ratings_count || 0, want: d.want_to_read_count || 0, subjects: (d.subject || []).map(lc) } });
+const gbItem = (v) => { const i = v.volumeInfo || {}; return { kind: 'book', title: i.title || '', creator: (i.authors || [])[0] || '', year: +String(i.publishedDate || '').slice(0, 4) || 0, total: i.pageCount || 0, genres: (i.categories || []).slice(0, 4), cover: (i.imageLinks?.thumbnail || '').replace(/^http:/, 'https:'), src: 'googlebooks', extId: `gb:${v.id}` }; };
+/** Whole-catalogue search: Open Library (tens of millions of works) plus Google Books, merged and de-duplicated. */
+export async function searchBooks(q) {
+  const [ol, gb] = await Promise.allSettled([
+    olJson(`/search.json?q=${encodeURIComponent(q)}&limit=8&fields=${OLF}`).then(j => (j.docs || []).map(d => olCand(d).item)),
+    fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=8&printType=books&fields=items(id,volumeInfo(title,authors,publishedDate,pageCount,categories,imageLinks/thumbnail))`).then(r => r.ok ? r.json() : { items: [] }).then(j => (j.items || []).map(gbItem)),
+  ]);
+  if (ol.status === 'rejected' && gb.status === 'rejected') throw new Error('Could not reach the book catalogues');
+  const out = [], seen = new Set();
+  for (const it of [...(ol.value || []), ...(gb.value || [])]) { const k = norm(it.title) + '|' + norm(it.creator.split(' ').pop()); if (!it.title || seen.has(k)) continue; seen.add(k); out.push(it); }
+  return out.slice(0, 12);
+}
+
+// ───────────────────────────── taste: what your ratings and shelves say you like
+const BROAD = /^(fiction|nonfiction|non-fiction|general|accessible book|protected daisy|in library|large type books|reading level|open library|new york times|english|american|literature|books and reading|lending library|history|novel|novels|read|to-read|currently-reading|favorites|favourites|owned|kindle|audiobook|ebook|books|wishlist|library|default|unread|dnf|re-read|reference)/i;
+export function bookTaste(s, extra = {}) {
+  const subj = {}, auth = {}, loved = [];
+  for (const b of mediaList(s, 'book')) {
+    const w = b.status === 'done' && b.rating ? (b.rating - 5.5) / 4.5 : b.status === 'doing' ? 0.25 : 0; if (!w) continue;
+    if (w >= 0.5) loved.push(b);
+    if (b.creator) auth[b.creator] = (auth[b.creator] || 0) + w;
+    for (const g of [...(b.genres || []), ...(extra[norm(b.title)] || [])]) { const k = lc(g); if (!k || BROAD.test(k)) continue; subj[k] = (subj[k] || 0) + w; }
   }
-  return out.slice(0, 14);
+  const rank = (o) => Object.entries(o).sort((a, b) => b[1] - a[1]);
+  return { subjects: rank(subj).filter(([, w]) => w > 0), avoid: rank(subj).filter(([, w]) => w < -0.4).map(([k]) => k), authors: rank(auth).filter(([, w]) => w > 0.5), loved: loved.sort((a, b) => b.rating - a.rating), weights: subj };
+}
+/** Your own to-read pile, ordered by how well each book fits your taste. Works offline — no catalogue needed. */
+export function pileRanking(s, n = 10) {
+  const t = bookTaste(s), A = Object.fromEntries(t.authors), W = t.weights, out = [];
+  for (const b of mediaList(s, 'book')) {
+    if (b.status !== 'planned') continue;
+    const a = A[b.creator] || 0, gs = (b.genres || []).map(lc).filter(g => g && !BROAD.test(g)), g = gs.length ? gs.reduce((x, k) => x + (W[k] || 0), 0) / Math.sqrt(gs.length) : 0;
+    const len = b.total ? (b.total <= 350 ? 0.25 : b.total > 700 ? -0.3 : 0) : 0, score = a * 1.6 + g + len;
+    if (score <= 0) continue;
+    const topG = gs.filter(k => (W[k] || 0) > 0).sort((x, y) => W[y] - W[x]).slice(0, 2);
+    const reason = a > 0.5 ? `You rated ${b.creator} highly` : topG.length ? `Same shelves as books you loved: ${topG.join(', ')}` : 'Short and a good fit';
+    out.push({ key: `pile:${b.id}`, media: b, reason, score });
+  }
+  const seen = new Set();   // two editions of the same book count once
+  return out.sort((x, y) => y.score - x.score).filter(x => { const k = `${lc(x.media.creator)}|${norm(x.media.title).split(' ').slice(0, 3).join(' ')}`; return !seen.has(k) && seen.add(k); }).slice(0, n);
+}
+const subjCache = () => { try { return JSON.parse(localStorage.getItem('citrus.olsubj') || '{}'); } catch { return {}; } };
+async function enrichSubjects(s, max = 8) {
+  const cache = subjCache(); let fetched = 0;
+  for (const b of bookTaste(s).loved) {
+    const k = norm(b.title); if (cache[k] || fetched >= max) continue; fetched++;
+    try { const j = await olJson(`/search.json?title=${encodeURIComponent(b.title)}&author=${encodeURIComponent(b.creator || '')}&limit=1&fields=subject`); cache[k] = (j.docs?.[0]?.subject || []).map(lc).filter(x => !BROAD.test(x)).slice(0, 14); } catch { cache[k] = []; }
+  }
+  if (fetched) try { localStorage.setItem('citrus.olsubj', JSON.stringify(cache)); } catch {}
+  return cache;
+}
+
+// ───────────────────────────── explore the whole catalogue
+export const EXPLORE = [
+  ['fantasy', '🐉', 'Fantasy', 'fantasy'], ['scifi', '🚀', 'Science fiction', 'science fiction'], ['mystery', '🕵️', 'Mystery', 'mystery'], ['horror', '🕯', 'Horror', 'horror'], ['romance', '💞', 'Romance', 'romance'], ['historical', '🏛', 'Historical fiction', 'historical fiction'],
+  ['literary', '✒️', 'Literary fiction', 'literary fiction'], ['classics', '📜', 'Classics', 'classics', '[* TO 1950]'], ['philosophy', '🧠', 'Philosophy', 'philosophy'], ['psychology', '🔍', 'Psychology', 'psychology'], ['science', '🔬', 'Science', 'popular science'], ['history', '🗺', 'History', 'world history'],
+  ['biography', '🪪', 'Biography', 'biography'], ['medicine', '🩺', 'Medicine', 'medicine'], ['poetry', '🪶', 'Poetry', 'poetry'], ['short', '📖', 'Short stories', 'short stories'], ['essays', '📝', 'Essays', 'essays'], ['graphic', '🎨', 'Graphic novels', 'graphic novels'],
+  ['russian', '🇷🇺', 'Russian', 'russian literature'], ['japanese', '🇯🇵', 'Japanese', 'japanese literature'], ['latam', '🌎', 'Latin American', 'latin american literature'], ['african', '🌍', 'African', 'african literature'], ['arabic', '🕌', 'Arabic', 'arabic literature'], ['french', '🇫🇷', 'French', 'french literature'],
+  ['german', '🇩🇪', 'German', 'german literature'], ['indian', '🇮🇳', 'Indian', 'indian literature'], ['persian', '🏺', 'Persian', 'persian literature'], ['chinese', '🇨🇳', 'Chinese', 'chinese literature'], ['nordic', '❄️', 'Nordic', 'scandinavian literature'], ['korean', '🇰🇷', 'Korean', 'korean literature'], ['nobel', '🏅', 'Nobel laureates', 'nobel prize winners'],
+];
+async function topInSubject(subject, { before = '', limit = 24, minRatings = 20 } = {}) {
+  const q = `subject:"${subject}"${before ? ` first_publish_year:${before}` : ''}`;
+  const j = await olJson(`/search.json?q=${encodeURIComponent(q)}&sort=rating&limit=${limit}&fields=${OLF}`);
+  return (j.docs || []).map(olCand).filter(c => c.q.n >= minRatings && c.q.avg >= 3.6);
+}
+export async function exploreCatalogue(id, s, dismissed = []) {
+  const e = EXPLORE.find(x => x[0] === id); if (!e) return [];
+  const have = new Set(mediaList(s, 'book').map(m => norm(m.title))), seen = new Set(), taste = bookTaste(s);
+  return (await topInSubject(e[3], { before: e[4] || '' })).map(c => ({ ...c, score: quality(c.q) + tasteMatch(c.q, taste) * 0.5 })).sort((a, b) => b.score - a.score)
+    .filter(c => !have.has(norm(c.item.title)) && !dismissed.includes(`ol:${c.item.extId}`) && !seen.has(c.item.extId) && seen.add(c.item.extId))
+    .slice(0, 12).map(c => ({ key: `ol:${c.item.extId}`, item: { ...c.item, status: 'planned' }, reason: `Top rated in ${e[2]}`, score: c.q.avg ? `${c.q.avg.toFixed(1)}/5 · ${c.q.n.toLocaleString('en')} ratings` : '' }));
+}
+const quality = (q) => Math.max(0, Math.min(1, (q.avg - 3) / 2)) * Math.min(1, Math.log10(q.n + 1) / 3) * 0.7 + Math.min(1, Math.log10(q.want + 1) / 4) * 0.3;
+const tasteMatch = (q, t) => Math.max(0, Math.min(1, q.subjects.reduce((x, k) => x + Math.max(0, t.weights[k] || 0), 0) / 3));
+export const forYouSuggestions = (...a) => worldSuggestions(...a);
+/** Lanes of recommendations drawn from the whole catalogue, each explained, scored by your taste × quality × popularity. */
+export async function worldSuggestions(s, dismissed = []) {
+  const extra = await enrichSubjects(s), taste = bookTaste(s, extra), have = new Set(mediaList(s, 'book').map(m => norm(m.title))), seen = new Set();
+  const day = Math.floor(Date.now() / 86400000);
+  const tasks = [];
+  taste.authors.slice(0, 3).forEach(([a, w]) => tasks.push({ id: `a:${a}`, title: `More from ${a}`, run: async () => (await olJson(`/search.json?author=${encodeURIComponent(a)}&sort=rating&limit=10&fields=${OLF}`)).docs.map(olCand).filter(c => c.q.n >= 5) }));
+  const subs = taste.subjects.map(([k]) => k).slice(0, 12);
+  subs.slice(0, 3).forEach(k => tasks.push({ id: `s:${k}`, title: `Top rated in “${k}”`, run: () => topInSubject(k, { minRatings: 30 }) }));
+  if (subs[0]) tasks.push({ id: 'classics', title: `Classics in “${subs[0]}”`, run: () => topInSubject(subs[0], { before: '[* TO 1965]', minRatings: 40 }) });
+  subs.slice(3, 6).forEach(k => tasks.push({ id: `adj:${k}`, title: `Next door: “${k}”`, run: () => topInSubject(k, { minRatings: 25 }) }));
+  const world = EXPLORE.filter(e => /literature$/.test(e[3])); for (let i = 0; i < 2; i++) { const e = world[(day * 2 + i) % world.length]; tasks.push({ id: `w:${e[0]}`, title: `Around the world: ${e[2]}`, run: () => topInSubject(e[3], { minRatings: 15 }) }); }
+  const res = await Promise.allSettled(tasks.map(t => t.run())), lanes = [];
+  res.forEach((r, i) => {
+    if (r.status !== 'fulfilled') return;
+    const items = r.value.map(c => ({ c, sc: quality(c.q) * 0.5 + tasteMatch(c.q, taste) * 0.5 })).sort((a, b) => b.sc - a.sc)
+      .filter(({ c }) => c.item.title && !have.has(norm(c.item.title)) && !dismissed.includes(`ol:${c.item.extId}`) && !seen.has(c.item.extId) && !c.q.subjects.some(x => taste.avoid.includes(x)))
+      .slice(0, 6).map(({ c }) => { seen.add(c.item.extId); return { key: `ol:${c.item.extId}`, item: { ...c.item, status: 'planned' }, reason: tasks[i].title, score: c.q.avg ? `${c.q.avg.toFixed(1)}/5 · ${c.q.n.toLocaleString('en')}` : '' }; });
+    if (items.length) lanes.push({ id: tasks[i].id, title: tasks[i].title, items });
+  });
+  return { lanes, taste: { subjects: subs.slice(0, 6), authors: taste.authors.slice(0, 4).map(a => a[0]), based: taste.loved.length } };
 }
 
 // ───────────────────────────── Steam: the browser can't call Steam directly, so you paste what the API returns

@@ -119,6 +119,7 @@ export function habitDone(s, h, key, apps, todayKey) {
 }
 export function autoDone(s, h, key, apps, todayKey) {
   if (!h.link) return false;
+  if (h.link === 'reading') return Object.values(s.media || {}).some(m => (m.log || []).some(x => x.d === key));   // logged a reading session in Library
   const [app, metric] = h.link.split(':');
   if (metric) { const c = metricCell(s, h.link, key); return !!c && c.v >= (h.threshold || c.goal || 1); }
   if (key !== todayKey) return false;
@@ -443,6 +444,7 @@ export function starterKit(s) {
     { kind: 'habit', name: 'Gym', emoji: '💪', area: 'health', freq: { type: 'weekly', n: 3 }, link: 'orange', why: 'Counts automatically when Orange says you trained' },
     { kind: 'habit', name: 'Yuzu reviews', emoji: '🍋', area: 'learning', freq: { type: 'daily' }, link: 'yuzu', why: 'Counts automatically when Yuzu says you are done' },
     { kind: 'habit', name: 'German session', emoji: '🇩🇪', area: 'learning', freq: { type: 'daily' }, link: 'mephisto', why: 'Counts automatically from Mephisto' },
+    { kind: 'habit', name: 'Read', emoji: '📚', area: 'learning', freq: { type: 'daily' }, link: 'reading', why: 'Counts when you log a reading session' },
     { kind: 'habit', name: 'Walk 20 minutes', emoji: '🚶', area: 'health', freq: { type: 'days', days: [0, 1, 2, 3, 4, 5, 6] }, minutes: 20, why: 'Citrus finds time for it in your day' },
     { kind: 'aim', title: 'Pass USMLE Step 1', area: 'learning', milestones: ['Finish first pass of the content', 'Question bank at 50%', 'First full practice exam', 'Book the exam date'] },
     { kind: 'aim', title: 'Be consistently fit', area: 'health', milestones: ['Four weeks of 3 sessions', 'Track progress in Orange', 'Eight weeks in a row'] },

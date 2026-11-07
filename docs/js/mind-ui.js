@@ -5,7 +5,7 @@ import { weekStartOf } from './planner.js';
 import * as M from './mind.js';
 import { ring, spark, bars, heat, radar, tree } from './mind-viz.js';
 import * as L from './media.js';
-import { initMedia, renderLibrary, renderNotes, mediaSearchItems, quickNote, quickLog } from './media-ui.js';
+import { initMedia, logReadingSheet, renderLibrary, renderNotes, mediaSearchItems, quickNote, quickLog } from './media-ui.js';
 
 let ctx = null;
 export function initMind(c) { ctx = c; ctx.openTask = (p) => openTask(p); initMedia(ctx); }
@@ -170,7 +170,7 @@ function starterCard() {
 function nowCard() {
   const s = S(), list = L.nowPlaying(s).slice(0, 3);
   return h('div', { class: 'card' }, h('div', { class: 'row' }, h('div', { class: 'title grow' }, 'Now'), h('button', { class: 'btn sm ghost', onClick: () => { ui.seg = 'library'; ctx.render(); } }, 'Library'), h('button', { class: 'btn sm ghost', onClick: quickNote }, '+ Note'), h('button', { class: 'btn sm ghost', onClick: quickLog }, '+ Log')),
-    list.length ? h('div', { class: 'now-row' }, list.map(m => { const k = L.kindOf(m.kind); return h('button', { class: 'now-chip', style: { '--c': k.color }, onClick: () => { ui.seg = 'library'; ctx.render(); } }, h('span', {}, k.emoji), h('b', {}, m.title), m.total ? h('small', {}, `${m.progress || 0}/${m.total}`) : null); })) : h('div', { class: 'dim small' }, 'Nothing in progress. Log what you are reading, watching or playing.'));
+    list.length ? h('div', { class: 'now-row' }, list.map(m => { const k = L.kindOf(m.kind); return h('button', { class: 'now-chip', style: { '--c': k.color }, onClick: () => { if (m.kind === 'book') logReadingSheet(m.id); else { ui.seg = 'library'; ctx.render(); } } }, h('span', {}, k.emoji), h('b', {}, m.title), m.total ? h('small', {}, `${m.progress || 0}/${m.total}`) : null); })) : h('div', { class: 'dim small' }, 'Nothing in progress. Log what you are reading, watching or playing.'));
 }
 function overview() {
   return [brainHero(), captureBar(), starterCard(), inboxCard(), focusCard(), nowCard(), balanceCard(), trendCard()];
@@ -240,7 +240,7 @@ function habitSheet(id) {
       f.freq.type === 'weekly' ? h('div', { class: 'row' }, h('button', { type: 'button', class: 'btn sm', onClick: () => { f.freq.n = Math.max(1, f.freq.n - 1); paintFreq(); } }, '−'), h('b', {}, `${f.freq.n}× a week`), h('button', { type: 'button', class: 'btn sm', onClick: () => { f.freq.n = Math.min(7, f.freq.n + 1); paintFreq(); } }, '+')) : null);
   }; paintFreq();
   const remindT = h('input', { type: 'time', value: f.remindTime || '' });
-  const linkSel = h('select', {}, h('option', { value: '' }, 'Manual (I tick it)'), ...Object.entries(a).filter(([, v]) => v).map(([k, v]) => h('option', { value: v.app || k }, `${v.title || k} says I'm done today`)), ...M.metricSeries(s).map(m => h('option', { value: m.key }, `${m.label} (${m.app}) reaches its goal`)));
+  const linkSel = h('select', {}, h('option', { value: '' }, 'Manual (I tick it)'), h('option', { value: 'reading' }, 'I log a reading session (Library)'), ...Object.entries(a).filter(([, v]) => v).map(([k, v]) => h('option', { value: v.app || k }, `${v.title || k} says I'm done today`)), ...M.metricSeries(s).map(m => h('option', { value: m.key }, `${m.label} (${m.app}) reaches its goal`)));
   linkSel.value = f.link || '';
   const stats = cur && (() => { const st = M.habitStreak(s, cur, n, a), cells = []; const start = weekStartOf(addDays(n, -7 * 19)); for (let i = 0; i < 140; i++) { const d = addDays(start, i), k = keyOf(d); cells.push(d > n ? { key: k, blank: true } : { key: k, v: M.habitDue(cur, d) ? (M.habitDone(s, cur, k, a, keyOf(n)) ? 1 : 0) : null, title: fmtDate(d), today: k === keyOf(n) }); }
     return h('div', { class: 'hstats' }, h('div', { class: 'kv' }, h('span', {}, 'Streak'), h('b', {}, `${st.cur} ${st.unit === 'wk' ? 'weeks' : 'days'}`), h('span', {}, 'Best'), h('b', {}, st.best)), h('div', { class: 'kv' }, h('span', {}, '7 days'), h('b', {}, pctTxt(M.habitRate(s, cur, n, 7, a))), h('span', {}, '30 days'), h('b', {}, pctTxt(M.habitRate(s, cur, n, 30, a)))), heat(cells, { color: areaColor(M.habitArea(s, cur)) })); })();

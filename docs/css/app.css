@@ -343,3 +343,9 @@ nav.tabs button.active { color: var(--orange); }
 .jump + .jump { margin-top: 10px; }
 
 .open-link { color: var(--orange2); font-weight: 600; text-decoration: none; } .mrow { min-width: 0; } .mrow .btn { flex: none; }
+
+/* reading */
+.card.reading .pace { margin: 8px 0 2px; font-size: 12.5px; } .cur-book { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--line); margin-top: 8px; cursor: pointer; } .cur-book .bar.thin { margin-top: 6px; }
+.explore { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; } .chip.xp { cursor: pointer; padding: 6px 10px; transition: transform .12s; } .chip.xp:active { transform: scale(.95); }
+.quotes { margin: 10px 0; } .quote-row { display: flex; align-items: flex-start; gap: 6px; padding: 6px 0; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); } .quote-row i { flex: 1; } .quote-of { margin-top: 10px; padding: 10px 12px; border-left: 3px solid var(--orange); background: var(--orange-soft); border-radius: 0 10px 10px 0; font-size: 13px; }
+.col { display: grid; gap: 4px; justify-items: center; align-self: end; }

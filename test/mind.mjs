@@ -168,7 +168,7 @@ const rawLeak = (page) => page.evaluate(() => /\b(null|undefined|NaN|\[object Ob
   await page.click('#view-mind .m-node >> nth=0').catch(() => {}); 
   await page.keyboard.press('6').catch(() => {});
   const state = await page.evaluate(() => JSON.parse(localStorage.getItem('citrus.state.v1')));
-  check(Object.keys(state.habits).length === 5 && Object.keys(state.reflections).length === 1 && Object.keys(state.resolutions).length === 1, 'everything is in saved state');
+  check(Object.keys(state.habits).length === 6 && Object.keys(state.reflections).length === 1 && Object.keys(state.resolutions).length === 1, 'everything is in saved state');
   // search finds mind things
   await page.keyboard.press('/'); await page.fill('.search input', 'Read 24'); await sleep(200); check(/Resolution/.test(await page.locator('.search .res').innerText()), 'search finds a resolution'); await page.keyboard.press('Escape');
   // breathing
@@ -193,6 +193,13 @@ const rawLeak = (page) => page.evaluate(() => /\b(null|undefined|NaN|\[object Ob
   await page.click('#view-mind .lib-tabs button:has-text("Connect")'); await page.setInputFiles('#view-mind input[type=file]', { name: 'goodreads.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) }); await sleep(400);
   check(/Goodreads: 2 added/.test(await page.locator('#view-mind').innerText()), 'Goodreads export imported');
   await page.click('#view-mind .lib-tabs button:has-text("Shelf")'); check((await page.locator('#view-mind .mrow.media').allInnerTexts()).some(x => /Dune/.test(x) && /★ 10/.test(x)), 'imported rating is on the 10-point scale');
+  await page.click('#view-mind .kinds button:has-text("Books")'); await sleep(300); check(await page.locator('#view-mind .card.reading').count() === 1, 'Books shows the reading dashboard');
+  await page.click('#view-mind .mrow.media:has-text("Piranesi")'); await sleep(250); await page.click('.sheet .seg button:has-text("Reading")'); await page.fill('.sheet input[type=number] >> nth=1', '272'); await page.click('.sheet .btn.primary:has-text("Save")'); await sleep(300);
+  await page.click('#view-mind .card.reading .btn:has-text("Log reading")'); await sleep(250); await page.fill('.sheet input[placeholder="pages read"]', '40'); await page.fill('.sheet textarea', 'A line worth keeping'); await page.click('.sheet .btn.primary:has-text("Log")'); await sleep(350);
+  check(/p\. 40\/272/.test(await page.locator('#view-mind .cur-book').first().innerText()), 'logging reading moves the page counter');
+  check(/1\s*day streak/.test(await page.locator('#view-mind .card.reading .big').innerText()), 'reading streak starts');
+  await page.click('#view-mind .lib-tabs button:has-text("Discover")'); await sleep(300); check(await page.locator('#view-mind .explore .chip').count() > 20, 'Discover shows the whole-catalogue explorer'); check(/Next up from your pile|whole world of books/.test(await page.locator('#view-mind').innerText()), 'Discover shows pile ranking and world books');
+  await page.click('#view-mind .lib-tabs button:has-text("Shelf")'); await sleep(200);
   check(await overflow(page) <= 0, 'no overflow in Library @360'); await sleep(900); await page.screenshot({ path: `${shots}/12-library-360.png`, fullPage: true });
   await seg(page, 'Notes'); await page.click('#view-mind button:has-text("+ Note")'); await page.fill('.sheet input[type=text] >> nth=0', 'Ideas'); await page.fill('.sheet textarea', 'Build a Mars rover'); await page.fill('.sheet input[placeholder="#tags"]', '#space'); await page.click('.sheet .btn.primary:has-text("Save")'); await sleep(300);
   check(await page.locator('#view-mind .mrow.memo').count() === 1, 'note saved'); await page.fill('#view-mind .memo-search input', 'rover'); await sleep(500); check(await page.locator('#view-mind .mrow.memo').count() === 1, 'notes search finds it');
