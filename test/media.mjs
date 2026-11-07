@@ -163,4 +163,21 @@ t('pile ranking: favours authors and shelves you rated highly, collapses edition
   console.log('  ✓ imdb list types, did-not-finish, sync correction, preview summary');
 }
 
+// original titles + English in brackets
+await (async () => {
+  try {
+    const hdr = 'Const,Your Rating,Date Rated,Title,Original Title,Title Type,Year,Genres,Directors';
+    const csv = [hdr, 'tt1,8,2024-01-02,"Die Frau die singt - Incendies","Incendies",Film,2010,Drama,X', 'tt2,7,2024-01-02,"Gefangen","Prisoners",Film,2013,Drama,X', 'tt3,9,2024-01-02,"Parasit","Gisaengchung",Film,2019,Drama,X'].join('\n');
+    const r = L.parseExport(csv); assert.deepEqual(r.items.map(i => i.title), ['Incendies', 'Prisoners', 'Gisaengchung']); assert.equal(r.items[0].alt, 'Die Frau die singt - Incendies');
+    let s = L.upsertMany({ media: {}, deleted: {} }, r.items).state; assert.equal(L.needsEnglish(s).length, 3);
+    const realFetch = globalThis.fetch; globalThis.fetch = async (url) => { const ids = [...decodeURIComponent(url).matchAll(/"(tt\d+)"/g)].map(m => m[1]); const lab = { tt1: 'Incendies', tt2: 'Prisoners', tt3: 'Parasite' }; return { ok: true, json: async () => ({ results: { bindings: ids.filter(i => lab[i]).map(i => ({ id: { value: i }, l: { value: lab[i] } })) } }) }; };
+    const fetched = await L.fetchEnglishTitles(L.needsEnglish(s).map(m => m.extId)); globalThis.fetch = realFetch;
+    const res = L.applyEnglish(s, fetched);
+    const by = (t) => Object.values(res.state.media).find(m => m.orig === t); assert.equal(res.named, 1); assert.equal(by('Gisaengchung').title, 'Gisaengchung (Parasite)'); assert.equal(by('Incendies').title, 'Incendies'); assert.equal(by('Prisoners').title, 'Prisoners'); assert.equal(L.needsEnglish(res.state).length, 0);
+    const again = L.upsertMany(res.state, L.parseExport(csv).items, { sync: true }).state; assert.equal(Object.values(again.media).find(m => m.orig === 'Gisaengchung').title, 'Gisaengchung (Parasite)', 're-import keeps the bracket');
+    const old = L.upsertMany({ media: {}, deleted: {} }, [{ kind: 'movie', title: 'Gefangen', src: 'imdb', extId: 'tt2', status: 'done', rating: 7, finishedAt: '2024-01-02' }]).state; const fixed = L.upsertMany(old, r.items.slice(1, 2), { sync: true }).state; assert.equal(Object.values(fixed.media)[0].title, 'Prisoners', 'sync replaces the old German title');
+    console.log('  ✓ original titles with English in brackets (Wikidata, mocked)');
+  } catch (e) { fails++; console.log('  ✗ original titles', e.message); }
+})();
+
 await Promise.all(pend); console.log(fails ? `\n${fails} failed` : '\nlibrary logic ok'); process.exit(fails ? 1 : 0);

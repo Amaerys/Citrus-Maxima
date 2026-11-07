@@ -61,7 +61,7 @@ const worksChip = (m) => h('span', { class: 'chip', onClick: () => mediaSheet(m.
 /** Stats + patterns for the selected kind (or everything). Same card for books, games, anime, films … */
 function insights() {
   const s = S(), kinds = ui.kind ? [ui.kind] : null, st = L.statsOf(s, kinds, {}, new Date()); if (!st.n) return null;
-  const mx = Math.max(1, ...st.hist), tp = L.tasteOf(s, kinds), fb = L.feedbackOf(s, kinds, new Date()), k1 = ui.kind ? L.kindOf(ui.kind) : null;
+  const mx = Math.max(1, ...st.hist), fb = L.feedbackOf(s, kinds, new Date()), k1 = ui.kind ? L.kindOf(ui.kind) : null;
   const cells = [[st.n, 'finished'], [st.avg != null ? st.avg.toFixed(1) : '–', 'avg rating'], ...(ui.kind === 'book' || !ui.kind ? [[st.pages ? st.pages.toLocaleString('en') : '–', 'pages']] : []), ...(st.hours ? [[`${st.hours}h`, 'logged time']] : [])].slice(0, 4);
   return h('div', { class: 'card' }, h('div', { class: 'title' }, k1 ? `Your ${k1.name.toLowerCase()}, analysed` : 'Everything, analysed'),
     h('div', { class: 'stat-grid' }, cells.map(([v, l]) => h('div', { class: 'stat' }, h('b', {}, String(v)), h('span', {}, l)))),
@@ -73,8 +73,7 @@ function insights() {
     st.makers.length ? h('div', { class: 'dim small' }, 'Most often: ', st.makers.map(([d, n]) => `${d} (${n})`).join(', ')) : null,
     st.underrated.length ? [h('div', { class: 'dim tiny' }, 'You loved more than the crowd'), chips(st.underrated, worksChip)] : null,
     st.overrated.length ? [h('div', { class: 'dim tiny' }, 'The crowd loved more than you'), chips(st.overrated, worksChip)] : null,
-    st.top.length ? [h('div', { class: 'dim tiny' }, 'Your top rated'), chips(st.top, worksChip)] : null,
-    tp.loved.length ? null : null);
+    st.top.length ? [h('div', { class: 'dim tiny' }, 'Your top rated'), chips(st.top, worksChip)] : null);
 }
 /** Games: hours, what you really play, what sits unopened. */
 function gamesCard() {
@@ -107,7 +106,7 @@ function filterBar(list) {
 }
 /** Backlog ranked by your taste, for kinds without a free online catalogue (and as a first lane for the rest). */
 function backlogCard(kinds) {
-  const s = S(), dis = s.mediaMeta?.dismissed || [], wl = L.rankPlanned(s, kinds, 12).filter(x => !dis.includes(x.key)).slice(0, 8), ki = kinds.length === 1 ? L.kindOf(kinds[0]) : null;
+  const s = S(), dis = s.mediaMeta?.dismissed || [], wl = L.rankPlanned(s, kinds, 12).filter(x => !dis.includes(x.key)).slice(0, 8), ki = kinds && kinds.length === 1 ? L.kindOf(kinds[0]) : null;
   return h('div', { class: 'card' }, h('div', { class: 'title' }, `${ki ? ki.emoji : '✨'} Next up from your list`),
     wl.length ? [h('div', { class: 'dim tiny' }, 'Your plan-to list ranked by genres and creators you rated highly, nudged by the public score. Works offline.'),
       h('div', { class: 'mlist' }, wl.map(x => { const m = x.media, k = L.kindOf(m.kind); return h('div', { class: 'mrow media', onClick: () => mediaSheet(m.id) }, m.cover ? h('img', { class: 'cover', src: m.cover, alt: '', loading: 'lazy', referrerpolicy: 'no-referrer' }) : h('span', { class: 'cover ph', style: { '--c': k.color } }, k.emoji), h('div', { class: 'grow' }, h('div', { class: 'mtitle' }, m.title), h('div', { class: 'msub' }, m.creator ? h('span', {}, m.creator) : null, m.year ? h('span', {}, String(m.year)) : null, m.pub ? h('span', { class: 'ok' }, `Public ${m.pub}`) : null), h('div', { class: 'dim tiny' }, x.reason)), h('button', { class: 'btn sm ghost', 'aria-label': 'Not interested', onClick: (e) => { e.stopPropagation(); up(st => L.dismissSuggestion(st, x.key)); } }, '✕')); }))]

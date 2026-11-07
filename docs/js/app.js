@@ -7,6 +7,8 @@ import { suggest, dayBusy, learn, weekStartOf, weekProgress } from './planner.js
 import { normalizeStatus, validateStatus, CONTRACT } from './inbound.js';
 import * as M from './mind.js';
 import * as MU from './mind-ui.js';
+import { constellation } from './apps-ui.js';
+import { boardModel } from './board.js';
 import { h, toast, safeUrl, keyOf, fromKey, addDays, startOfDay, sameDay, fmtDate, fmtDateShort, fmtTime, fmtMin, fmtDur, relDay, pad2, DAY_SHORT, DAY_NAMES, MONTHS, telLink, firstName, atMin, minsOf, uid } from './util.js';
 
 // ---------------- runtime state (not persisted) ----------------
@@ -581,7 +583,7 @@ function shiftChip(shift, code) {
 function personPill(entry, onClick) {
   const p = entry.person;
   return h('button', { class: `pill ${isMe(S(), p) ? 'me' : ''}`, onClick: () => onClick ? onClick(entry) : personSheet(p) },
-    h('span', { class: 'av' }, initials(p.name)), firstName(p.name), entry.code ? h('span', { class: 'dim tiny' }, entry.code) : null, entry.mci ? h('span', { class: 'tiny', title: 'MCI 2nd physician' }, '🚨') : null);
+    h('span', { class: 'av' }, initials(p.name)), firstName(p.name), entry.code ? h('span', { class: 'dim tiny' }, entry.code) : null);
 }
 function initials(name) { const parts = String(name).replace(/^Dr\.?\s*/i, '').split(/\s+/).filter(Boolean); return (parts[0]?.[0] || '') + (parts[1]?.[0] || ''); }
 function personKeyOf(p) { return p.id ? `id:${p.id}` : `name:${p.name.toLowerCase()}`; }
@@ -653,23 +655,19 @@ function renderToday() {
     const w = today.window;
     say(h('div', { class: 'big' }, today.shift.label),
       h('div', { class: 'sub' }, `${fmtTime(w.start)}–${fmtTime(w.end)}${today.shift.hours.overnight ? ', overnight' : ''} · ${fmtDur(today.shift.hours.durationMin)} · ${today.code}`),
-      countdown(w),
-      today.mci ? h('div', { style: { marginTop: '8px' } }, mciBadge()) : null);
+      shiftProgress(w),
+      today.mci ? h('div', { style: { marginTop: '6px' } }, mciBadge()) : null);
   } else if (info.mine && info.mine.shift.kind === 'leave') say(h('div', { class: 'big' }, info.mine.shift.label), h('div', { class: 'sub' }, 'Enjoy it.'));
   else say(h('div', { class: 'big' }, afterNight ? 'Off, after a night' : 'Day off'), h('div', { class: 'sub' }, afterNight ? `Your night ends ${fmtTime(overnightTail.window.end)}. Recover first; the plan stays light.` : 'A free day. The planner has ideas below.'));
   if (overnightTail && today) say(h('div', { class: 'small muted', style: { marginTop: '6px' } }, `Night from yesterday ends ${fmtTime(overnightTail.window.end)}`));
   const tmr = tomorrow.today ? `${tomorrow.today.shift.label} ${fmtMin(tomorrow.today.shift.hours.start)}–${fmtMin(tomorrow.today.shift.hours.end)}` : tomorrow.info.mine?.shift.kind === 'leave' ? tomorrow.info.mine.shift.label : (info.hasRota && s.me ? 'off' : '');
   if (tmr) say(h('div', { class: 'small', style: { marginTop: '10px' } }, h('span', { class: 'muted' }, 'Tomorrow '), tmr));
   hero.append(h('div', { class: 'hero-grid' }, words, info.hasRota && s.me ? dayDial(now) : null));
+  const nu = nextUp(now); if (nu) hero.append(nu);
   hero.append(weekStrip(now));
   main.push(hero);
+  const board = shiftBoard(info, today); if (board) main.push(board);
   main.push(MU.mindCard());
-
-  if (today) {
-    main.push(h('div', { class: 'card' }, h('div', { class: 'title' }, `With you at ${today.shift.site || 'your site'}`),
-      info.withMe.length ? h('div', { class: 'people' }, ...info.withMe.map(e => personPill(e))) : h('div', { class: 'muted small' }, 'Nobody else on your shift, per the GP rota.'),
-      info.alsoAtSite.length ? h('div', { style: { marginTop: '10px' } }, h('div', { class: 'tiny dim', style: { marginBottom: '4px' } }, 'Other shift at the same site (handover)'), h('div', { class: 'people' }, ...info.alsoAtSite.map(e => personPill(e)))) : null));
-  }
   if (info.hasRota) main.push(onCallCard(info));
   main.push(planCard(now));
   side.push(eventsCard(now));
@@ -717,7 +715,6 @@ function dayDial(date) {
   const centre = today ? [el('text', { x: C, y: C - 4, 'text-anchor': 'middle', 'font-size': 20, 'font-weight': 800, fill: 'var(--text)' }, today.code), el('text', { x: C, y: C + 14, 'text-anchor': 'middle', 'font-size': 10, fill: 'var(--muted)' }, `${fmtMin(today.shift.hours.start)}–${fmtMin(today.shift.hours.end)}`)]
     : [el('text', { x: C, y: C + 5, 'text-anchor': 'middle', 'font-size': 14, 'font-weight': 700, fill: 'var(--muted)' }, overnightTail ? 'post-night' : 'free')];
   const svg = el('svg', { viewBox: `0 0 ${2 * C} ${2 * C}`, class: 'dial', role: 'img', 'aria-label': 'Your day as a 24-hour ring' }, ...paths, ...ticks, ...labels, marker, ...centre);
-  if (today?.mci) svg.append(el('circle', { cx: C, cy: C, r: rOuter + w / 2 + 2, fill: 'none', stroke: 'var(--cyan)', 'stroke-width': 1.5, opacity: .8 }));
   return svg;
 }
 
@@ -741,7 +738,7 @@ function briefText(date) {
   const { info, today, overnightTail } = myDay(s, date);
   const lines = [`${DAY_NAMES[date.getDay()]} ${fmtDate(date)}`];
   if (today) {
-    lines.push(`${today.shift.label}, ${fmtTime(today.window.start)}–${fmtTime(today.window.end)} (${today.code})${today.mci ? ' — MCI 2nd physician' : ''}`);
+    lines.push(`${today.shift.label}, ${fmtTime(today.window.start)}–${fmtTime(today.window.end)} (${today.code})${today.mci ? ' (MCI 2nd)' : ''}`);
     if (info.withMe.length) lines.push(`With you: ${info.withMe.map(e => firstName(e.person.name)).join(', ')}`);
   } else if (overnightTail) lines.push(`Off after your night (ends ${fmtTime(overnightTail.window.end)})`);
   else if (info.mine?.shift.kind === 'leave') lines.push(info.mine.shift.label);
@@ -762,8 +759,45 @@ function briefCard(date) {
     h('div', { class: 'brief muted' }, text));
 }
 
-function mciBadge(short = false) {
-  return h('span', { class: 'chip mci', title: 'MCI 2nd physician: if a mass-casualty incident happens near FSED (Six Flags, Aqua Arabia…) you are moved there immediately' }, '🚨 ', short ? 'MCI' : 'MCI 2nd physician today');
+function mciBadge() {
+  return h('span', { class: 'mci-quiet', title: 'MCI 2nd physician: if a mass-casualty incident happens near FSED (Six Flags, Aqua Arabia…) you are moved there immediately' }, 'MCI 2nd');
+}
+/** Shift as a progress bar: how far through, time left, when it ends. */
+function shiftProgress(w) {
+  const now = Date.now(), total = Math.max(1, w.end - w.start), pct = Math.max(0, Math.min(1, (now - w.start) / total)), left = Math.round((w.end - now) / 60000);
+  const label = now < w.start ? `Starts in ${fmtDur(Math.round((w.start - now) / 60000))}` : now < w.end ? `${fmtDur(left)} left · ends ${fmtTime(w.end)}` : 'Shift done ✓';
+  return h('div', { class: 'sp-wrap' }, h('div', { class: 'sp-bar', role: 'progressbar', 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': Math.round(pct * 100), 'aria-label': 'Shift progress' }, h('i', { style: { width: `${Math.round(pct * 100)}%` } })), h('div', { class: `small ${now < w.end ? 'orange' : 'muted'}` }, label));
+}
+/** The next calendar event or accepted plan block today. */
+function nextUp(date) {
+  const k = keyOf(date), now = Date.now(), items = [];
+  for (const ev of rt.events[k] || []) { if (ev.allDay) continue; const t = +new Date(ev.start); if (t > now) items.push({ t, title: ev.title, src: 'calendar' }); }
+  for (const p of (S().plan[k] || []).filter(x => x.status === 'accepted')) { const t = +atMin(date, p.start); if (t > now) items.push({ t, title: p.title || p.label || 'Plan block', src: 'plan' }); }
+  items.sort((a, b) => a.t - b.t); const n = items[0]; if (!n) return null;
+  return h('div', { class: 'next-up' }, h('span', { class: 'nu-dot' }), h('span', { class: 'grow ellipsis' }, h('b', {}, n.title)), h('span', { class: 'dim small' }, `${fmtTime(new Date(n.t))} · in ${fmtDur(Math.round((n.t - now) / 60000))}`));
+}
+let boardSite = '';
+/** Who is in, hour by hour. Day, evening and night shifts overlap on one axis, so handovers and thin hours are obvious. */
+function shiftBoard(info, today) {
+  const sites = Object.keys(info.bySite).sort((a, b) => info.bySite[b].length - info.bySite[a].length); if (!sites.length) return null;
+  const mine = today?.shift.site; if (!sites.includes(boardSite)) boardSite = sites.includes(mine) ? mine : sites[0];
+  const site = boardSite, meKey = info.mine ? personKeyOf(info.mine.person) : '', now = new Date(), nowMin = sameDay(info.date, now) ? minsOf(now) : null;
+  const m = boardModel(info.bySite[site], { nowMin, meKey, keyOf: personKeyOf }); if (!m.rows.length) return null;
+  const span = m.axisEnd - m.axisStart, pct = (t) => `${((t - m.axisStart) / span * 100).toFixed(2)}%`, MAXROWS = 14, rows = m.rows.slice(0, MAXROWS);
+  const grid = [];
+  for (let t = Math.ceil(m.axisStart / 180) * 180; t <= m.axisEnd; t += 180) grid.push(h('span', { class: 'bd-tick', style: { left: pct(t) } }, h('small', {}, pad2(Math.floor(t / 60) % 24))));
+  const heat = h('div', { class: 'bd-heat', 'aria-hidden': 'true' }, m.hours.map(x => h('i', { title: `${pad2(Math.floor(x.t / 60) % 24)}:00 · ${x.n} in`, style: { opacity: m.peak ? (0.12 + 0.88 * x.n / m.peak).toFixed(2) : 0.12 } })));
+  const summary = m.now == null ? `${m.rows.length} doctors across the day` : `${m.nowCount} in now${m.next ? ` · ${pad2(Math.floor(m.next.t / 60) % 24)}:${pad2(m.next.t % 60)}: ${[m.next.arrive ? `${m.next.arrive} arrive${m.next.arrive === 1 ? 's' : ''}` : '', m.next.leave ? `${m.next.leave} leave${m.next.leave === 1 ? 's' : ''}` : ''].filter(Boolean).join(', ')}` : ''}`;
+  return h('div', { class: 'card board' }, h('div', { class: 'row' }, h('div', { class: 'title grow' }, 'Who’s in'), h('span', { class: 'dim tiny' }, summary)),
+    sites.length > 1 ? h('div', { class: 'bd-sites' }, sites.map(x => h('button', { class: `c-chip ${x === site ? 'on' : ''}`, style: { '--c': 'var(--orange)' }, onClick: () => { boardSite = x; render(); } }, x.length > 18 ? x.slice(0, 17) + '…' : x, h('small', {}, info.bySite[x].length)))) : null,
+    h('div', { class: 'bd-plot' },
+      h('div', { class: 'bd-axis' }, h('div', { class: 'bd-name' }), h('div', { class: 'bd-track bd-top' }, heat, ...grid)),
+      ...rows.map(r => { const wide = (r.end - r.start) / span > 0.2;
+        return h('button', { class: `bd-row ${r.me ? 'me' : ''}`, onClick: () => personSheet(r.entry.person), title: `${r.name} · ${r.label} ${fmtMin(r.start)}–${fmtMin(r.end)}` },
+          h('span', { class: 'bd-name' }, h('span', { class: 'av' }, initials(r.name)), h('span', { class: 'ellipsis' }, r.me ? 'You' : firstName(r.name))),
+          h('span', { class: 'bd-track' }, h('i', { class: `bd-bar ${r.type}`, style: { left: pct(r.start), width: `${((r.end - r.start) / span * 100).toFixed(2)}%` } }, wide ? `${r.code || r.type} ${pad2(Math.floor(r.start / 60) % 24)}–${pad2(Math.floor(r.end / 60) % 24)}` : r.code || r.type))); }),
+      m.now != null ? h('div', { class: 'bd-overlay' }, h('i', { class: 'bd-now', style: { left: pct(m.now) } })) : null),
+    m.rows.length > MAXROWS ? h('div', { class: 'dim tiny' }, `+${m.rows.length - MAXROWS} more at ${site}`) : null);
 }
 function countdown(w) {
   const now = Date.now();
@@ -789,8 +823,8 @@ function onCallCard(info) {
   if (info.uv.length) groups.push(h('div', { class: 'site-group' }, h('h3', {}, 'Upper Village specialist'), h('div', { class: 'people' }, ...info.uv.map(e => personPill(e)))));
   if (info.lv.length) groups.push(h('div', { class: 'site-group' }, h('h3', {}, 'Lower Village specialist'), h('div', { class: 'people' }, ...info.lv.map(e => personPill(e)))));
   if (!groups.length) groups.push(h('div', { class: 'muted small' }, 'No specialist rota loaded for this month'));
-  if (info.mci.length) groups.push(h('div', { class: 'site-group' }, h('h3', {}, '🚨 MCI 2nd physicians'), h('div', { class: 'people' }, ...info.mci.map(e => personPill(e))), h('div', { class: 'tiny dim', style: { marginTop: '4px' } }, 'Moved to the incident site immediately if a mass-casualty incident happens near FSED')));
-  return h('div', { class: 'card' }, h('div', { class: 'title' }, 'Specialists & MCI'), ...groups);
+  if (info.mci.length) groups.push(h('div', { class: 'mci-line' }, h('span', { class: 'dim tiny', title: 'Moved to the incident site if a mass-casualty incident happens near FSED' }, 'MCI 2nd: '), info.mci.map(e => h('button', { class: 'mci-name', onClick: () => personSheet(e.person) }, firstName(e.person.name)))));
+  return h('div', { class: 'card' }, h('div', { class: 'title' }, 'On call'), ...groups);
 }
 
 function eventsCard(date) {
@@ -1257,35 +1291,38 @@ function rulesSheet() {
 }
 
 // ---------------- MORE / SETTINGS ----------------
+let appSel = '';
+const ago = (min) => min == null ? 'not reporting yet' : min < 60 ? `${Math.max(1, min)} min ago` : min < 48 * 60 ? `${Math.round(min / 60)} h ago` : `${Math.round(min / 1440)} d ago`;
 function renderApps() {
-  const apps = mergedApps();
-  const known = Object.keys(APP_META);
-  const names = [...new Set([...Object.keys(apps), ...known])];
-  const today = keyOf(new Date());
-  const tiles = names.map(name => {
-    const st = apps[name] || apps[name.toLowerCase()] || {};
-    const meta = appMeta(name, st);
-    const ageMin = st.updatedAt ? Math.round((Date.now() - new Date(st.updatedAt)) / 60000) : null;
-    const stale = ageMin == null || ageMin > 36 * 60;
-    const asksToday = (st.asks || []).filter(x => x.date === today);
-    const badge = asksToday.length ? Math.round(asksToday.reduce((x, y) => x + (+y.minutes || 0), 0)) : st.due || 0;
-    const open = meta.url ? `${meta.url}${meta.url.includes('?') ? '&' : '?'}from=citrus` : '';
-    return h(open ? 'a' : 'div', { class: `app-tile ${stale ? 'stale' : ''}`, href: open || null, target: open ? '_blank' : null, rel: 'noopener', style: { '--c': meta.color, '--c-soft': meta.color + '33' } },
-      badge ? h('span', { class: 'badge' }, badge > 999 ? '999+' : badge) : null,
-      h('div', { class: 'ic' }, meta.icon), h('div', { class: 'nm' }, meta.title),
-      h('div', { class: 'sm' }, st.summary || st.next?.title || (stale ? 'Not reporting yet — open it and sign in with Google.' : '')),
-      h('div', { class: 'st' }, ageMin == null ? 'no status' : st.today?.done ? 'done today' : ageMin < 60 ? `updated ${ageMin} min ago` : ageMin < 48 * 60 ? `updated ${Math.round(ageMin / 60)} h ago` : `updated ${Math.round(ageMin / 1440)} d ago`));
+  const apps = mergedApps(), today = keyOf(new Date()), names = [...new Set([...Object.keys(APP_META), ...Object.keys(apps)])];
+  const info = names.map(name => {
+    const st = apps[name] || apps[name.toLowerCase()] || {}, meta = appMeta(name, st), ageMin = st.updatedAt ? Math.round((Date.now() - new Date(st.updatedAt)) / 60000) : null;
+    const asks = (st.asks || []).filter(x => x.date === today), minutes = Math.round(asks.reduce((x, y) => x + (+y.minutes || 0), 0)), waiting = (st.pending || []).length + (st.due || 0);
+    return { name, st, meta, ageMin, fresh: ageMin != null && ageMin <= 36 * 60, done: !!st.today?.done, asks, minutes, badge: minutes || st.due || 0, waiting, url: meta.url ? `${meta.url}${meta.url.includes('?') ? '&' : '?'}from=citrus` : '' };
   });
-  const pending = Object.entries(apps).flatMap(([n, st]) => (st.pending || []).slice(0, 3).map(p => ({ app: appMeta(n, st), text: p })));
-  return [h('h1', {}, 'Apps'), h('p', { class: 'muted small', style: { margin: '6px 0 14px' } }, 'Everything reports into Drive › My Apps › hub. Tap a tile to open the app; badges are minutes asked for today or items due.'),
-    h('div', { class: 'apps-grid' }, ...tiles),
-    actionsCard(apps),
-    MU.receivedCard(),
-    issuesCard(apps),
-    pending.length ? h('div', { class: 'card', style: { marginTop: '14px' } }, h('div', { class: 'title' }, 'Waiting on you'), h('div', { class: 'list' }, ...pending.map(p => h('div', { class: 'item' }, h('div', { class: 'avatar', style: { background: p.app.color + '33', color: p.app.color, fontSize: '18px' } }, p.app.icon), h('div', { class: 'grow' }, h('div', { class: 'name' }, p.text), h('div', { class: 'meta' }, p.app.title)))))) : null,
-    h('div', { class: 'card', style: { marginTop: '14px' } }, h('div', { class: 'title' }, 'How the apps talk to Citrus'),
-      h('div', { class: 'small muted' }, 'Each app writes hub/<app>/status.json (summary, what it needs today as “asks”, pending items). Citrus places the asks in your plan around shifts, keeps the numbers (metrics, progress) as history for habits and objectives, offers any inbox items as tasks you can take, and writes hub/citrus/plan.json back (blocks, the day\'s tasks and habits, and what you did with each proposal). Statuses older than 36 h are shown greyed.')),
-  ];
+  const need = info.find(i => i.fresh && !i.done && (i.minutes || i.waiting)) || info.find(i => i.fresh) || info[0];
+  if (!info.some(i => i.name === appSel)) appSel = need?.name || '';
+  const cur = info.find(i => i.name === appSel), reporting = info.filter(i => i.fresh).length, totalMin = info.reduce((t, i) => t + i.minutes, 0), totalWait = info.reduce((t, i) => t + i.waiting, 0);
+  const pick = (name) => { appSel = name; render(); };
+  const hero = h('div', { class: 'card constel' },
+    h('div', { class: 'c-stats' }, [[`${reporting}/${info.length}`, 'reporting'], [totalMin ? `${totalMin}m` : '–', 'asked today'], [totalWait || '–', 'waiting']].map(([v, l]) => h('div', {}, h('b', {}, String(v)), h('span', {}, l)))),
+    constellation(info.map(i => ({ key: i.name, icon: i.meta.icon, color: i.meta.color, badge: i.badge, fresh: i.fresh, done: i.done, label: i.meta.title })), appSel, pick),
+    h('div', { class: 'c-chips', role: 'tablist' }, info.map(i => h('button', { class: `c-chip ${i.name === appSel ? 'on' : ''} ${i.fresh ? '' : 'stale'}`, style: { '--c': i.meta.color }, role: 'tab', 'aria-selected': i.name === appSel ? 'true' : 'false', onClick: () => pick(i.name) }, h('span', {}, i.meta.icon), i.meta.title))));
+  const detail = !cur ? null : (() => {
+    const { st, meta } = cur, status = cur.done ? 'Done today' : cur.fresh ? `Updated ${ago(cur.ageMin)}` : cur.ageMin == null ? 'Not reporting yet' : `Quiet for ${ago(cur.ageMin).replace(' ago', '')}`;
+    return h('div', { class: `card app-detail ${cur.fresh ? '' : 'stale'}`, style: { '--c': meta.color, '--c-soft': meta.color + '26' } },
+      h('div', { class: 'ad-head' }, h('div', { class: 'ic' }, meta.icon), h('div', { class: 'grow' }, h('div', { class: 'nm' }, meta.title), h('div', { class: `ad-status ${cur.done ? 'ok' : cur.fresh ? '' : 'dim'}` }, h('i', {}), status)),
+        cur.url ? h('a', { class: 'btn primary', href: cur.url, target: '_blank', rel: 'noopener' }, 'Open ▸') : null),
+      st.summary || st.next?.title ? h('div', { class: 'ad-sum' }, st.summary || st.next.title) : null,
+      !cur.fresh && cur.ageMin == null ? h('div', { class: 'dim small' }, 'Open it once and sign in with Google. It will then write its status to Drive, and Citrus picks it up here.') : null,
+      (st.actions || []).length ? [h('div', { class: 'ad-h' }, 'Jump straight in'), actionChips(cur.name, st, 6)] : null,
+      cur.asks.length ? [h('div', { class: 'ad-h' }, 'Asked of you today'), h('div', { class: 'ad-asks' }, cur.asks.map(a => h('div', { class: 'ad-ask' }, h('span', { class: 'grow' }, a.title || meta.title), a.minutes ? h('b', {}, `${Math.round(a.minutes)} min`) : null, a.slot ? h('small', {}, a.slot) : null)))] : null,
+      (st.pending || []).length ? [h('div', { class: 'ad-h' }, 'Waiting on you'), h('div', { class: 'tags' }, (st.pending || []).slice(0, 8).map(p => h('span', { class: 'chip' }, String(p).slice(0, 60))))] : null,
+      (st.metrics || []).length ? [h('div', { class: 'ad-h' }, 'Numbers it reports'), h('div', { class: 'tags' }, st.metrics.slice(0, 6).map(m => h('span', { class: 'chip' }, `${m.label || m.id}: ${m.value}${m.unit ? ' ' + m.unit : ''}`)))] : null);
+  })();
+  return [h('h1', {}, 'Apps'), hero, detail, MU.receivedCard(), issuesCard(apps),
+    h('details', { class: 'card how' }, h('summary', {}, 'How the apps talk to Citrus'),
+      h('div', { class: 'small muted' }, 'Each app writes hub/<app>/status.json to Drive › My Apps › hub (summary, what it needs today as “asks”, pending items, numbers, deep links). Citrus places the asks in your plan around shifts, keeps the numbers as history for habits and objectives, and writes hub/citrus/plan.json back for the apps. Stars glow when an app reported in the last 36 hours; the number is minutes asked today or items due.'))];
 }
 
 function renderMore() {

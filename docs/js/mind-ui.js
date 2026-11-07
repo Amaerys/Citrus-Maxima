@@ -17,7 +17,7 @@ const ui = { seg: 'overview', area: '', doneOpen: false, year: new Date().getFul
 export const mindSeg = () => ui.seg;
 export function setSeg(seg, area = '') { ui.seg = seg; ui.area = area; }
 
-const SEGS = [['overview', 'Overview'], ['tasks', 'Tasks'], ['habits', 'Habits'], ['aims', 'Aims'], ['reflect', 'Reflect'], ['year', 'Year'], ['library', 'Library'], ['notes', 'Notes']];
+const SEGS = [['overview', 'Overview', '◉'], ['tasks', 'Tasks', '✓'], ['habits', 'Habits', '🔁'], ['aims', 'Aims', '🎯'], ['reflect', 'Reflect', '✎'], ['year', 'Year', '🗓'], ['library', 'Library', '📚'], ['notes', 'Notes', '📝']];
 const MOODS = ['😞', '😕', '😐', '🙂', '😄'];
 const areaColor = (id) => M.areaOf(id)?.color || 'var(--muted)';
 const pctTxt = (v) => v == null ? '–' : `${Math.round(v * 100)}%`;
@@ -172,8 +172,50 @@ function nowCard() {
   return h('div', { class: 'card' }, h('div', { class: 'row' }, h('div', { class: 'title grow' }, 'Now'), h('button', { class: 'btn sm ghost', onClick: () => { ui.seg = 'library'; ctx.render(); } }, 'Library'), h('button', { class: 'btn sm ghost', onClick: quickNote }, '+ Note'), h('button', { class: 'btn sm ghost', onClick: quickLog }, '+ Log')),
     list.length ? h('div', { class: 'now-row' }, list.map(m => { const k = L.kindOf(m.kind); return h('button', { class: 'now-chip', style: { '--c': k.color }, onClick: () => { if (m.kind === 'book') logReadingSheet(m.id); else { ui.seg = 'library'; ctx.render(); } } }, h('span', {}, k.emoji), h('b', {}, m.title), m.total ? h('small', {}, `${m.progress || 0}/${m.total}`) : null); })) : h('div', { class: 'dim small' }, 'Nothing in progress. Log what you are reading, watching or playing.'));
 }
+const go = (seg) => { ui.seg = seg; ctx.render(); window.scrollTo(0, 0); };
+/** Today's habits as tappable orbs: one glance, one tap, no long list. */
+function habitOrbs() {
+  const s = S(), n = now(), tk = keyOf(n), a = apps(), due = M.activeHabits(s).filter(x => M.habitDue(x, n)); if (!due.length) return null;
+  return h('div', { class: 'orbs', role: 'group', 'aria-label': 'Today’s habits' }, due.map(hb => {
+    const done = M.habitDone(s, hb, tk, a, tk), st = M.habitStreak(s, hb, n, a), color = areaColor(M.habitArea(s, hb));
+    return h('button', { class: `orb-h ${done ? 'on' : ''} ${ui.pop === 'h' + hb.id ? 'enter' : ''}`, style: { '--c': color }, 'aria-pressed': done ? 'true' : 'false', 'aria-label': `${hb.name}${st.current ? `, ${st.current} day streak` : ''}`,
+      onClick: () => { ui.pop = done ? '' : 'h' + hb.id; up(x => M.logHabit(x, hb.id, tk, !done)); },
+      onContextmenu: (e) => { e.preventDefault(); habitSheet(hb.id); } },
+      h('span', { class: 'o-i' }, hb.emoji || hb.name.slice(0, 1).toUpperCase()), h('span', { class: 'o-n' }, hb.name.length > 11 ? hb.name.slice(0, 10) + '…' : hb.name), st.current > 1 ? h('span', { class: 'o-s' }, `🔥${st.current}`) : null);
+  }));
+}
+/** One card for the day: habit orbs, then the few tasks that matter. */
+function dayCard() {
+  const s = S(), n = now(), tk = keyOf(n), focus = M.focusTasks(s, n, 4), habits = M.activeHabits(s).filter(x => M.habitDue(x, n)), left = habits.filter(x => !M.habitDone(s, x, tk, apps(), tk)).length;
+  return h('div', { class: 'card day' }, h('div', { class: 'row' }, h('div', { class: 'title grow' }, 'Today'), habits.length ? h('span', { class: `dim tiny ${left ? '' : 'ok'}` }, left ? `${habits.length - left}/${habits.length} habits` : 'All habits done ✓') : null,
+    h('button', { class: 'btn sm ghost', onClick: () => go('habits') }, 'Habits')),
+    habitOrbs(), focus.length ? h('div', { class: 'mlist' }, focus.map(t => taskRow(t))) : h('div', { class: 'empty small' }, 'No tasks due. Capture one above or enjoy the space.'),
+    h('div', { class: 'row' }, h('button', { class: 'btn sm ghost', onClick: () => go('tasks') }, 'All tasks ▸')));
+}
+/** Dashboard tiles: each space at a glance, tap to enter. */
+function tiles() {
+  const s = S(), n = now(), a = apps(), tk = keyOf(n), b = M.taskBuckets(s, n), open = ['overdue', 'today', 'soon', 'later', 'someday'].reduce((t, k) => t + (b[k]?.length || 0), 0);
+  const w7 = M.habitWindow(s, addDays(startOfDay(n), -6), n, a), habits = M.activeHabits(s), aims = Object.values(s.aims || {}).filter(x => x.status !== 'done' && !x.archived), aimAvg = aims.length ? aims.reduce((t, x) => t + M.aimProgress(s, x), 0) / aims.length : null;
+  const reflected = M.reflectedOn(s, tk), ls = L.libraryStats(s, n), reading = L.nowPlaying(s), notes = Object.keys(s.memos || {}).length, best = Math.max(0, ...habits.map(x => M.habitStreak(s, x, n, a).best || 0));
+  const T = (seg, icon, big, label, sub, viz, warn) => h('button', { class: `tile ${warn ? 'warn' : ''}`, onClick: () => go(seg) }, h('div', { class: 't-top' }, h('span', { class: 't-i' }, icon), viz || null), h('b', {}, big), h('span', { class: 't-l' }, label), sub ? h('small', {}, sub) : null);
+  return h('div', { class: 'tiles' },
+    T('tasks', '✓', open, open === 1 ? 'open task' : 'open tasks', b.overdue.length ? `${b.overdue.length} overdue` : b.today.length ? `${b.today.length} due today` : 'nothing pressing', null, b.overdue.length > 0),
+    T('habits', '🔁', pctTxt(w7.rate), 'habits this week', best ? `best streak ${best}` : 'start a streak', ring(w7.rate || 0, { size: 34, stroke: 4, color: 'var(--orange)' })),
+    T('aims', '🎯', aims.length, aims.length === 1 ? 'objective' : 'objectives', aimAvg == null ? 'set one' : `${pctTxt(aimAvg)} average`, ring(aimAvg || 0, { size: 34, stroke: 4, color: 'var(--cyan)' })),
+    T('reflect', '✎', reflected ? 'Done' : 'Open', reflected ? 'checked in today' : 'daily check-in', reflected ? 'nice' : 'two minutes', null, false),
+    T('library', '📚', reading.length || ls.doneYear, reading.length ? 'in progress' : 'finished this year', reading[0] ? reading[0].title.slice(0, 22) : `${ls.total} in library`),
+    T('notes', '📝', notes, notes === 1 ? 'note' : 'notes', 'journal and ideas'));
+}
+/** Balance and the 8-week trend share one card instead of two long ones. */
+function insightsCard() {
+  const bal = balanceCard(), tr = trendCard(); if (!bal && !tr) return null;
+  const tabs = [bal ? ['balance', 'Balance'] : null, tr ? ['trend', 'Trend'] : null].filter(Boolean); if (!tabs.some(([k]) => k === ui.insTab)) ui.insTab = tabs[0][0];
+  const card = ui.insTab === 'balance' ? bal : tr;
+  return h('div', { class: 'insight-tabs' }, tabs.length > 1 ? h('div', { class: 'seg mini' }, tabs.map(([k, l]) => h('button', { class: ui.insTab === k ? 'active' : '', onClick: () => { ui.insTab = k; ctx.render(); } }, l))) : null, card);
+}
+function nowOrNothing() { return L.nowPlaying(S()).length ? nowCard() : null; }
 function overview() {
-  return [brainHero(), captureBar(), starterCard(), inboxCard(), focusCard(), nowCard(), balanceCard(), trendCard()];
+  return [brainHero(), captureBar(), inboxCard(), dayCard(), tiles(), starterCard(), nowOrNothing(), insightsCard()];
 }
 
 // ───────────────────────────────────────── Tasks
@@ -452,10 +494,11 @@ export function mindCard() {
 
 // ───────────────────────────────────────── the view
 export function renderMind() {
-  const seg = h('div', { class: 'seg mind-seg', role: 'tablist' }, SEGS.map(([id, label]) => {
+  const seg = h('div', { class: 'seg mind-seg', role: 'tablist' }, SEGS.map(([id, label, icon]) => {
     const badge = id === 'overview' ? M.inboxPending(S(), apps(), now()).length : 0;
-    return h('button', { class: ui.seg === id ? 'active' : '', role: 'tab', 'aria-selected': ui.seg === id, onClick: () => { ui.seg = id; ctx.render(); window.scrollTo(0, 0); } }, label, badge ? h('span', { class: 'pill-n' }, badge) : null);
+    return h('button', { class: ui.seg === id ? 'active' : '', role: 'tab', 'aria-selected': ui.seg === id, onClick: () => { ui.seg = id; ctx.render(); window.scrollTo(0, 0); } }, h('span', { class: 'sg-i' }, icon), label, badge ? h('span', { class: 'pill-n' }, badge) : null);
   }));
+  setTimeout(() => seg.querySelector('.active')?.scrollIntoView({ inline: 'center', block: 'nearest' }), 0);
   const body = { overview, tasks: tasksView, habits: habitsView, aims: aimsView, reflect: reflectView, year: yearView, library: renderLibrary, notes: renderNotes }[ui.seg]();
   ui.pop = '';   // the enter animation plays once
   return [seg, h('div', { class: `mind-body seg-${ui.seg}` }, ...body.flat().filter(Boolean))];

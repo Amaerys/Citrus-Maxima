@@ -184,7 +184,7 @@ const rawLeak = (page) => page.evaluate(() => /\b(null|undefined|NaN|\[object Ob
   // library, notes, alarms, jump-in
   await page.evaluate(() => { const d = new Date().toLocaleDateString('en-CA'); localStorage.setItem('citrus.status.yuzu', JSON.stringify({ app: 'yuzu', title: 'Yuzu', icon: '🍋', updatedAt: new Date().toISOString(), today: { done: true, date: d }, actions: [{ id: 'review', label: 'Start reviews', url: 'https://yuzu.github.io/Yuzu/#review', minutes: 30 }] })); });
   await page.reload(); await sleep(600); check((await page.locator('#view-today').innerText()).includes('Start reviews') || true, 'reloaded');
-  await tab(page, 'apps'); check((await page.locator('#view-apps').innerText()).includes('Jump straight in'), 'Apps tab offers deep-link actions');
+  await tab(page, 'apps'); check(/jump straight in/i.test(await page.locator('#view-apps').innerText()), 'Apps tab offers deep-link actions');
   await tab(page, 'mind'); await seg(page, 'Library'); check(await page.locator('#view-mind .kinds').count() === 1, 'Library opens');
   await page.click('#view-mind button:has-text("+ Log")'); await page.click('.sheet button:has-text("Games")'); await page.fill('.sheet input[type=text]', 'Hades'); await page.click('.sheet .btn.primary:has-text("Add as typed")'); await sleep(250);
   await page.click('.sheet .rate-pick button >> nth=8'); await page.click('.sheet .seg button:has-text("Played")'); await page.click('.sheet .btn.primary:has-text("Save")'); await sleep(300);

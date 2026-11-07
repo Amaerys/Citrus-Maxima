@@ -24,7 +24,7 @@ export function addMedia(s, f) {
   const kind = KINDS.some(k => k.id === f.kind) ? f.kind : 'book', now = Date.now(), id = f.id || uid();
   const m = { id, kind, title, status: STATUS[f.status] ? f.status : 'planned', rating: Math.max(0, Math.min(10, +f.rating || 0)), progress: Math.max(0, +f.progress || 0), total: Math.max(0, +f.total || 0),
     year: +f.year || 0, creator: String(f.creator || '').slice(0, 80), genres: (f.genres || []).map(g => String(g).slice(0, 30)).slice(0, 6), cover: f.cover ? safeUrl(f.cover) : '', src: f.src || 'manual', extId: f.extId ? String(f.extId) : '',
-    format: ['paper', 'ebook', 'audio'].includes(f.format) ? f.format : '', log: Array.isArray(f.log) ? f.log.slice(-400) : [], quotes: Array.isArray(f.quotes) ? f.quotes.slice(-100) : [], startedAt: f.startedAt || '', finishedAt: f.finishedAt || '', minutes: Math.max(0, +f.minutes || 0), review: String(f.review || '').slice(0, 800), runtime: Math.max(0, Math.min(900, +f.runtime || 0)), pub: Math.max(0, Math.min(10, +f.pub || 0)), createdAt: f.createdAt || now, at: now };
+    format: ['paper', 'ebook', 'audio'].includes(f.format) ? f.format : '', log: Array.isArray(f.log) ? f.log.slice(-400) : [], quotes: Array.isArray(f.quotes) ? f.quotes.slice(-100) : [], startedAt: f.startedAt || '', finishedAt: f.finishedAt || '', minutes: Math.max(0, +f.minutes || 0), review: String(f.review || '').slice(0, 800), orig: String(f.orig || '').slice(0, 140), en: String(f.en || '').slice(0, 140), enChecked: !!f.enChecked, runtime: Math.max(0, Math.min(900, +f.runtime || 0)), pub: Math.max(0, Math.min(10, +f.pub || 0)), createdAt: f.createdAt || now, at: now };
   if (m.status === 'done' && !m.finishedAt && !IMPORTED.has(m.src)) m.finishedAt = keyOf(new Date());   // imports without a date stay undated rather than becoming "today"
   return { ...s, media: { ...s.media, [id]: m } };
 }
@@ -34,28 +34,29 @@ export function repairDates(s) {
   for (const m of rec(s.media)) if (IMPORTED.has(m.src) && m.src !== 'imdb' && m.status === 'done' && m.finishedAt && m.finishedAt === keyOf(new Date(m.createdAt || 0))) { media[m.id] = { ...m, finishedAt: '', at: Date.now() }; n++; }
   return { state: n ? { ...s, media } : s, fixed: n };
 }
-export function updateMedia(s, id, patch) {
-  const m = s.media?.[id]; if (!m) return s; const n = { ...m, ...patch, at: Date.now() };
-  if (patch.status === 'done' && !n.finishedAt) n.finishedAt = keyOf(new Date());
+function applyPatch(m, patch) {
+  const n = { ...m, ...patch, at: Date.now() };
+  if (patch.status === 'done' && !n.finishedAt && !(IMPORTED.has(n.src) && patch.finishedAt === '')) n.finishedAt = keyOf(new Date());
   if (patch.status === 'done' && n.total && !patch.progress) n.progress = n.total;
   if (patch.status === 'doing' && !n.startedAt) n.startedAt = keyOf(new Date());
-  return { ...s, media: { ...s.media, [id]: n } };
+  return n;
 }
+export function updateMedia(s, id, patch) { const m = s.media?.[id]; if (!m) return s; return { ...s, media: { ...s.media, [id]: applyPatch(m, patch) } }; }
 export function deleteMedia(s, id) { const media = { ...s.media }; delete media[id]; return { ...s, media, deleted: { ...(s.deleted || {}), [`media:${id}`]: Date.now() } }; }
 export const mediaList = (s, kind = '') => rec(s.media).filter(m => !kind || m.kind === kind);
-export function findMedia(s, { kind, title, year, src, extId }) {
-  const nt = norm(title);
-  return rec(s.media).find(m => (extId && m.src === src && m.extId === String(extId)) || (m.kind === kind && norm(m.title) === nt && (!year || !m.year || m.year === year)));
-}
-/** Add or fill in: your own rating/status are never overwritten by an import unless the record has none. */
-export function upsertMedia(s, f, opts = {}) {
-  const cur = findMedia(s, f); if (!cur) return { state: addMedia(s, f), added: 1 };
+const sameWork = (m, { kind, title, year, src, extId }, nt) => (extId && m.src === src && m.extId === String(extId)) || (m.kind === kind && (norm(m.title) === nt || (m.orig && norm(m.orig) === nt)) && (!year || !m.year || m.year === year));
+export function findMedia(s, f) { const nt = norm(f.title); return rec(s.media).find(m => sameWork(m, f, nt)); }
+/** "Original title (English title)" — the English part only when it differs. */
+export function composeTitle(orig, en) { const o = String(orig || '').trim(), e = String(en || '').trim(); return e && norm(e) !== norm(o) ? `${o} (${e})`.slice(0, 140) : o; }
+/** What an import changes on an existing record. Your own rating/status are never overwritten unless the record has none (or you ask for sync). */
+function importPatch(cur, f, opts) {
   const patch = {};
   if (opts.sync && cur.src === f.src && IMPORTED.has(cur.src) && f.status) {   // the file is the source of truth for things that came from it
     if (cur.status !== f.status) patch.status = f.status;
     if (f.status === 'done' && (cur.finishedAt || '') !== (f.finishedAt || '')) patch.finishedAt = f.finishedAt || '';
     if (f.status !== 'done' && cur.finishedAt) patch.finishedAt = '';
     if (f.rating && cur.rating !== f.rating) patch.rating = f.rating;
+    if (f.src === 'imdb' && f.orig) { const t = composeTitle(f.orig, cur.en); if (t && t !== cur.title) patch.title = t; if (cur.orig !== f.orig) patch.orig = f.orig; }
   } else if (opts.dropped && f.status === 'dropped' && !(cur.status === 'done' && cur.rating)) { if (cur.status !== 'dropped') patch.status = 'dropped'; if (f.rating && !cur.rating) patch.rating = f.rating; }
   if (!cur.rating && f.rating) patch.rating = f.rating; if (!cur.total && f.total) patch.total = f.total; if (!cur.creator && f.creator) patch.creator = f.creator;
   if (!cur.extId && f.extId) { patch.extId = String(f.extId); patch.src = f.src; } if (!cur.cover && f.cover) patch.cover = safeUrl(f.cover) || undefined;
@@ -63,11 +64,28 @@ export function upsertMedia(s, f, opts = {}) {
   if (cur.finishedAt && f.src === cur.src && IMPORTED.has(cur.src) && !f.finishedAt && cur.finishedAt === keyOf(new Date(cur.createdAt || 0))) patch.finishedAt = '';
   if (f.minutes && f.minutes > (cur.minutes || 0)) patch.minutes = f.minutes;
   if (!cur.runtime && f.runtime) patch.runtime = f.runtime; if (!cur.pub && f.pub) patch.pub = f.pub;
+  if (!cur.orig && f.orig) patch.orig = f.orig;
   if (f.progress && f.progress > (cur.progress || 0)) patch.progress = f.progress;
   if (cur.status === 'planned' && f.status && f.status !== 'planned' && !patch.status) patch.status = f.status;
-  return Object.keys(patch).length ? { state: updateMedia(s, cur.id, patch), added: 0, updated: 1 } : { state: s, added: 0 };
+  for (const k of Object.keys(patch)) if (patch[k] === undefined || (k !== 'finishedAt' && patch[k] === cur[k])) delete patch[k];
+  return patch;
 }
-export function upsertMany(s, list, opts = {}) { let st = s, added = 0, updated = 0; for (const f of list) { const r = upsertMedia(st, f, opts); st = r.state; added += r.added || 0; updated += r.updated || 0; } return { state: st, added, updated, skipped: list.length - added - updated }; }
+/** Add or fill in one item. */
+export function upsertMedia(s, f, opts = {}) { const r = upsertMany(s, [f], opts); return { state: r.state, added: r.added, updated: r.updated }; }
+/** Bulk import. One pass with an index, so thousands of rows stay fast. */
+export function upsertMany(s, list, opts = {}) {
+  const media = { ...(s.media || {}) }, byExt = new Map(), byTitle = new Map(); let added = 0, updated = 0;
+  const index = (m) => { if (m.extId) byExt.set(`${m.src}|${m.extId}`, m.id); for (const t of [m.title, m.orig]) if (t) { const k = `${m.kind}|${norm(t)}`; (byTitle.get(k) || byTitle.set(k, []).get(k)).push(m.id); } };
+  for (const m of Object.values(media)) index(m);
+  for (const f of list) {
+    const nt = norm(f.title); let cur = f.extId && byExt.has(`${f.src}|${f.extId}`) ? media[byExt.get(`${f.src}|${f.extId}`)] : null;
+    if (!cur) for (const id of byTitle.get(`${f.kind}|${nt}`) || []) { const m = media[id]; if (m && sameWork(m, f, nt)) { cur = m; break; } }
+    if (!cur) { const n = Object.values(addMedia({ media: {} }, f).media)[0]; if (n) { media[n.id] = n; index(n); added++; } continue; }
+    const patch = importPatch(cur, f, opts); if (!Object.keys(patch).length) continue;
+    media[cur.id] = applyPatch(cur, patch); index(media[cur.id]); updated++;
+  }
+  return { state: { ...s, media }, added, updated, skipped: list.length - added - updated };
+}
 
 
 // ───────────────────────────── reading log: sessions, pace, finish estimates, highlights
@@ -164,7 +182,7 @@ export function parseExport(text, { mode = 'auto' } = {}) {
   if (cols.includes('Const') && cols.includes('Title Type')) {
     const items = rows.filter(r => r.Title && !/episode|episode|video ?game|videospiel|podcast/i.test(r['Title Type'])).map(r => {
       const rated = +r['Your Rating'] || 0, type = r['Title Type'], status = mode === 'planned' ? 'planned' : mode === 'dropped' ? 'dropped' : mode === 'done' ? 'done' : rated ? 'done' : 'planned';
-      return { kind: /serie|mini/i.test(type) ? 'show' : 'movie', title: r.Title, creator: r.Directors || r.Creators || '', year: +r.Year || 0, genres: (r.Genres || '').split(',').map(x => x.trim()).filter(Boolean).map(g => DE_GENRE[g] || g),
+      return { kind: /serie|mini/i.test(type) ? 'show' : 'movie', title: (r['Original Title'] || r.Title || '').trim(), orig: (r['Original Title'] || r.Title || '').trim(), alt: r.Title, creator: r.Directors || r.Creators || '', year: +r.Year || 0, genres: (r.Genres || '').split(',').map(x => x.trim()).filter(Boolean).map(g => DE_GENRE[g] || g),
         status, rating: rated, finishedAt: status === 'done' ? dateKeyOf(r['Date Rated']) : '', src: 'imdb', extId: r.Const, runtime: +r['Runtime (mins)'] || 0, pub: +r['IMDb Rating'] || 0 };
     });
     return { source: 'IMDb', items };
@@ -292,7 +310,6 @@ export async function exploreCatalogue(id, s, dismissed = []) {
 }
 const quality = (q) => Math.max(0, Math.min(1, (q.avg - 3) / 2)) * Math.min(1, Math.log10(q.n + 1) / 3) * 0.7 + Math.min(1, Math.log10(q.want + 1) / 4) * 0.3;
 const tasteMatch = (q, t) => Math.max(0, Math.min(1, q.subjects.reduce((x, k) => x + Math.max(0, t.weights[k] || 0), 0) / 3));
-export const forYouSuggestions = (...a) => worldSuggestions(...a);
 /** Lanes of recommendations drawn from the whole catalogue, each explained, scored by your taste × quality × popularity. */
 export async function worldSuggestions(s, dismissed = []) {
   const extra = await enrichSubjects(s), taste = bookTaste(s, extra), have = new Set(mediaList(s, 'book').map(m => norm(m.title))), seen = new Set();
@@ -369,7 +386,6 @@ export function tasteOf(s, kinds) {
   const rank = (o) => Object.entries(o).sort((a, b) => b[1] - a[1]);
   return { genres: rank(gen), makers: rank(mk).filter(([, w]) => w >= 1), genreW: gen, makerW: mk, loved: loved.sort((a, b) => b.rating - a.rating) };
 }
-export const screenTaste = (s) => tasteOf(s, ['movie', 'show']);
 /** Everything the Insights card needs for a set of kinds (optionally one finish-year). */
 export function statsOf(s, kinds, { year = '' } = {}, now = new Date()) {
   const all = listOf(s, kinds).filter(m => m.status === 'done'), done = year ? all.filter(m => yearOf(m) === String(year)) : all, rated = done.filter(m => m.rating);
@@ -440,4 +456,27 @@ export function summariseImport(items) {
   const by = (st) => items.filter(i => i.status === st), dated = items.filter(i => i.status === 'done' && i.finishedAt).map(i => i.finishedAt).sort();
   return { n: items.length, done: by('done').length, doing: by('doing').length, planned: by('planned').length, dropped: by('dropped').length, paused: by('paused').length, undated: by('done').filter(i => !i.finishedAt).length, rated: items.filter(i => i.rating).length,
     from: dated[0] || '', to: dated[dated.length - 1] || '', kinds: countOf(items.map(i => i.kind)) };
+}
+
+// ───────────────────────────── English titles (Wikidata SPARQL: free, no key, CORS) for films imported under their original title
+export const needsEnglish = (s) => rec(s.media).filter(m => m.src === 'imdb' && /^tt\d+$/.test(m.extId) && !m.enChecked);
+export async function fetchEnglishTitles(ids, { batch = 80, onProgress } = {}) {
+  const out = new Map(), done = [];
+  for (let i = 0; i < ids.length; i += batch) {
+    const part = ids.slice(i, i + batch), q = `SELECT ?id ?l WHERE { VALUES ?id { ${part.map(x => `"${x}"`).join(' ')} } ?i wdt:P345 ?id . ?i rdfs:label ?l . FILTER(LANG(?l) = "en") }`;
+    const r = await fetch(`https://query.wikidata.org/sparql?format=json&origin=*&query=${encodeURIComponent(q)}`, { headers: { Accept: 'application/sparql-results+json' } });
+    if (!r.ok) throw new Error(`Wikidata ${r.status}`);
+    const j = await r.json(); for (const b of j.results?.bindings || []) if (!out.has(b.id.value)) out.set(b.id.value, b.l.value);
+    done.push(...part); onProgress?.(Math.min(ids.length, i + batch), ids.length);
+  }
+  return { titles: out, checked: done };
+}
+/** Writes "Original (English)" onto items whose English title differs from their original. Items looked up are marked so they are not asked again. */
+export function applyEnglish(s, { titles, checked }) {
+  const media = { ...s.media }, seen = new Set(checked); let named = 0;
+  for (const m of rec(s.media)) {
+    if (!seen.has(m.extId) || m.src !== 'imdb') continue; const en = titles.get(m.extId) || '', orig = m.orig || m.title, title = composeTitle(orig, en);
+    if (title !== orig) named++; media[m.id] = { ...m, orig, en: title !== orig ? en : '', enChecked: true, title, at: Date.now() };
+  }
+  return { state: { ...s, media }, named };
 }
