@@ -77,10 +77,10 @@ Problems it found are listed in Citrus › Apps › "sending something Citrus ca
   ]
 }
 ```
-- `type`: `task` (becomes a task that remembers who sent it), `note` (joins that day's notes), `event` (needs `date` + `start`/`end` in minutes; added to the calendar).
+- `type`: `task` (becomes a task that remembers who sent it), `note` (joins that day's notes), `event` (needs `date` and `start`/`end` as "HH:MM"; added to the calendar after a tap).
 - `id` must be stable: sending the same id again never duplicates. Citrus tells you what happened in `plan.json › mind.receipts`.
 - A habit in Citrus can be linked to `yuzu` (your `today.done`) or to `yuzu:cards-due` (that metric reaching its goal). An objective can read a `progress` series.
-- `actions` [6]: deep links Citrus shows as buttons for your app — `{ "id": "review", "label": "Start reviews", "url": "https://…/Yuzu/#review", "icon": "🍋", "minutes": 30 }`. Citrus opens `url` with `?from=citrus&do=<id>` appended. **Each app should:** read `?from=citrus` / `?do=<id>` on load and jump straight to that screen (no menus), show a "← Citrus" button while `from=citrus` is set, and link back to `https://<citrus origin>/Citrus-Maxima/?from=<app>` (Citrus then toasts "Back from <app>" and refreshes the hub). Time-box actions with `minutes` so Citrus can plan them.
+- `actions` [6]: deep links Citrus shows as buttons for your app — `{ "id": "review", "label": "Start reviews", "url": "https://…/Yuzu/#review", "icon": "🍋", "minutes": 30 }`. Citrus opens `url` with `?from=citrus&do=<id>` appended. **Each app should:** read `?from=citrus` / `?do=<id>` on load and jump straight to that screen (no menus), show a "← Citrus" button while `from=citrus` is set, and link back to `<Citrus URL>/?from=<app>` (Citrus then toasts "Back from <app>" and refreshes the hub). Time-box actions with `minutes` so Citrus can plan them.
 - Phone Share menu and links: `…/Citrus/?from=<app>#capture=Buy%20milk` opens a confirm sheet (no data is written without a tap).
 
 ## plan.json (written by Citrus)
@@ -96,7 +96,7 @@ Citrus also writes `contract: 2` and `mind`:
 ```json
 "mind": { "score": 62, "tasks": { "overdue": 1, "today": 3, "top": [ { "title": "…", "due": "2026-11-07", "pri": 1 } ] },
           "habits": { "due": 5, "done": 2, "pending": ["Gym"] }, "streaks": [ { "name": "Yuzu reviews", "days": 9 } ],
-          "reflectedToday": false, "receipts": [ { "app": "yuzu", "id": "stable-unique-id", "status": "accepted|done|dismissed" } ] }
+          "reflectedToday": false, "library": { "now": [ { "kind": "book", "title": "…", "progress": 120, "total": 400 } ] }, "receipts": [ { "app": "yuzu", "id": "stable-unique-id", "status": "accepted|done|dismissed" } ] }
 ```
 Blocks for Citrus's own tasks/habits have `app: "citrus"`.
 
