@@ -132,6 +132,7 @@ export function parseCSV(text) {
 const dateKeyOf = (v) => { const m = /^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/.exec(v || ''); return m ? `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}` : ''; };
 const unExcel = (v) => String(v || '').replace(/^="?|"$/g, '');
 /** Detects which export it is by its columns. Returns {source, items} or {error}. */
+const DE_GENRE = { Krimi: 'Crime', Kriegsfilm: 'War', Familienfilm: 'Family', Abenteuer: 'Adventure', Komödie: 'Comedy', Liebesfilm: 'Romance', Dokumentarfilm: 'Documentary', Biografie: 'Biography', Geschichte: 'History', Historienfilm: 'History', Musikfilm: 'Music', Sport: 'Sport', Sportfilm: 'Sport', Western: 'Western', Zeichentrick: 'Animation', Kurzfilm: 'Short', Fantasy: 'Fantasy', Science: 'Sci-Fi', 'Sci-Fi': 'Sci-Fi', Musical: 'Musical', Mystery: 'Mystery', Horror: 'Horror', Thriller: 'Thriller', Drama: 'Drama', Animation: 'Animation', Action: 'Action', Reality: 'Reality', Talkshow: 'Talk-Show', Nachrichten: 'News' };
 export function parseExport(text) {
   const rows = parseCSV(text); if (!rows.length) return { error: 'That file has no rows.' };
   const cols = Object.keys(rows[0]);
@@ -144,9 +145,9 @@ export function parseExport(text) {
     return { source: 'Goodreads', items };
   }
   if (cols.includes('Const') && cols.includes('Title Type')) {
-    const items = rows.filter(r => r.Title && !/episode|video game|podcast/i.test(r['Title Type'])).map(r => {
+    const items = rows.filter(r => r.Title && !/episode|episode|video ?game|videospiel|podcast/i.test(r['Title Type'])).map(r => {
       const rated = +r['Your Rating'] || 0, type = r['Title Type'];
-      return { kind: /series|mini/i.test(type) ? 'show' : 'movie', title: r.Title, creator: r.Directors || r.Creators || '', year: +r.Year || 0, genres: (r.Genres || '').split(',').map(x => x.trim()).filter(Boolean),
+      return { kind: /serie|mini/i.test(type) ? 'show' : 'movie', title: r.Title, creator: r.Directors || r.Creators || '', year: +r.Year || 0, genres: (r.Genres || '').split(',').map(x => x.trim()).filter(Boolean).map(g => DE_GENRE[g] || g),
         status: rated ? 'done' : 'planned', rating: rated, finishedAt: dateKeyOf(r['Date Rated']), src: 'imdb', extId: r.Const };
     });
     return { source: 'IMDb', items };

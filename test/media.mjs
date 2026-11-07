@@ -73,4 +73,20 @@ t('pile ranking: favours authors and shelves you rated highly, collapses edition
   s = L.addMedia(s, { kind: 'book', title: 'Random Thriller', creator: 'Someone', status: 'planned', genres: ['thriller'] });
   const p = L.pileRanking(s); assert.equal(p.length, 1); assert.match(p[0].media.title, /Ivan Ilych/);
 });
+
+// German-localised IMDb export
+{
+  const hdr = 'Const,Your Rating,Date Rated,Title,Original Title,URL,Title Type,IMDb Rating,Runtime (mins),Year,Genres,Num Votes,Release Date,Directors';
+  const t = [hdr,
+    'tt1,7,2026-09-07,"Prisoners","Prisoners",u,Film,8.2,153,2013,"Krimi, Drama",9,"2013-10-10","D V"',
+    'tt2,9,2026-09-08,"Dark","Dark",u,Fernsehserie,8.7,60,2017,"Drama, Mystery",9,"2017-12-01",""',
+    'tt3,8,2026-09-08,"Chernobyl","Chernobyl",u,Miniserie,9.3,60,2019,"Drama",9,"2019-05-06",""',
+    'tt4,8,2026-09-08,"Ep","Ep",u,Fernsehepisode,9,60,2019,"Drama",9,"2019-05-06",""',
+    'tt5,6,2026-09-08,"TVM","TVM",u,Fernsehfilm,7,90,2019,"Drama",9,"2019-05-06",""'].join('\n');
+  const r = L.parseExport(t);
+  const k = r.items.map(i => i.kind).join();
+  if (k !== 'movie,show,show,movie' || r.items[0].genres[0] !== 'Crime') { console.error('FAIL german imdb', k, r.items[0].genres); process.exit(1); }
+  console.log('ok german imdb');
+}
+
 await Promise.all(pend); console.log(fails ? `\n${fails} failed` : '\nlibrary logic ok'); process.exit(fails ? 1 : 0);

@@ -1,5 +1,5 @@
-const CACHE = 'citrus-maxima-88f00a5fbc';
-const ASSETS = ['./', './index.html', './css/app.css', './js/app.js', './js/store.js', './js/google.js', './js/model.js', './js/planner.js', './js/inbound.js', './js/mind.js', './js/mind-viz.js', './js/mind-ui.js', './js/util.js', './js/rota-parser.js', './js/xlsx-lite.js', './manifest.webmanifest', './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png'];
+const CACHE = 'citrus-maxima-6583c65aae';
+const ASSETS = ['./', './index.html', './css/app.css', './js/app.js', './js/store.js', './js/google.js', './js/model.js', './js/planner.js', './js/inbound.js', './js/mind.js', './js/mind-viz.js', './js/mind-ui.js', './js/media.js', './js/media-ui.js', './js/util.js', './js/rota-parser.js', './js/xlsx-lite.js', './manifest.webmanifest', './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
 // Network first so a new release shows up at once; the cache is the offline fallback.
