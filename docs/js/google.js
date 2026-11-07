@@ -30,7 +30,7 @@ const GSHEET = 'application/vnd.google-apps.spreadsheet';
 export class GoogleError extends Error {
   constructor(message, { status = 0, auth = false, retryable = false, network = false } = {}) { super(message); this.status = status; this.auth = auth; this.retryable = retryable; this.network = network; }
 }
-export const stats = { requests: 0, retries: 0, errors: 0, lastError: '', lastErrorAt: 0, skippedWrites: 0, bytesUp: 0, bytesDown: 0 };
+export const stats = { requests: 0, retries: 0, errors: 0, lastError: '', lastErrorAt: 0, skippedWrites: 0, bytesUp: 0, bytesDown: 0, healed: 0 };
 export const auth = { needsSignIn: false, lastError: '' };
 
 // ════════════════════════════════════════ token & sign-in
@@ -405,7 +405,8 @@ export async function listAppStatus(root) {
     const app = f.name.toLowerCase();
     folderToApp[f.id] = app; ids[`${root}/hub/${f.name}`] = f.id; verified.add(f.id);
     try {
-      const { file } = await findFile(f.id, 'status.json'); if (!file) return;
+      const { file, twins } = await findFile(f.id, 'status.json'); if (!file) return;
+      for (const t of twins) { trash(t.id).then(() => { stats.healed = (stats.healed || 0) + 1; }).catch(() => {}); }   // an app's own writer raced: newest wins, older twin to the trash (restorable 30 days)
       const data = await readJsonFile(file); if (data) { apps[app] = { ...data, _modified: file.modifiedTime, _folder: app }; fileToApp[file.id] = app; }
     } catch (e) { console.warn('status', f.name, e.message); }
   }));

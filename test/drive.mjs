@@ -146,6 +146,16 @@ console.log('\nD6 — twin state.json (from an old race) is healed');
   (n === 1 && rotas === 3 ? ok : (a, b) => note('P1', a, b))('twins', `${n} state.json left, ${rotas} rotas kept (older twin trashed, not merged over)`);
 }
 
+console.log('\nD6b — twin status.json in an app folder is healed on sync');
+{
+  const dir = g.path(['My Apps', 'hub', 'yuzu'], false);
+  const old = g.put('status.json', dir, { app: 'yuzu', updatedAt: '2020-01-01T00:00:00Z', summary: 'ancient twin' }); old.modifiedTime = '2020-01-01T00:00:00Z';
+  await C(A.page, () => window.__citrus.refreshAll(true)); await sleep(1500);
+  const left = driveFiles(g, 'status.json', dir);
+  const sum = await C(A.page, () => window.__citrus.store.get().apps?.yuzu?.summary);
+  (left.length === 1 && sum !== 'ancient twin' ? ok : (a, b) => note('P1', a, b))('status twins', `${left.length} status.json left in hub/yuzu · Citrus shows "${sum}"`);
+}
+
 console.log('\nD7 — Check Drive merges twin folders');
 {
   const apps = g.path(['My Apps'], false);

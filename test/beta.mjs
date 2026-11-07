@@ -55,7 +55,12 @@ async function waitSynced(page, ms = 15000) {
   return Date.now() - t0;
 }
 async function tab(page, v) { await page.click(`nav.tabs button[data-view=${v}]`); await sleep(150); }
-const shot = (page, name, full = true) => page.screenshot({ path: `${shots}/${name}.png`, fullPage: full });
+// every screenshot doubles as a check: no view may print JavaScript leftovers as text
+const shot = async (page, name, full = true) => {
+  const bad = await page.evaluate(() => { const t = document.body.innerText; const m = t.match(/(^|[\s>(])(null|undefined|NaN|\[object Object\])([\s<).,:]|$)/); return m ? t.slice(Math.max(0, m.index - 30), m.index + 40).replace(/\n/g, ' / ') : ''; }).catch(() => '');
+  if (bad) note('P1', 'text', `"${name}" shows a raw value: …${bad}…`);
+  return page.screenshot({ path: `${shots}/${name}.png`, fullPage: full });
+};
 function errorsOf(page, where) { if (page.errors.length) note('P1', 'runtime', `${where}: ${[...new Set(page.errors)].join(' | ').slice(0, 300)}`); page.errors.length = 0; }
 
 const T = (d, h = 9, m = 0) => new Date(2026, 10, d, h, m);

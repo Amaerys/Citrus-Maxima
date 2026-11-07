@@ -551,27 +551,29 @@ function renderToday() {
   const now = new Date();
   const main = [], side = [];
   if (!Object.keys(s.rotas).length) main.push(onboardingCard());
+  const nudge = rotaReminderCard(); if (nudge) main.push(nudge);
   const { info, today, overnightTail, afterNight } = myDay(s, now);
   const tomorrow = myDay(s, addDays(now, 1));
 
   // hero: words on the left, the day dial on the right
   const hero = h('div', { class: 'card hero', style: today?.shift.type === 'N' ? { '--accent-soft': 'var(--night-soft)' } : afterNight ? { '--accent-soft': 'var(--night-soft)' } : {} });
   const words = h('div', {});
-  words.append(h('div', { class: 'title' }, `${DAY_NAMES[now.getDay()]} ${fmtDate(now)}`));
-  if (!info.hasRota && overnightTail) words.append(h('div', { class: 'big' }, 'Off, after a night'), h('div', { class: 'sub' }, `Your night ends ${fmtTime(overnightTail.window.end)}. No rota for ${MONTHS[now.getMonth()]} yet — import it to see the rest of the month.`));
-  else if (!info.hasRota) words.append(h('div', { class: 'big' }, 'No rota for this month'), h('div', { class: 'sub' }, 'Import the Excel files, or drop them in Drive › My Apps › Rotas.'));
-  else if (!s.me) words.append(h('div', { class: 'big' }, 'Who are you?'), h('div', { class: 'sub' }, 'Pick your row in Settings › Me.'));
+  const say = (...kids) => words.append(...kids.filter(Boolean));   // raw append() would print "null"
+  say(h('div', { class: 'title' }, `${DAY_NAMES[now.getDay()]} ${fmtDate(now)}`));
+  if (!info.hasRota && overnightTail) say(h('div', { class: 'big' }, 'Off, after a night'), h('div', { class: 'sub' }, `Your night ends ${fmtTime(overnightTail.window.end)}. No rota for ${MONTHS[now.getMonth()]} yet — import it to see the rest of the month.`));
+  else if (!info.hasRota) say(h('div', { class: 'big' }, 'No rota for this month'), h('div', { class: 'sub' }, 'Import the Excel files, or drop them in Drive › My Apps › Rotas.'));
+  else if (!s.me) say(h('div', { class: 'big' }, 'Who are you?'), h('div', { class: 'sub' }, 'Pick your row in Settings › Me.'));
   else if (today) {
     const w = today.window;
-    words.append(h('div', { class: 'big' }, today.shift.label),
+    say(h('div', { class: 'big' }, today.shift.label),
       h('div', { class: 'sub' }, `${fmtTime(w.start)}–${fmtTime(w.end)}${today.shift.hours.overnight ? ', overnight' : ''} · ${fmtDur(today.shift.hours.durationMin)} · ${today.code}`),
       countdown(w),
       today.mci ? h('div', { style: { marginTop: '8px' } }, mciBadge()) : null);
-  } else if (info.mine && info.mine.shift.kind === 'leave') words.append(h('div', { class: 'big' }, info.mine.shift.label), h('div', { class: 'sub' }, 'Enjoy it.'));
-  else words.append(h('div', { class: 'big' }, afterNight ? 'Off, after a night' : 'Day off'), h('div', { class: 'sub' }, afterNight ? `Your night ends ${fmtTime(overnightTail.window.end)}. Recover first; the plan stays light.` : 'A free day. The planner has ideas below.'));
-  if (overnightTail && today) words.append(h('div', { class: 'small muted', style: { marginTop: '6px' } }, `Night from yesterday ends ${fmtTime(overnightTail.window.end)}`));
+  } else if (info.mine && info.mine.shift.kind === 'leave') say(h('div', { class: 'big' }, info.mine.shift.label), h('div', { class: 'sub' }, 'Enjoy it.'));
+  else say(h('div', { class: 'big' }, afterNight ? 'Off, after a night' : 'Day off'), h('div', { class: 'sub' }, afterNight ? `Your night ends ${fmtTime(overnightTail.window.end)}. Recover first; the plan stays light.` : 'A free day. The planner has ideas below.'));
+  if (overnightTail && today) say(h('div', { class: 'small muted', style: { marginTop: '6px' } }, `Night from yesterday ends ${fmtTime(overnightTail.window.end)}`));
   const tmr = tomorrow.today ? `${tomorrow.today.shift.label} ${fmtMin(tomorrow.today.shift.hours.start)}–${fmtMin(tomorrow.today.shift.hours.end)}` : tomorrow.info.mine?.shift.kind === 'leave' ? tomorrow.info.mine.shift.label : (info.hasRota && s.me ? 'off' : '');
-  if (tmr) words.append(h('div', { class: 'small', style: { marginTop: '10px' } }, h('span', { class: 'muted' }, 'Tomorrow '), tmr));
+  if (tmr) say(h('div', { class: 'small', style: { marginTop: '10px' } }, h('span', { class: 'muted' }, 'Tomorrow '), tmr));
   hero.append(h('div', { class: 'hero-grid' }, words, info.hasRota && s.me ? dayDial(now) : null));
   hero.append(weekStrip(now));
   main.push(hero);
@@ -1003,6 +1005,26 @@ function renderTeam() {
   return [h('h1', {}, 'Team'), h('div', { class: 'row', style: { marginTop: '10px' } }, input), seg, h('div', { class: 'card', style: { marginTop: '12px' } }, listEl)];
 }
 
+// ---------------- next month's rota reminder ----------------
+// From the 22nd, if no rota for next month is loaded, say so (the files arrive late in the month).
+function rotaReminder(now = new Date()) {
+  const s = S();
+  if (now.getDate() < 22 || !Object.keys(s.rotas).length) return null;
+  const nm = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  const have = Object.values(s.rotas).some(r => r.year === nm.getFullYear() && r.month === nm.getMonth() + 1);
+  if (have) return null;
+  const key = `citrus.rotaNudge.${nm.getFullYear()}-${nm.getMonth() + 1}`;
+  try { if (localStorage.getItem(key)) return null; } catch {}
+  return { month: nm, key };
+}
+function rotaReminderCard() {
+  const r = rotaReminder(); if (!r) return null;
+  const folder = G.knownFolderIds()[`${S().settings.driveFolder}/Rotas`];
+  return h('div', { class: 'banner' }, h('span', { class: 'grow' }, `${MONTHS[r.month.getMonth()]}'s rota isn't here yet. Drop the files in Drive › Rotas (or import them) and Citrus picks them up.`),
+    folder ? h('a', { class: 'btn sm', href: `https://drive.google.com/drive/folders/${folder}`, target: '_blank', rel: 'noopener' }, 'Open Rotas') : h('button', { class: 'btn sm', onClick: () => show('rota') }, 'Import'),
+    h('button', { class: 'btn sm ghost', 'aria-label': 'Dismiss', onClick: () => { try { localStorage.setItem(r.key, '1'); } catch {} render(); } }, '✕'));
+}
+
 // ---------------- PLAN ----------------
 function regenerate() {
   const s = S();
@@ -1035,7 +1057,9 @@ function renderPlan() {
   const s = S();
   const from = rt.planFrom || startOfDay(new Date());
   if (!Object.keys(rt.suggestions).length) regenerate();
-  const out = [h('div', { class: 'row' }, h('h1', { class: 'grow' }, 'Plan'), h('button', { class: 'btn sm', onClick: () => { rt.planFrom = startOfDay(new Date()); regenerate(); render(); } }, 'Regenerate'))];
+  const horizon = planHorizon();
+  const out = [h('div', { class: 'row' }, h('h1', { class: 'grow' }, 'Plan'), h('button', { class: 'btn sm', onClick: () => { rt.planFrom = startOfDay(new Date()); regenerate(); render(); } }, 'Regenerate')),
+    h('div', { class: 'seg', style: { marginTop: '10px' }, role: 'group', 'aria-label': 'How far ahead' }, ...[[3, '3 days'], [7, 'Plan my week'], [10, '10 days']].map(([n, label]) => h('button', { class: horizon === n ? 'active' : '', 'aria-pressed': String(horizon === n), onClick: () => { setPlanHorizon(n); render(); } }, label)))];
   if (!Object.keys(s.rotas).length || !s.me) out.push(h('div', { class: 'banner' }, h('span', { class: 'grow' }, !Object.keys(s.rotas).length ? 'No rota loaded, so every day is planned as a free day. Import your rota first.' : 'Pick your row in Settings › Me so the plan can work around your shifts.'),
     h('button', { class: 'btn sm', onClick: () => show(!Object.keys(s.rotas).length ? 'rota' : 'more') }, !Object.keys(s.rotas).length ? 'Import' : 'Settings')));
   // goals progress this week
@@ -1043,10 +1067,10 @@ function renderPlan() {
   const prog = weekProgress(s, ws);
   out.push(h('div', { class: 'card' }, h('div', { class: 'row' }, h('div', { class: 'title grow' }, `This week · ${fmtDateShort(ws)} – ${fmtDateShort(addDays(ws, 6))}`), h('button', { class: 'btn sm ghost', onClick: goalsSheet }, 'Edit goals')),
     ...s.goals.map(g => { const have = prog[g.id] || 0, target = g.hoursPerWeek * 60; return h('div', { style: { margin: '8px 0' } }, h('div', { class: 'row small' }, h('span', { class: 'grow', style: { fontWeight: 600 } }, g.name), h('span', { class: 'muted' }, `${fmtDur(have)} / ${fmtDur(target)}`)), h('div', { class: 'progress' }, h('i', { style: { width: `${Math.min(100, Math.round(have / target * 100))}%`, '--c': g.color } }))); }),
-    h('div', { class: 'row', style: { marginTop: '10px' } }, h('button', { class: 'btn sm', onClick: rulesSheet }, 'Rules'), h('button', { class: 'btn sm', onClick: acceptAllVisible }, 'Accept all suggestions'))));
+    h('div', { class: 'row', style: { marginTop: '10px' } }, h('button', { class: 'btn sm', onClick: rulesSheet }, 'Rules'), h('button', { class: 'btn sm', onClick: acceptAllVisible }, `Accept ${planHorizon() === 3 ? 'these 3 days' : planHorizon() === 7 ? 'the week' : 'all 10 days'}`))));
   const rv = reviewCard(); if (rv) out.push(rv);
   // days
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < horizon; i++) {
     const date = addDays(from, i); const k = keyOf(date);
     const { today, afterNight, busy } = dayBusy(s, date, rt.events[k] || []);
     const accepted = (s.plan[k] || []).filter(p => p.status === 'accepted' || p.status === 'done').map(p => ({ ...p, _acc: true }));
@@ -1064,8 +1088,12 @@ function renderPlan() {
   }
   return out;
 }
+// How many days the Plan tab shows (suggestions and plan.json still cover 10, so other apps see the full picture)
+function planHorizon() { if (!rt.planDays) { try { rt.planDays = +localStorage.getItem('citrus.planDays') || 3; } catch { rt.planDays = 3; } } return rt.planDays; }
+function setPlanHorizon(n) { rt.planDays = n; try { localStorage.setItem('citrus.planDays', String(n)); } catch {} }
 function acceptAllVisible() {
-  const all = Object.entries(rt.suggestions).flatMap(([k, list]) => list.map(b => [k, b]));
+  const shown = new Set(Array.from({ length: planHorizon() }, (_, i) => keyOf(addDays(rt.planFrom || startOfDay(new Date()), i))));
+  const all = Object.entries(rt.suggestions).filter(([k]) => shown.has(k)).flatMap(([k, list]) => list.map(b => [k, b]));
   if (!all.length) return toast('No suggestions to accept');
   const days = new Set(all.map(([k]) => k)).size;
   const toCal = G.isSignedIn() && S().settings.pushPlan !== false;
@@ -1284,7 +1312,7 @@ function diagnosticsCard() {
     ['Google', G.isSignedIn() ? `signed in as ${G.accountEmail() || s.google.email || '?'}` : G.wasSignedIn() ? 'session expired — tap Sign in' : 'not signed in'],
     ['Session', G.isSignedIn() ? `${G.tokenMinutesLeft()} min left · renews on your next tap` : '—'],
     ['Last sync', s.google.lastSync ? `${new Date(s.google.lastSync).toLocaleString('en-GB')}${rt.syncMode ? ` · ${rt.syncMode}` : ''}${rt.lastSyncMs ? ` · ${(rt.lastSyncMs / 1000).toFixed(1)} s` : ''}` : 'never'],
-    ['Drive requests', `${G.stats.requests} sent · ${G.stats.retries} retried · ${G.stats.errors} failed · ${G.stats.skippedWrites} unchanged writes skipped`],
+    ['Drive requests', `${G.stats.requests} sent · ${G.stats.retries} retried · ${G.stats.errors} failed · ${G.stats.skippedWrites} unchanged writes skipped${G.stats.healed ? ` · ${G.stats.healed} duplicate file(s) tidied` : ''}`],
     ['Last Google error', G.stats.lastError ? `${G.stats.lastError} (${new Date(G.stats.lastErrorAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })})` : 'none'],
     ['Unsaved to Drive', rt.saveDirty ? 'yes — saves on the next sync' : 'no'],
     ['This device', `${store.persistence.ok ? 'saved' : '⚠ ' + store.persistence.lastError} · ${Math.round(store.persistence.bytes / 1024)} KB${rt.storagePersisted ? ' · protected from clean-up' : ''}${rt.storageEst ? ` · ${Math.round(rt.storageEst.usage / 1048576)} of ${Math.round(rt.storageEst.quota / 1048576)} MB used` : ''}`],

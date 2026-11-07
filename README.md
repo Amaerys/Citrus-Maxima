@@ -13,6 +13,9 @@ Live: https://amaerys.github.io/Citrus-Maxima/
 - **Apps** — a launcher for Yuzu, Mephisto, Orange, Sinus, Kumquat, Embergine with what each needs today.
 - **Settings** — Google, calendars, "me", diagnostics, backup / restore, theme.
 
+Morning brief: a daily scheduled task (05:47, Asia/Riyadh) reads `hub/citrus/plan.json`, the app statuses and your calendar from Drive and pushes a short brief to the phone.
+Plan tab shows 3 days by default ("Plan my week" = 7, or 10); plan.json always covers 10 days for the other apps. From the 22nd Citrus reminds you if next month's rota isn't loaded.
+
 Keyboard on desktop: `1–5` tabs, `/` search, `r` sync, `,` settings, `Esc` close.
 
 ## Google
