@@ -2,6 +2,7 @@
 // Not legal advice: the contract, the employer's policy or a government/civil-service post may differ, so everything is a flag to check, not a verdict.
 import { addDays, startOfDay, keyOf, fromKey } from './util.js';
 import { dayInfo, shiftWindow } from './model.js';
+import { currentJob } from './career.js';
 
 export const LAW = {
   dailyH: 8, weeklyH: 48, ramadanWeeklyH: 36, spanH: 12, // Art. 98 / 101
@@ -15,7 +16,8 @@ export const ARTICLE = { span: 'Art. 101', weekly: 'Art. 98', ramadan: 'Art. 98'
 export const DEFAULTS = { on: true, muslim: false, ramadan: ['2027-02-08', '2027-03-09'], hire: '', wage: 0, holidays: [] };
 // Fixed-date public holidays (National Day 23 Sep, Founding Day 22 Feb). Eid dates move with the moon, so they are entered by hand.
 const fixed = (d) => (d.getMonth() === 8 && d.getDate() === 23) || (d.getMonth() === 1 && d.getDate() === 22);
-export const settings = (s) => ({ ...DEFAULTS, ...(s.settings?.labor || {}) });
+/** Defaults come from the current contract in Career (start date, basic wage, leave days, weekly hours); anything you set by hand wins. */
+export const settings = (s) => { const j = currentJob(s); const fromJob = j ? { hire: j.start || '', wage: j.basic || 0, leaveDays: j.leave || 0, weeklyH: j.hoursWeek || 0 } : {}; return { ...DEFAULTS, ...fromJob, ...Object.fromEntries(Object.entries(s.settings?.labor || {}).filter(([k, v]) => !(['hire', 'wage', 'leaveDays', 'weeklyH'].includes(k) && (v === '' || v === 0 || v == null)))) }; };
 export const isHoliday = (cfg, d) => fixed(d) || (cfg.holidays || []).includes(keyOf(d));
 export const inRamadan = (cfg, d) => !!cfg.muslim && cfg.ramadan?.length === 2 && keyOf(d) >= cfg.ramadan[0] && keyOf(d) <= cfg.ramadan[1];
 
@@ -51,7 +53,7 @@ export function checkMonth(state, y, m, cfgIn) {
     const inWeek = wins.filter(w => w.end > a && w.start < b).map(w => ({ start: Math.max(w.start, a), end: Math.min(w.end, b) })).sort((x, y2) => x.start - y2.start);
     for (const w of inWeek) worked += mins(w.start, w.end);
     let ram = 0; for (let i = 0; i < 7; i++) if (inRamadan(cfg, addDays(a, i))) ram++;
-    const cap = Math.round(((7 - ram) * LAW.weeklyH + ram * LAW.ramadanWeeklyH) / 7 * 10) / 10, over = Math.max(0, worked / 60 - cap);
+    const wk = cfg.weeklyH || LAW.weeklyH, cap = Math.round(((7 - ram) * wk + ram * LAW.ramadanWeeklyH) / 7 * 10) / 10, over = Math.max(0, worked / 60 - cap);
     // longest stretch with no work, counting the ends of the week
     let gap = 0, cur = +a; for (const w of inWeek) { gap = Math.max(gap, w.start - cur); cur = Math.max(cur, w.end); } gap = Math.max(gap, +b - cur);
     const restOk = gap >= LAW.restH * 3600000, weekEndInMonth = addDays(b, -1) >= first && a < end;
@@ -74,7 +76,7 @@ export function leaveStatus(state, now = new Date(), cfgIn) {
   const cfg = cfgIn || settings(state); if (!cfg.hire) return null;
   const hire = fromKey(cfg.hire); let yrs = now.getFullYear() - hire.getFullYear(); const ann = new Date(now.getFullYear(), hire.getMonth(), hire.getDate());
   if (ann > now) yrs--; const start = new Date(now.getFullYear() - (ann > now ? 1 : 0), hire.getMonth(), hire.getDate());
-  const entitled = yrs >= 5 ? LAW.annualDays5y : LAW.annualDays; let used = 0;
+  const entitled = Math.max(cfg.leaveDays || 0, yrs >= 5 ? LAW.annualDays5y : LAW.annualDays); let used = 0;
   for (let d = startOfDay(start); d <= now; d = addDays(d, 1)) { const m = dayInfo(state, d).mine; if (m && m.shift.kind === 'leave') used++; }
   return { years: yrs, entitled, used, left: Math.max(0, entitled - used), yearStart: keyOf(start), next5: yrs < 5 ? keyOf(new Date(hire.getFullYear() + 5, hire.getMonth(), hire.getDate())) : '' };
 }

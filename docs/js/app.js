@@ -12,6 +12,7 @@ import { boardModel, overlapModel } from './board.js';
 import * as SU from './social-ui.js';
 import * as CU from './chores-ui.js';
 import * as LU from './labor-ui.js';
+import * as RU from './career-ui.js';
 import * as PU from './people-ui.js';
 import { h, toast, safeUrl, keyOf, fromKey, addDays, startOfDay, sameDay, fmtDate, fmtDateShort, fmtTime, fmtMin, fmtDur, relDay, pad2, DAY_SHORT, DAY_NAMES, MONTHS, telLink, firstName, atMin, minsOf, uid } from './util.js';
 
@@ -60,7 +61,7 @@ async function boot() {
     addEvent: addEventFn,
   });
   const sub = { S, update: (fn) => store.update(fn), sheet, render: () => render(), go: (v, sub) => { if (v === 'rota' && sub) rt.workSeg = sub; show(v); }, busyOf: (d) => (rt.events[keyOf(d)] || []).filter(e => !e.allDay && e.start && e.end).map(e => [Math.max(0, Math.round((e.start - startOfDay(d)) / 60000)), Math.min(1440, Math.round((e.end - startOfDay(d)) / 60000))]), addEvent: addEventFn };
-  SU.initSocial(sub); CU.initChores(sub); LU.initLabor(sub); PU.initPeople({ ...sub, openDay: (d) => daySheet(d), personSheet, personKeyOf, shiftChip, importButton });
+  SU.initSocial(sub); CU.initChores(sub); LU.initLabor(sub); RU.initCareer(sub); PU.initPeople({ ...sub, openDay: (d) => daySheet(d), personSheet, personKeyOf, shiftChip, importButton });
   store.subscribe(() => { render(); remindSoon(); });
   store.onRemoteSync(scheduleRemoteSave);
   loadCachedEvents();
@@ -676,6 +677,7 @@ function renderToday() {
   main.push(MU.mindCard());
   { const nc = PU.todayCard(); if (nc) main.push(nc); }
   { const hc = CU.todayCard(); if (hc) main.push(hc); }
+  { const cc = RU.todayCard(); if (cc) main.push(cc); }
   if (info.hasRota) main.push(onCallCard(info));
   main.push(planCard(now));
   side.push(eventsCard(now));
@@ -1013,9 +1015,9 @@ function noteCard(date) {
 // ---------------- ROTA ----------------
 let workSegDefault = 'calendar';
 function renderWork() {
-  const seg = rt.workSeg || workSegDefault, SEG = [['calendar', 'Calendar'], ['team', 'People'], ['nurses', 'Nurses'], ['home', 'Home']];
+  const seg = rt.workSeg || workSegDefault, SEG = [['calendar', 'Calendar'], ['team', 'People'], ['nurses', 'Nurses'], ['home', 'Home'], ['career', 'Career']];
   const bar = h('div', { class: 'seg work-seg', role: 'tablist' }, SEG.map(([id, l]) => h('button', { class: seg === id ? 'active' : '', role: 'tab', 'aria-selected': seg === id ? 'true' : 'false', onClick: () => { rt.workSeg = id; render(); window.scrollTo(0, 0); } }, l)));
-  const body = seg === 'team' ? PU.renderDirectory() : seg === 'nurses' ? PU.renderNurses() : seg === 'home' ? CU.renderHome() : renderRota();
+  const body = seg === 'team' ? PU.renderDirectory() : seg === 'nurses' ? PU.renderNurses() : seg === 'home' ? CU.renderHome() : seg === 'career' ? RU.renderCareer() : renderRota();
   return [h('h1', {}, 'Work'), bar, ...[body].flat()];
 }
 function renderRota() {

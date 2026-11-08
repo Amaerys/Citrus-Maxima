@@ -24,7 +24,7 @@ async function walk(width, height) {
   for (const sg of ['Overview', 'Tasks', 'Habits', 'Aims', 'Reflect', 'Year', 'Notes']) await mseg(sg);
   await click('.mn-step[aria-label="Next section"]', 'mind/next'); await click('.mn-step[aria-label="Previous section"]', 'mind/prev');
   await mseg('Library');
-  await click('nav.tabs button[data-view=rota], .rail button[data-view=rota]', 'work'); for (const sg of ['People', 'Nurses', 'Home', 'Calendar']) await click(`.work-seg button:has-text("${sg}")`, `work/${sg}`);
+  await click('nav.tabs button[data-view=rota], .rail button[data-view=rota]', 'work'); for (const sg of ['People', 'Nurses', 'Home', 'Career', 'Calendar']) await click(`.work-seg button:has-text("${sg}")`, `work/${sg}`);
   await click('nav.tabs button[data-view=social], .rail button[data-view=social]', 'social'); for (const sg of ['Friends', 'Outings', 'Overview']) await click(`#view-social .mind-seg button:has-text("${sg}")`, `social/${sg}`);
   await click('nav.tabs button[data-view=mind], .rail button[data-view=mind]', 'mind again');
   const kinds = await page.locator('#view-mind .kinds button').allInnerTexts();
