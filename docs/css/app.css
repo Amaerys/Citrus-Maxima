@@ -543,3 +543,12 @@ nav.tabs button.active { color: var(--orange); }
 .rg-c.t-D{background:rgba(255,193,7,.38)}.rg-c.t-E{background:rgba(255,112,67,.36)}.rg-c.t-N{background:rgba(92,107,192,.42)}.rg-c.t-A{background:rgba(38,166,154,.35)}.rg-c.t-leave{background:rgba(158,158,158,.35)}.rg-c.t-other{background:rgba(171,71,188,.3)}
 .rg-sec{position:sticky;left:0;justify-content:flex-start!important;padding:4px 8px;font-weight:700;font-size:.7rem;background:var(--orange-soft)}
 .rg-foot,.rg-f{position:sticky;bottom:0;z-index:1;background:var(--bg,#fff);font-weight:700}.rg-foot{z-index:3}
+
+/* ───── labor law card */
+.lw-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(78px,1fr));gap:6px;margin:10px 0}
+.lw-stats>div{background:var(--orange-soft);border-radius:12px;padding:6px 4px;text-align:center}.lw-stats b{display:block;font-size:1.1rem}.lw-stats small{font-size:.66rem;opacity:.7}
+.lw-flag{font-size:.82rem;padding:6px 8px;margin:4px 0;border-radius:10px;background:rgba(127,127,127,.12);border-left:3px solid #888}
+.lw-flag.bad{border-color:#e53935;background:rgba(229,57,53,.12)}.lw-flag.warn{border-color:#fb8c00;background:rgba(251,140,0,.12)}
+.chip.lw-ok{background:rgba(46,125,50,.25)}.chip.lw-warn{background:rgba(251,140,0,.3)}.chip.lw-bad{background:rgba(229,57,53,.3)}
+.lw-weeks{width:100%;border-collapse:collapse;font-size:.8rem}.lw-weeks th,.lw-weeks td{padding:4px 6px;text-align:center}.lw-weeks td.bad{color:#e53935;font-weight:700}.lw-weeks tr.part{opacity:.5}
+.lw-rules{padding-left:18px;margin:6px 0}.lw-tog{margin:6px 0}

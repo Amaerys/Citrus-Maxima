@@ -17,7 +17,7 @@ const ALL = SITES.map(x => x.id);
 /** group → who they are and where they can be posted. `fixed` groups work at one place and never float. */
 export const GROUPS = {
   head: { label: 'Head nurse', choices: ALL },
-  leaders: { label: 'Team leaders (UPV–LPV)', choices: ['UPV', 'LPV'] },
+  leaders: { label: 'Team leaders (UPV–LPV)', choices: ALL },
   fa: { label: 'First aiders', choices: ALL },
   pool: { label: 'Construction clinics', choices: ALL },
   fsed: { label: 'FSED', fixed: 'FSED' },

@@ -71,9 +71,9 @@ await t('tips: heard postings rank above guesses, never count as fact or history
   s = N.setPost(s, D(9), who.key, 'LPV', { tip: true, from: 'Cresilda' }); w = N.workingWithMe(s, D(9), mine()); assert.equal(w.tipped.length, 0); assert.equal(w.tippedElsewhere, 1); assert.ok(!w.possible.some(x => x.key === who.key));
   s = N.setPost(s, D(9), who.key, 'UPV'); w = N.workingWithMe(s, D(9), mine()); assert.equal(w.confirmed.length, 1); assert.equal(w.tipped.length, 0, 'confirming replaces the tip');
 });
-await t('leaders only go to UPV/LPV; fixed groups carry their place; posts merge across devices', () => {
+await t('leaders can go to any site; fixed groups carry their place; posts merge across devices', () => {
     const s = base(), rows = N.rowsFor(s, D(1)); const lead = rows.find(r => r.group === 'leaders'), fsed = rows.find(r => r.group === 'fsed');
-    assert.deepEqual(lead.choices, ['UPV', 'LPV']); assert.equal(fsed.post, 'FSED'); assert.equal(N.setPost(s, D(1), fsed.key, 'UPV').posts[`2026-11-01:${fsed.key}`].site, 'UPV');
+    assert.deepEqual(lead.choices, ['UPV', 'LPV', 'UPO', 'LPO']); assert.equal(fsed.post, 'FSED'); assert.equal(N.setPost(s, D(1), fsed.key, 'UPV').posts[`2026-11-01:${fsed.key}`].site, 'UPV');
     const a = N.setPost(s, D(1), lead.key, 'UPV'), b = N.setPost(s, D(1), 'id:99', 'LPO'); const m = mergeStates(a, b); assert.equal(Object.keys(m.posts).length, 2);
   });
 }
