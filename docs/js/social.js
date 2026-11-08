@@ -174,13 +174,13 @@ export function parseVCF(text) {
 /** Handles for a rota person. If they are also one of your friends, the friend record is the single source. */
 export function contactOf(s, key) {
   const fr = rec(s.friends).find(f => f.rotaKey === key);
-  if (fr) return { friend: fr, phone: fr.phone, whatsapp: fr.whatsapp, snap: fr.snap, insta: fr.insta, note: fr.notes };
+  if (fr) return { friend: fr, phone: fr.phone, whatsapp: fr.whatsapp, snap: fr.snap, insta: fr.insta, note: fr.notes, birthday: fr.birthday };
   return { friend: null, ...(s.contacts?.[key] || {}) };
 }
 export function setContact(s, key, patch) {
-  const fr = rec(s.friends).find(f => f.rotaKey === key), p = { phone: String(patch.phone || '').slice(0, 24), whatsapp: String(patch.whatsapp || '').slice(0, 24), snap: cleanHandle(patch.snap), insta: cleanHandle(patch.insta), note: String(patch.note || '').slice(0, 300) };
-  if (fr) return updateFriend(s, fr.id, { phone: p.phone, whatsapp: p.whatsapp, snap: p.snap, insta: p.insta, notes: p.note });
-  const contacts = { ...(s.contacts || {}) }; if (!p.phone && !p.whatsapp && !p.snap && !p.insta && !p.note) delete contacts[key]; else contacts[key] = { key, ...p, at: Date.now() };
+  const fr = rec(s.friends).find(f => f.rotaKey === key), p = { phone: String(patch.phone || '').slice(0, 24), whatsapp: String(patch.whatsapp || '').slice(0, 24), snap: cleanHandle(patch.snap), insta: cleanHandle(patch.insta), note: String(patch.note || '').slice(0, 300), birthday: /^\d{4}-\d\d-\d\d$|^\d\d-\d\d$/.test(patch.birthday || '') ? patch.birthday : '' };
+  if (fr) return updateFriend(s, fr.id, { birthday: p.birthday || fr.birthday, phone: p.phone, whatsapp: p.whatsapp, snap: p.snap, insta: p.insta, notes: p.note });
+  const contacts = { ...(s.contacts || {}) }; if (!p.phone && !p.whatsapp && !p.snap && !p.insta && !p.note && !p.birthday) delete contacts[key]; else contacts[key] = { key, ...p, at: Date.now() };
   return { ...s, contacts, deleted: { ...(s.deleted || {}), ...(!contacts[key] ? { [`contact:${key}`]: Date.now() } : {}) } };
 }
 /** Every handle we know for a rota person, as links (rota number first, your own entry on top). */

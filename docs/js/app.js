@@ -13,6 +13,9 @@ import * as SU from './social-ui.js';
 import * as CU from './chores-ui.js';
 import * as LU from './labor-ui.js';
 import * as RU from './career-ui.js';
+import * as XU from './plans-ui.js';
+import * as EU from './extras-ui.js';
+import * as DU from './daily-ui.js';
 import * as PU from './people-ui.js';
 import { h, toast, safeUrl, keyOf, fromKey, addDays, startOfDay, sameDay, fmtDate, fmtDateShort, fmtTime, fmtMin, fmtDur, relDay, pad2, DAY_SHORT, DAY_NAMES, MONTHS, telLink, firstName, atMin, minsOf, uid } from './util.js';
 
@@ -61,7 +64,7 @@ async function boot() {
     addEvent: addEventFn,
   });
   const sub = { S, update: (fn) => store.update(fn), sheet, render: () => render(), go: (v, sub) => { if (v === 'rota' && sub) rt.workSeg = sub; show(v); }, busyOf: (d) => (rt.events[keyOf(d)] || []).filter(e => !e.allDay && e.start && e.end).map(e => [Math.max(0, Math.round((e.start - startOfDay(d)) / 60000)), Math.min(1440, Math.round((e.end - startOfDay(d)) / 60000))]), addEvent: addEventFn };
-  SU.initSocial(sub); CU.initChores(sub); LU.initLabor(sub); RU.initCareer(sub); PU.initPeople({ ...sub, openDay: (d) => daySheet(d), personSheet, personKeyOf, shiftChip, importButton });
+  SU.initSocial(sub); CU.initChores(sub); LU.initLabor(sub); RU.initCareer(sub); XU.initPlans(sub); DU.initDaily({ ...sub, hasApp: (n) => !!mergedApps()[n], launchApp: (n) => launch(n, null) }); EU.initExtras({ ...sub, invite: (ids, what) => SU.inviteSheet(ids, null, what) }); PU.initPeople({ ...sub, openDay: (d) => daySheet(d), personSheet, personKeyOf, shiftChip, importButton });
   store.subscribe(() => { render(); remindSoon(); });
   store.onRemoteSync(scheduleRemoteSave);
   loadCachedEvents();
@@ -674,6 +677,7 @@ function renderToday() {
   hero.append(weekStrip(now));
   main.push(hero);
   const board = shiftBoard(info, today); if (board) main.push(board);
+  for (const dc of DU.todayCards(now)) main.push(dc);
   main.push(MU.mindCard());
   { const nc = PU.todayCard(); if (nc) main.push(nc); }
   { const hc = CU.todayCard(); if (hc) main.push(hc); }
@@ -1064,6 +1068,7 @@ function renderRota() {
     h('div', { class: 'grid2' }, stat(sum.work, 'shifts'), stat(sum.nights, 'nights'), stat(`${sum.hours}h`, 'rostered hours'), stat(sum.off, 'days off')),
     h('div', { class: 'chips', style: { marginTop: '10px' } }, ...Object.entries(sum.siteCount).map(([k, v]) => h('span', { class: 'chip' }, `${k} × ${v}`)))));
   // legend + sources
+  { const mc = XU.monthCard(y, mo); if (mc) out.push(mc); }
   { const lc = LU.laborCard(y, mo); if (lc) out.push(lc); }
   out.push(h('div', { class: 'card' }, h('div', { class: 'title' }, 'Sources'),
     h('div', { class: 'list' }, ...rotas.map(r => h('div', { class: 'item' }, h('div', { class: 'grow' }, h('div', { class: 'name' }, UNIT_LABEL[r.unitKind] || r.unit), h('div', { class: 'meta' }, `${r.people.length} people · ${r.sourceName || 'imported'} · ${new Date(r.importedAt).toLocaleDateString('en-GB')}`)),
@@ -1148,7 +1153,10 @@ function swapHelper(date) {
   const info = dayInfo(s, date);
   const candidates = info.off.filter(e => !isMe(s, e.person));
   const prevN = dayInfo(s, addDays(date, -1)).entries.filter(e => e.shift.type === 'N').map(e => personKeyOf(e.person));
+  const sw = XU.swapBlock(date, personSheet);
   sheet([h('h2', {}, `Cover for ${fmtDateShort(date)}`), h('div', { class: 'small muted', style: { margin: '6px 0 12px' } }, `GP colleagues who are off that day${info.mine ? ` (you: ${info.mine.code || 'off'})` : ''}. Night-before is flagged.`),
+    sw,
+    h('div', { class: 'title', style: { margin: '10px 0 4px' } }, 'Anyone who is off'),
     h('div', { class: 'list' }, ...candidates.map(e => h('div', { class: 'item clickable', onClick: () => personSheet(e.person) },
       h('div', { class: 'avatar' }, initials(e.person.name)), h('div', { class: 'grow' }, h('div', { class: 'name' }, e.person.name), h('div', { class: 'meta' }, [e.person.title, prevN.includes(personKeyOf(e.person)) ? '⚠ night before' : '', sharedShifts(s, personKeyOf(e.person)).length + ' shared shifts'].filter(Boolean).join(' · '))),
       telLink(e.person.mobile) ? h('a', { class: 'btn sm', href: telLink(e.person.mobile).wa, target: '_blank', onClick: ev => ev.stopPropagation() }, '💬') : null)))]);

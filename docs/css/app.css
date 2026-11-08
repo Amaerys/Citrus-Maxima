@@ -561,3 +561,17 @@ nav.tabs button.active { color: var(--orange); }
 .of-score{text-align:center}.of-score b{font-size:1.6rem}.of-declined{opacity:.55}
 
 .cr-post{margin-top:10px;padding:8px 10px;border-radius:12px;border-left:3px solid #e53935;background:rgba(229,57,53,.08)}
+
+/* ───── month report / leave planner */
+.mr .cr-key{margin-top:6px}
+
+/* ───── social plans: polls, wishlist, treats */
+.poll{padding:10px 0;border-top:1px solid rgba(127,127,127,.15)}.poll.closed{opacity:.7}
+.poll-slot{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:6px 8px;margin:4px 0;border-radius:10px;background:rgba(127,127,127,.1)}.poll-slot.best{background:rgba(46,125,50,.2)}.poll-slot.chosen{background:var(--orange-soft);outline:1px solid var(--orange2)}
+.poll-text{white-space:pre-wrap;background:rgba(127,127,127,.12);padding:10px;border-radius:10px;font:inherit;font-size:.85rem}
+.wish{padding:6px 0}
+
+/* ───── Today: briefing, wind-down, rating, study */
+.brief2>summary{display:flex;justify-content:space-between;align-items:center;cursor:pointer;list-style:none}.brief2>summary::-webkit-details-marker{display:none}
+.rate{margin-top:10px}.rate-faces{display:flex;gap:8px;margin-top:4px}.rate-f{flex:1;font-size:1.4rem;padding:6px 0;border-radius:12px;border:1px solid transparent;background:rgba(127,127,127,.12);cursor:pointer}.rate-f.sel{border-color:var(--orange2);background:var(--orange-soft)}
+.study-row{padding:8px 0;border-top:1px solid rgba(127,127,127,.15)}.study-row .bar{height:6px;border-radius:3px;background:rgba(127,127,127,.2);margin:6px 0 2px;overflow:hidden}.study-row .bar i{display:block;height:100%;background:var(--orange2)}

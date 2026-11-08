@@ -1,6 +1,7 @@
 // Social: friends, their handles, free days, best times to meet, invitations, outings. A view of its own.
 import { h, toast, keyOf, fromKey, addDays, startOfDay, relDay, fmtMin, DAY_SHORT, MONTHS } from './util.js';
 import * as F from './social.js';
+import * as XU from './extras-ui.js';
 import * as L from './media.js';
 
 let ctx = null, seg = 'overview', picked = null;
@@ -110,8 +111,8 @@ function bestCard() {
 }
 function nudgeCard() {
   const s = S(), od = F.friendList(s).map(f => ({ f, d: F.overdue(s, f) })).filter(x => x.d > 0).sort((a, b) => b.d - a.d).slice(0, 3), bd = F.birthdays(s, new Date(), 30).slice(0, 3);
-  if (!od.length && !bd.length) return null;
-  return h('div', { class: 'card' }, h('div', { class: 'title' }, 'Don’t let it slip'),
+  const extra = XU.nudgeRows(); if (!od.length && !bd.length && !extra.length) return null;
+  return h('div', { class: 'card' }, h('div', { class: 'title' }, 'Don’t let it slip'), extra,
     od.map(({ f, d }) => h('div', { class: 'row nudge' }, av(f), h('div', { class: 'grow' }, h('div', { class: 'name' }, f.name), h('div', { class: 'tiny dim' }, `${F.lastSeen(s, f.id) ? `last seen ${relDay(fromKey(F.lastSeen(s, f.id)))}` : 'not seen yet'} · ${d} day${d === 1 ? '' : 's'} past your ${f.every}-day gap`)), reach(f), h('button', { class: 'btn sm', onClick: () => inviteSheet([f.id]) }, 'Invite'))),
     bd.map(({ f, inDays }) => h('div', { class: 'row nudge' }, h('span', { class: 'ch-ic sm' }, '🎂'), h('div', { class: 'grow' }, h('div', { class: 'name' }, f.name), h('div', { class: 'tiny dim' }, inDays === 0 ? 'Birthday today' : `Birthday in ${inDays} day${inDays === 1 ? '' : 's'}`)), h('button', { class: 'btn sm', onClick: () => inviteSheet([f.id], null, `Surprise for ${F.shortName(f)}’s birthday`) }, 'Plan'))));
 }
@@ -165,8 +166,8 @@ function overviewSeg() {
 }
 
 export function renderSocial() {
-  const SEGS = [['overview', 'Overview'], ['friends', 'Friends'], ['outings', 'Outings']];
-  const body = seg === 'friends' ? friendsSeg() : seg === 'outings' ? outingsSeg() : overviewSeg();
+  const SEGS = [['overview', 'Overview'], ['friends', 'Friends'], ['outings', 'Outings'], ['plans', 'Plans']];
+  const body = seg === 'friends' ? friendsSeg() : seg === 'outings' ? outingsSeg() : seg === 'plans' ? XU.renderPlans() : overviewSeg();
   return [h('h1', {}, 'Social'), h('div', { class: 'seg mind-seg', role: 'tablist' }, SEGS.map(([id, l]) => h('button', { class: seg === id ? 'active' : '', role: 'tab', 'aria-selected': seg === id ? 'true' : 'false', onClick: () => { seg = id; ctx.render(); } }, l))), ...body];
 }
 /** Small card for Today: who is free together soon. */

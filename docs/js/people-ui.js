@@ -28,9 +28,10 @@ export function reachRow(p, key, size = 'sm') {
 export function contactSheet(p, key) {
   const c = F.contactOf(S(), key), v = (k) => c[k] || '';
   const phone = h('input', { type: 'tel', value: v('phone'), placeholder: p.mobile ? `${p.mobile} (from the rota)` : '05… or +966…' }), wa = h('input', { type: 'tel', value: v('whatsapp'), placeholder: 'if different from phone' }), snap = h('input', { value: v('snap'), placeholder: 'username or link' }), ig = h('input', { value: v('insta'), placeholder: '@username or link' }), note = h('textarea', { rows: 2, placeholder: 'Anything worth remembering' }, v('note'));
-  const box = ctx.sheet([h('h2', {}, p.name), h('div', { class: 'small muted' }, 'Saved on your devices and in your Drive only.'), field('Phone', phone), field('WhatsApp', wa), h('div', { class: 'grid2' }, field('Snapchat', snap), field('Instagram', ig)), field('Note', note),
-    h('div', { class: 'row wrap' }, h('button', { class: 'btn primary grow', onClick: () => { ctx.update(s => F.setContact(s, key, { phone: phone.value, whatsapp: wa.value, snap: snap.value, insta: ig.value, note: note.value })); document.querySelectorAll('.sheet-bg').forEach(e => e.remove()); ctx.render(); ctx.personSheet(p); } }, 'Save'),
-      c.friend ? h('span', { class: 'chip sel' }, 'In your friends') : h('button', { class: 'btn grow', onClick: () => { ctx.update(s => F.friendFromPerson(F.setContact(s, key, { phone: phone.value, whatsapp: wa.value, snap: snap.value, insta: ig.value, note: note.value }), p, key, catOf(personUnits(key)) === 'nurse' ? 'nurse' : 'gp')); document.querySelectorAll('.sheet-bg').forEach(e => e.remove()); toast(`${p.name.replace(/^Dr\.?\s*/i, '')} added to Social`); ctx.render(); } }, 'Add to friends'))]);
+  const bday = h('input', { type: 'date', value: /^\d{4}-/.test(c.birthday || '') ? c.birthday : '' });
+  const box = ctx.sheet([h('h2', {}, p.name), h('div', { class: 'small muted' }, 'Saved on your devices and in your Drive only.'), field('Phone', phone), field('WhatsApp', wa), h('div', { class: 'grid2' }, field('Snapchat', snap), field('Instagram', ig)), field('Note', note), field('Birthday', bday),
+    h('div', { class: 'row wrap' }, h('button', { class: 'btn primary grow', onClick: () => { ctx.update(s => F.setContact(s, key, { phone: phone.value, whatsapp: wa.value, snap: snap.value, insta: ig.value, note: note.value, birthday: bday.value })); document.querySelectorAll('.sheet-bg').forEach(e => e.remove()); ctx.render(); ctx.personSheet(p); } }, 'Save'),
+      c.friend ? h('span', { class: 'chip sel' }, 'In your friends') : h('button', { class: 'btn grow', onClick: () => { ctx.update(s => F.friendFromPerson(F.setContact(s, key, { phone: phone.value, whatsapp: wa.value, snap: snap.value, insta: ig.value, note: note.value, birthday: bday.value }), p, key, catOf(personUnits(key)) === 'nurse' ? 'nurse' : 'gp')); document.querySelectorAll('.sheet-bg').forEach(e => e.remove()); toast(`${p.name.replace(/^Dr\.?\s*/i, '')} added to Social`); ctx.render(); } }, 'Add to friends'))]);
 }
 const personUnits = (key) => { const u = []; for (const r of Object.values(S().rotas)) if (r.people.some(x => ctx.personKeyOf(x) === key)) u.push(r.unitKind); return u; };
 
@@ -66,13 +67,13 @@ export function renderDirectory() {
     const q = query.toLowerCase().trim(), digits = q.replace(/\D/g, '');
     const shown = rows.filter(({ p, n }) => { if (!q) return true; const c = F.contactOf(s, p.key); return p.name.toLowerCase().includes(q) || (p.title || '').toLowerCase().includes(q) || (n?.clinic || '').toLowerCase().includes(q) || (N.GROUPS[n?.group]?.label || '').toLowerCase().includes(q) || (digits.length >= 3 && [p.mobile, c.phone, c.whatsapp].some(x => String(x || '').replace(/\D/g, '').includes(digits))) || (c.snap || '').toLowerCase().includes(q) || (c.insta || '').toLowerCase().includes(q); });
     countEl.textContent = `${shown.length} ${shown.length === 1 ? 'person' : 'people'}`;
-    list.replaceChildren(...shown.slice(0, 150).map(({ p, n, t, shared }) => {
+    list.replaceChildren(...[...shown.slice(0, 150).map(({ p, n, t, shared }) => {
       const post = n && t?.sh.kind === 'work' ? (N.GROUPS[n.group]?.fixed || N.postOf(s, today, p.key)) : '', g = n ? N.GROUPS[n.group]?.label : '';
       return h('div', { class: 'item clickable dir-item', onClick: () => ctx.personSheet(p) }, h('div', { class: `avatar ${catOf(p.units)}` }, initials(p.name)),
         h('div', { class: 'grow' }, h('div', { class: 'name row' }, p.name, isMe(s, p) ? h('span', { class: 'chip sel', style: { padding: '1px 7px', fontSize: '10px' } }, 'you') : null, F.contactOf(s, p.key).friend ? h('span', { class: 'tiny', title: 'friend' }, '⭐') : null),
           h('div', { class: 'meta' }, [n ? g : p.title, n?.leader ? 'leader' : '', cat === 'all' || !n ? p.units.map(u => unitWord[u]).join(' + ') : '', shared ? `${shared} shifts with you` : ''].filter(Boolean).join(' · '))),
         t ? h('span', { class: 'sh-mini' }, ctx.shiftChip(t.sh, t.code), post ? h('small', {}, post.length > 4 ? post : post) : null) : null, reachRow(p, p.key));
-    }), shown.length > 150 ? h('div', { class: 'tiny dim', style: { padding: '8px' } }, `Showing 150 of ${shown.length}: search to narrow down`) : null);
+    }), shown.length > 150 ? h('div', { class: 'tiny dim', style: { padding: '8px' } }, `Showing 150 of ${shown.length}: search to narrow down`) : null].filter(Boolean));
   }
   paintList();
   return [modeSeg, h('div', { class: 'row', style: { marginTop: '4px' } }, input), seg, groupBar, countEl, h('div', { class: 'card', style: { padding: '4px 6px' } }, list)];
@@ -90,7 +91,7 @@ export function renderNurses() {
   const st = N.staffing(s, date), floaters = st.rows.filter(r => N.isFloater(r.group) && r.group !== 'head'), unposted = floaters.filter(r => !r.post), sug = unposted.filter(r => r.suggest);
   out.push(h('div', { class: 'card' }, h('div', { class: 'title' }, `${st.total} nurses on shift`), h('div', { class: 'chips' }, Object.entries(st.byShift).sort().map(([t, n]) => h('span', { class: 'chip' }, `${t} ${n}`)), unposted.length ? h('span', { class: 'chip late' }, `${unposted.length} not posted`) : floaters.length ? h('span', { class: 'chip sel' }, 'all posted') : null)));
   const myInfo = dayInfo(s, date), w = myInfo.mine ? N.workingWithMe(s, date, myInfo.mine) : null;
-  if (w?.site) out.push(h('div', { class: 'card' }, h('div', { class: 'title' }, `Your site: ${N.siteLabel(w.site)}`), h('div', { class: 'small' }, `${w.confirmed.length} posted with you${w.tipped?.length ? ` · ${w.tipped.length} heard` : ''} · ${w.possible.length} could still be sent there`)));
+  { const wc = myInfo.mine ? withMeCard(date, myInfo.mine, true) : null; if (wc) out.push(wc); }
   out.push(h('div', { class: 'card' }, h('div', { class: 'row' }, h('div', { class: 'title grow' }, 'Postings'), sug.length ? h('button', { class: 'btn sm', onClick: () => { ctx.update(x => N.applySuggestions(x, date)); toast(`${sug.length} posted from where they went last`); } }, `Use last posts (${sug.length})`) : null),
     h('div', { class: 'post-grid' }, N.SITES.map(t => siteTile(t.id, st.rows.filter(r => r.post === t.id), date, st.rows.filter(r => !r.post && r.tip?.site === t.id))))));
   const leaders = N.nurses(s).filter(n => n.leader), friendKeys = new Set(F.friendList(s).map(f => f.rotaKey));
@@ -109,19 +110,19 @@ export function renderNurses() {
 }
 
 // ───────── nurses with you (day sheet)
-export function withMeCard(date, mine) {
+export function withMeCard(date, mine, onBoard = false) {
   const s = S(), w = N.workingWithMe(s, date, mine); if (!w || !w.hasNurses) return null;
   const [m0, m1] = [mine.shift.hours.start, mine.shift.hours.overnight || mine.shift.hours.end <= mine.shift.hours.start ? mine.shift.hours.end + 1440 : mine.shift.hours.end], len = m1 - m0, pc = (x) => `${Math.max(0, Math.min(100, (x - m0) / len * 100)).toFixed(1)}%`;
   const bar = (r, cls) => h('span', { class: 'nr-bar', 'aria-hidden': 'true' }, h('i', { class: cls, style: { left: pc(r.from), width: `${Math.max(2, (r.to - r.from) / len * 100).toFixed(1)}%` } }));
   const row = (r, kind) => h('button', { class: `nr-row ${kind}`, onClick: () => ctx.personSheet(r.person) }, h('span', { class: 'nr-name' }, h('span', { class: 'ellipsis' }, r.person.name.split(' ').slice(0, 2).join(' ')), h('small', {}, `${r.shift.type} ${hm(r.shift.hours.start)}–${hm(r.shift.hours.end % 1440 || 1440)}${r.person.leader ? ' · leader' : ''}`)), bar(r, kind), h('span', { class: 'nr-pct' }, r.pct >= 0.995 ? 'all' : `${Math.round(r.pct * 100)}%`, kind === 'maybe' ? h('small', {}, r.seen ? `~${Math.round(r.chance * 100)}% here` : 'new') : kind === 'heard' ? h('small', {}, r.heardFrom ? `heard: ${r.heardFrom}` : 'heard') : null));
   const poss = w.possible.slice(0, 10), heard = w.tipped || [];
   return h('div', { class: 'card nr' }, h('div', { class: 'title' }, w.site ? `Nurses at ${N.siteLabel(w.site)}` : 'Nurses on your shift'),
-    h('div', { class: `ov-head ${w.confirmed.length ? 'ok' : 'warn'}` }, w.confirmed.length ? `${w.confirmed.length} posted with you` : heard.length ? `Nobody confirmed yet · ${heard.length} heard` : w.unposted ? 'Nobody is posted to your site yet' : 'No nurses overlap your shift'),
+    h('div', { class: `ov-head ${w.confirmed.length ? 'ok' : 'warn'}` }, w.confirmed.length ? `${w.confirmed.length} posted with you${w.possible.length ? ` · ${w.possible.length} more could join` : ''}` : heard.length ? `${heard.length} heard, ${w.possible.length} more could be sent to you` : w.possible.length ? `Likely with you${w.site ? ' at ' + N.siteLabel(w.site) : ''}: ${w.possible.length} nurses could be sent` : w.unposted ? 'No postings yet and nobody overlaps your shift' : 'No nurses overlap your shift'),
     w.confirmed.map(r => row(r, 'sure')),
     heard.length ? [h('div', { class: 'tiny dim', style: { margin: '10px 0 4px' } }, 'What you heard'), heard.map(r => row(r, 'heard'))] : null,
-    poss.length ? [h('div', { class: 'tiny dim', style: { margin: '10px 0 4px' } }, `Could still be sent to you (${w.possible.length}), most likely first`), poss.map(r => row(r, 'maybe'))] : null,
+    poss.length ? [h('div', { class: 'tiny dim', style: { margin: '10px 0 4px' } }, (w.confirmed.length || heard.length ? `Could still be sent to you (${w.possible.length})` : `Who could be with you (${w.possible.length})`) + ', most likely first'), poss.map(r => row(r, 'maybe'))] : null,
     w.possible.length > poss.length ? h('div', { class: 'tiny dim' }, `+${w.possible.length - poss.length} more`) : null,
-    h('div', { class: 'row wrap', style: { marginTop: '10px' } }, h('button', { class: 'btn sm', onClick: () => { goNurses(date); ctx.go('rota', 'nurses'); } }, w.unposted ? 'Set today’s postings' : 'Open postings'), w.elsewhere ? h('span', { class: 'tiny dim' }, `${w.elsewhere} posted elsewhere`) : null));
+    h('div', { class: 'row wrap', style: { marginTop: '10px' } }, onBoard ? null : h('button', { class: 'btn sm', onClick: () => { goNurses(date); ctx.go('rota', 'nurses'); } }, w.unposted ? 'Set today’s postings' : 'Open postings'), w.elsewhere ? h('span', { class: 'tiny dim' }, `${w.elsewhere} posted elsewhere`) : null));
 }
 
 // ───────── Today

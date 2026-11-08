@@ -27,7 +27,7 @@ const sheetTxt = await p.locator('.sheet').innerText();
 check(/Nurses at Upper Village/i.test(sheetTxt), 'card "Nurses at Upper Village" on a day I work there');
 const maybe = await p.locator('.sheet .nr-row.maybe').count(); check(maybe >= 5, `possible nurses listed (${maybe})`);
 const names = await p.locator('.sheet .nr-row .nr-name span.ellipsis').allInnerTexts(); check(!names.some(n => /Narita|Dhanya|Sillina|Kharmina/.test(n)), 'FSED / Aqua Arabia / Plateau nurses are never offered');
-check(/Nobody is posted to your site yet/i.test(sheetTxt), 'says nobody is posted yet'); check(await p.locator('.sheet .card.ov').count() === 1, 'doctor overlap card is still there, nurses are not mixed into it: ' + (await p.locator('.sheet .card.ov').innerText()).replace(/\n/g, ' ').slice(0, 120));
+check(/Likely with you at Upper Village/i.test(sheetTxt) && /Who could be with you/.test(sheetTxt), 'leads with who could be with you, not "nobody posted"'); check(await p.locator('.sheet .card.ov').count() === 1, 'doctor overlap card is still there, nurses are not mixed into it: ' + (await p.locator('.sheet .card.ov').innerText()).replace(/\n/g, ' ').slice(0, 120));
 await p.screenshot({ path: `${shots}/day-nurses.png` }); await p.keyboard.press('Escape'); await sleep(150);
 
 console.log('nurses board');
@@ -53,7 +53,8 @@ await p.fill('#view-rota .dir-search', '0561666913'); await sleep(200); check(/O
 await p.fill('#view-rota .dir-search', 'cresilda'); await sleep(200); await p.click('#view-rota .dir-item .name'); await sleep(350);
 check(/Team leaders/.test(await p.locator('.sheet').innerText()) && /Nurse/.test(await p.locator('.sheet .card .title >> nth=0').innerText()), 'person sheet shows nurse details'); check(await p.locator('.sheet .prota .pr-day').count() >= 28, 'her pretty month is there');
 await p.screenshot({ path: `${shots}/person-sheet.png` }); await p.click('.sheet button:has-text("numbers & socials")'); await sleep(250);
-await p.fill('.sheet input[placeholder="username or link"]', 'https://www.snapchat.com/add/cresi_b'); await p.fill('.sheet input[placeholder="@username or link"]', '@cresi.b'); await p.click('.sheet button:has-text("Save")'); await sleep(350);
+await p.fill('.sheet input[placeholder="username or link"]', 'https://www.snapchat.com/add/cresi_b'); await p.fill('.sheet input[placeholder="@username or link"]', '@cresi.b'); await p.fill('.sheet input[type=date]', '1990-11-12'); await p.click('.sheet button:has-text("Save")'); await sleep(350);
+check(await p.evaluate(() => Object.values(JSON.parse(localStorage.getItem('citrus.state.v1')).contacts || {}).some(c => c.birthday === '1990-11-12')), 'birthday saved on a nurse contact');
 check(/snapchat.com\/add\/cresi_b/.test(await p.locator('.sheet').innerText().then(() => p.locator('.sheet a.snap').getAttribute('href'))), 'person sheet refreshes with the new handles'); await p.keyboard.press('Escape'); await sleep(200);
 check(/snapchat\.com\/add\/cresi_b/.test(await p.locator('#view-rota .dir-item a.snap').getAttribute('href')) && /instagram\.com\/cresi\.b/.test(await p.locator('#view-rota .dir-item a.ig').getAttribute('href')), 'Snapchat and Instagram saved on a nurse, shown in the list');
 await p.click('#view-rota .dir-item .name'); await sleep(300); await p.click('.sheet button:has-text("Edit contact")'); await sleep(250); await p.click('.sheet button:has-text("Add to friends")'); await sleep(400);

@@ -65,3 +65,10 @@ export function telLink(mobile) {
 export function firstName(name) {
   return String(name || '').replace(/^Dr\.?\s*/i, '').split(/\s+/)[0] || name;
 }
+
+// Safety net: the DOM prints null/undefined/false as the words "null"/"undefined"/"false" when passed to append(), prepend() or replaceChildren().
+// Drop them instead, so `cond ? el : null` is always safe.
+if (typeof Element !== 'undefined' && !Element.prototype.__citrusSafe) {
+  for (const k of ['append', 'prepend', 'replaceChildren']) { const orig = Element.prototype[k]; Element.prototype[k] = function (...c) { return orig.apply(this, c.flat(Infinity).filter(x => x !== null && x !== undefined && x !== false)); }; }
+  Object.defineProperty(Element.prototype, '__citrusSafe', { value: true });
+}
