@@ -25,7 +25,7 @@ console.log('Work');
 check(await p.locator('nav.tabs button[data-view=team]').count() === 0, 'no separate Team tab');
 check(await p.locator('nav.tabs button').count() === 6, 'six tabs');
 await tab(p, 'rota'); check(/Work/.test(await txt(p, '#view-rota h1')), 'Work page');
-await p.click('.work-seg button:has-text("Team")'); await sleep(200); check(await p.locator('#view-rota .item').count() >= 5, 'Team list inside Work');
+await p.click('.work-seg button:has-text("People")'); await sleep(200); check(await p.locator('#view-rota .item').count() >= 5, 'Team list inside Work');
 await p.click('.work-seg button:has-text("Calendar")'); await sleep(200);
 const dayN = new Date().getDate(); await p.click(`#view-rota .cal .day:not(.pad) >> nth=${dayN - 1}`); await sleep(300);
 check(await p.locator('.sheet .card.ov').count() === 1, 'day sheet has the overlap card');
@@ -51,9 +51,9 @@ check(!/Planned/i.test(await txt(p, '#view-rota .card.chore')) && /Due /i.test(a
 await tab(p, 'today'); check(await p.locator('.chores-today').count() >= 0, 'Today renders with chores');
 
 console.log('Social');
-await tab(p, 'social'); check(/Start with your GP friends/.test(await txt(p, '#view-social')), 'starter card');
-check(/Mohammed Merri · in rota/.test(await txt(p, '#view-social')), 'full name matches exactly one rota row');
-await p.click('#view-social button:has-text("Add these four")'); await sleep(400);
+await tab(p, 'social'); check(/Your GP friends/.test(await txt(p, '#view-social')), 'starter card');
+check(/Mohammed[^·]*· in schedule/.test(await txt(p, '#view-social')), 'full name matches exactly one rota row');
+await p.click('#view-social button:has-text("Add these 4")'); await sleep(400);
 check(/Faisal/.test(await txt(p, '#view-social')) && await p.locator('#view-social .sg-row').count() >= 5, 'free-days grid with four friends');
 check(/Best times to meet/.test(await txt(p, '#view-social')), 'best times shown');
 await p.screenshot({ path: `${shots}/social-overview.png`, fullPage: true });
@@ -89,12 +89,12 @@ await p.click('.mn-step[aria-label="Next section"]'); await sleep(250); check(/N
 await p.click('.mn-step[aria-label="Next section"]'); await sleep(250); check(/Overview/.test(await txt(p, '.mn-main')), 'next wraps around to Overview');
 await p.screenshot({ path: `${shots}/mind-overview.png` });
 for (const v of ['today', 'rota', 'plan', 'social', 'mind', 'apps']) { await tab(p, v); check(await over(p) <= 0, `no overflow: ${v}`); }
-await tab(p, 'rota'); await p.click('.work-seg button:has-text("Team")'); await p.evaluate(() => { location.hash = '#team'; }); await sleep(300);
+await tab(p, 'rota'); await p.click('.work-seg button:has-text("People")'); await p.evaluate(() => { location.hash = '#team'; }); await sleep(300);
 check(await p.locator('#view-rota.active').count() === 1, 'old #team link lands in Work');
 check(p.errors.length === 0, 'no page errors: ' + p.errors.join(' | ').slice(0, 300));
 
 console.log('desktop');
-const d = await open(1280, 800); await tab(d, 'social'); await d.click('#view-social button:has-text("Add these four")'); await sleep(400); await d.screenshot({ path: `${shots}/desktop-social.png` });
+const d = await open(1280, 800); await tab(d, 'social'); await d.click('#view-social button:has-text("Add these 4")'); await sleep(400); await d.screenshot({ path: `${shots}/desktop-social.png` });
 await tab(d, 'rota'); await d.click(`#view-rota .cal .day:not(.pad) >> nth=${dayN - 1}`); await sleep(300); await d.screenshot({ path: `${shots}/desktop-day.png` });
 check(d.errors.length === 0, 'desktop: no page errors ' + d.errors.join('|').slice(0, 200));
 await browser.close(); server.close(); console.log(bad ? `${bad} FAILED` : 'social ui ok'); process.exit(bad ? 1 : 0);

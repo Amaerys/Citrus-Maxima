@@ -2,7 +2,9 @@
 import { interpretCode } from './rota-parser.js';
 import { monthKey, keyOf, addDays, atMin } from './util.js';
 
-export const UNIT_LABEL = { gp: 'GP rota', uv: 'Upper Village specialists', fsed: 'FSED', lv: 'Lower Village specialists' };
+export const UNIT_LABEL = { gp: 'GP rota', uv: 'Upper Village specialists', fsed: 'FSED', lv: 'Lower Village specialists', nurse: 'Nurses' };
+/** The nurses' schedule is its own thing: nurses are never your colleagues on the GP board, on leave lists or in coverage counts. */
+export const isNurseRota = (r) => r.unitKind === 'nurse';
 
 export function rotasForMonth(state, y, m) {
   const mk = monthKey(y, m);
@@ -41,7 +43,7 @@ export function dayInfo(state, date) {
   const y = date.getFullYear(), m = date.getMonth() + 1, d = date.getDate();
   const rotas = rotasForMonth(state, y, m);
   const entries = [];
-  for (const r of rotas) for (const p of r.people) entries.push(assignment(r, p, d));
+  for (const r of rotas) if (!isNurseRota(r)) for (const p of r.people) entries.push(assignment(r, p, d));
   const mine = entries.find(e => e.rota.unitKind === 'gp' && isMe(state, e.person)) || entries.find(e => isMe(state, e.person)) || null;
   // your own correction (swap / cover / cancelled) wins over the imported rota
   const swap = state.swaps?.[keyOf(date)];

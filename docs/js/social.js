@@ -59,11 +59,17 @@ const WAKE = 8 * H, LATE = 24 * H;
 /** The shift (or lack of one) of a person on a date: { status: 'off'|'work'|'leave'|'unknown', start, end, type } with minutes from that day's midnight (end may pass 1440). */
 function personShift(s, f, date) {
   const key = keyOf(date);
-  if (f.rotaKey) { const sh = rotaCode(s, f.rotaKey, date); if (sh) { if (sh.kind === 'work' && sh.hours) return { status: 'work', type: sh.type, start: sh.hours.start, end: sh.hours.overnight || sh.hours.end <= sh.hours.start ? sh.hours.end + 1440 : sh.hours.end, site: sh.site }; return { status: sh.kind === 'leave' ? 'leave' : sh.kind === 'off' ? 'off' : 'unknown', type: '' }; } return { status: 'unknown', type: '' }; }
+  let why = '';
+  if (f.rotaKey) {
+    const sh = rotaCode(s, f.rotaKey, date);
+    if (sh && sh.kind === 'work' && sh.hours) return { status: 'work', type: sh.type, start: sh.hours.start, end: sh.hours.overnight || sh.hours.end <= sh.hours.start ? sh.hours.end + 1440 : sh.hours.end, site: sh.site };
+    if (sh && (sh.kind === 'leave' || sh.kind === 'off')) return { status: sh.kind, type: '' };
+    if (sh && sh.kind === 'other') why = sh.label;   // training, pulled out to another project…: the schedule says nothing useful, so use what you entered by hand
+  }
   const code = f.sched?.[key];
   if (code) { if (code === 'off') return { status: 'off', type: '' }; if (code === 'leave') return { status: 'leave', type: '' }; const hrs = f.hours?.[code] || DEFAULT_HOURS[code]; if (hrs) return { status: 'work', type: code, start: hrs[0], end: hrs[1] <= hrs[0] ? hrs[1] + 1440 : hrs[1] }; }
   if (f.weeklyOff?.includes(date.getDay())) return { status: 'off', type: '' };
-  return { status: 'unknown', type: '' };
+  return { status: 'unknown', type: '', why };
 }
 /** Free windows [from, to] in minutes for someone on a date, allowing for travel, sleep after a night and a rest before one. */
 export function freeWindows(s, f, date) {
@@ -162,4 +168,25 @@ export function parseVCF(text) {
     const name = g('FN') || g('N').split(';').filter(Boolean).reverse().join(' '); if (!name) continue; const bd = g('BDAY').replace(/[^\d-]/g, ''); const tel = g('TEL');
     out.push({ name, phone: tel, nick: g('NICKNAME'), birthday: /^\d{8}$/.test(bd) ? `${bd.slice(0, 4)}-${bd.slice(4, 6)}-${bd.slice(6)}` : /^\d{4}-\d\d-\d\d$/.test(bd) ? bd : '' });
   } return out;
+}
+
+// ───────────── people from the rotas (doctors, specialists, nurses): numbers and social handles on top of what the rota already says
+/** Handles for a rota person. If they are also one of your friends, the friend record is the single source. */
+export function contactOf(s, key) {
+  const fr = rec(s.friends).find(f => f.rotaKey === key);
+  if (fr) return { friend: fr, phone: fr.phone, whatsapp: fr.whatsapp, snap: fr.snap, insta: fr.insta, note: fr.notes };
+  return { friend: null, ...(s.contacts?.[key] || {}) };
+}
+export function setContact(s, key, patch) {
+  const fr = rec(s.friends).find(f => f.rotaKey === key), p = { phone: String(patch.phone || '').slice(0, 24), whatsapp: String(patch.whatsapp || '').slice(0, 24), snap: cleanHandle(patch.snap), insta: cleanHandle(patch.insta), note: String(patch.note || '').slice(0, 300) };
+  if (fr) return updateFriend(s, fr.id, { phone: p.phone, whatsapp: p.whatsapp, snap: p.snap, insta: p.insta, notes: p.note });
+  const contacts = { ...(s.contacts || {}) }; if (!p.phone && !p.whatsapp && !p.snap && !p.insta && !p.note) delete contacts[key]; else contacts[key] = { key, ...p, at: Date.now() };
+  return { ...s, contacts, deleted: { ...(s.deleted || {}), ...(!contacts[key] ? { [`contact:${key}`]: Date.now() } : {}) } };
+}
+/** Every handle we know for a rota person, as links (rota number first, your own entry on top). */
+export function reachLinks(s, person, key) { const c = contactOf(s, key); return links({ phone: c.phone || person.mobile || '', whatsapp: c.whatsapp || '', snap: c.snap, insta: c.insta }); }
+/** Make a rota person a friend (their shifts then feed the free-days grid). */
+export function friendFromPerson(s, person, key, kind) {
+  const old = s.contacts?.[key] || {};
+  return addFriend(s, { name: person.name.replace(/^Dr\.?\s*/i, ''), kind, rotaKey: key, phone: old.phone || person.mobile || '', whatsapp: old.whatsapp || '', snap: old.snap || '', insta: old.insta || '', notes: old.note || '', every: 30 });
 }

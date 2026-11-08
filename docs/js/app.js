@@ -11,6 +11,7 @@ import { constellation } from './apps-ui.js';
 import { boardModel, overlapModel } from './board.js';
 import * as SU from './social-ui.js';
 import * as CU from './chores-ui.js';
+import * as PU from './people-ui.js';
 import { h, toast, safeUrl, keyOf, fromKey, addDays, startOfDay, sameDay, fmtDate, fmtDateShort, fmtTime, fmtMin, fmtDur, relDay, pad2, DAY_SHORT, DAY_NAMES, MONTHS, telLink, firstName, atMin, minsOf, uid } from './util.js';
 
 // ---------------- runtime state (not persisted) ----------------
@@ -58,7 +59,7 @@ async function boot() {
     addEvent: addEventFn,
   });
   const sub = { S, update: (fn) => store.update(fn), sheet, render: () => render(), go: (v, sub) => { if (v === 'rota' && sub) rt.workSeg = sub; show(v); }, busyOf: (d) => (rt.events[keyOf(d)] || []).filter(e => !e.allDay && e.start && e.end).map(e => [Math.max(0, Math.round((e.start - startOfDay(d)) / 60000)), Math.min(1440, Math.round((e.end - startOfDay(d)) / 60000))]), addEvent: addEventFn };
-  SU.initSocial(sub); CU.initChores(sub);
+  SU.initSocial(sub); CU.initChores(sub); PU.initPeople({ ...sub, openDay: (d) => daySheet(d), personSheet, personKeyOf, shiftChip, importButton });
   store.subscribe(() => { render(); remindSoon(); });
   store.onRemoteSync(scheduleRemoteSave);
   loadCachedEvents();
@@ -483,7 +484,7 @@ async function uploadRotas(fileList) {
   let up = 0;
   for (const f of fileList) {
     let rota; try { rota = await parseRotaFile(await f.arrayBuffer(), f.name); } catch { continue; }
-    const name = `${rota.year}-${pad2(rota.month)} ${({ gp: 'GP rota', fsed: 'FSED', uv: 'Upper Village', lv: 'Lower Village' })[rota.unitKind] || rota.unit}.xlsx`;
+    const name = `${rota.year}-${pad2(rota.month)} ${({ gp: 'GP rota', fsed: 'FSED', uv: 'Upper Village', lv: 'Lower Village', nurse: 'Nurses' })[rota.unitKind] || rota.unit}.xlsx`;
     const same = existing.find(x => x.name === name || x.name === f.name);
     if (same && +same.size === f.size) continue;   // already there
     const r = await G.uploadRota(S().settings.driveFolder, name, f, same?.id);
@@ -612,13 +613,11 @@ function personSheet(p) {
     h('div', { class: 'row' }, h('div', { class: 'avatar', style: { width: '44px', height: '44px', borderRadius: '50%', background: 'var(--orange-soft)', color: 'var(--orange2)', display: 'grid', placeItems: 'center', fontWeight: '700' } }, initials(p.name)),
       h('div', { class: 'grow' }, h('h2', {}, p.name), h('div', { class: 'small muted' }, [p.title, p.id ? `ID ${p.id}` : ''].filter(Boolean).join(' · ')))),
     h('div', { style: { height: '10px' } }),
-    contactButtons(p.mobile),
+    p.mobile ? h('div', { class: 'small muted' }, telLink(p.mobile)?.display || p.mobile) : null,
+    ...PU.personBlock(p),
     isMe(s, p) ? null : h('div', { class: 'card', style: { marginTop: '12px' } }, h('div', { class: 'title' }, `Shifts with you (${shared.length})`),
       shared.length ? h('div', { class: 'chips' }, ...shared.map(x => h('span', { class: `chip ${x.shift.type}` }, `${fmtDateShort(x.date)} ${x.shift.type}`))) : h('div', { class: 'muted small' }, 'None in the loaded rotas')),
-    ...months.map(r => {
-      const me = r.people.find(x => personKeyOf(x) === key);
-      return h('div', { class: 'card' }, h('div', { class: 'title' }, `${MONTHS[r.month - 1]} ${r.year} · ${UNIT_LABEL[r.unitKind] || r.unit}`), miniMonth(r, me));
-    }),
+    months.length ? PU.personRota(p) : null,
   ];
   sheet(content);
 }
@@ -674,6 +673,7 @@ function renderToday() {
   main.push(hero);
   const board = shiftBoard(info, today); if (board) main.push(board);
   main.push(MU.mindCard());
+  { const nc = PU.todayCard(); if (nc) main.push(nc); }
   { const hc = CU.todayCard(); if (hc) main.push(hc); }
   if (info.hasRota) main.push(onCallCard(info));
   main.push(planCard(now));
@@ -1012,9 +1012,9 @@ function noteCard(date) {
 // ---------------- ROTA ----------------
 let workSegDefault = 'calendar';
 function renderWork() {
-  const seg = rt.workSeg || workSegDefault, SEG = [['calendar', 'Calendar'], ['team', 'Team'], ['home', 'Home']];
+  const seg = rt.workSeg || workSegDefault, SEG = [['calendar', 'Calendar'], ['team', 'People'], ['nurses', 'Nurses'], ['home', 'Home']];
   const bar = h('div', { class: 'seg work-seg', role: 'tablist' }, SEG.map(([id, l]) => h('button', { class: seg === id ? 'active' : '', role: 'tab', 'aria-selected': seg === id ? 'true' : 'false', onClick: () => { rt.workSeg = id; render(); window.scrollTo(0, 0); } }, l)));
-  const body = seg === 'team' ? renderTeam() : seg === 'home' ? CU.renderHome() : renderRota();
+  const body = seg === 'team' ? PU.renderDirectory() : seg === 'nurses' ? PU.renderNurses() : seg === 'home' ? CU.renderHome() : renderRota();
   return [h('h1', {}, 'Work'), bar, ...[body].flat()];
 }
 function renderRota() {
@@ -1113,7 +1113,7 @@ function daySheet(date) {
   if (today) content.push(h('div', { class: 'card hero' }, h('div', { class: 'title' }, 'Your shift'), h('div', { class: 'big' }, today.shift.label), h('div', { class: 'sub' }, `${fmtTime(today.window.start)} – ${fmtTime(today.window.end)} · ${fmtDur(today.shift.hours.durationMin)} · ${today.code}`),
     today.mci ? h('div', { style: { marginTop: '6px' } }, mciBadge()) : null,
     null));
-  if (today) { const oc = overlapCard(info, today); if (oc) content.push(oc); }
+  if (today) { const oc = overlapCard(info, today); if (oc) content.push(oc); const nc = PU.withMeCard(info.date, info.mine); if (nc) content.push(nc); }
   else if (info.mine?.shift.kind === 'leave') content.push(h('div', { class: 'card hero' }, h('div', { class: 'big' }, info.mine.shift.label)));
   else if (s.me && info.hasRota) content.push(h('div', { class: 'card hero' }, h('div', { class: 'big' }, overnightTail ? 'Off after night' : 'Day off'), overnightTail ? h('div', { class: 'sub' }, `Night ends ${fmtTime(overnightTail.window.end)}`) : null));
   // all sites
@@ -1151,36 +1151,6 @@ function swapHelper(date) {
 }
 
 // ---------------- TEAM ----------------
-let teamQuery = '', teamFilter = 'gp';
-function renderTeam() {
-  const s = S();
-  const people = allPeople(s);
-  if (!people.length) return h('div', { class: 'card' }, h('div', { class: 'empty' }, h('div', { class: 'big' }, '👥'), 'Import a rota to see your team'));
-  const q = teamQuery.toLowerCase();
-  const list = people.filter(p => (teamFilter === 'all' || p.units.includes(teamFilter)) && (!q || p.name.toLowerCase().includes(q) || (p.title || '').toLowerCase().includes(q)))
-    .map(p => ({ ...p, shared: sharedShifts(s, p.key).length })).sort((a, b) => b.shared - a.shared || a.name.localeCompare(b.name));
-  const now = new Date();
-  const todayInfo = dayInfo(s, now);
-  const input = h('input', { placeholder: 'Search name or title', value: teamQuery, style: { flex: 1, background: 'var(--bg2)', border: '1px solid var(--line)', borderRadius: '10px', padding: '9px 12px' }, onInput: (e) => { teamQuery = e.target.value; renderList(); } });
-  const seg = h('div', { class: 'seg', style: { marginTop: '10px' } }, ...[['gp', 'GPs'], ['fsed', 'FSED'], ['uv', 'Upper V.'], ['all', 'All']].map(([k, l]) => h('button', { class: k === teamFilter ? 'active' : '', onClick: () => { teamFilter = k; render(); } }, l)));
-  const listEl = h('div', { class: 'list' });
-  function renderList() {
-    const q2 = teamQuery.toLowerCase();
-    listEl.replaceChildren(...list.filter(p => !q2 || p.name.toLowerCase().includes(q2) || (p.title || '').toLowerCase().includes(q2)).map(p => {
-      const todayEntry = todayInfo.entries.find(e => personKeyOf(e.person) === p.key);
-      const t = telLink(p.mobile);
-      return h('div', { class: 'item clickable', onClick: () => personSheet(p) },
-        h('div', { class: 'avatar' }, initials(p.name)),
-        h('div', { class: 'grow' }, h('div', { class: 'name row' }, p.name, isMe(s, p) ? h('span', { class: 'chip sel', style: { padding: '1px 7px', fontSize: '10px' } }, 'you') : null),
-          h('div', { class: 'meta' }, [p.title, p.shared ? `${p.shared} shifts with you` : ''].filter(Boolean).join(' · '))),
-        todayEntry ? shiftChip(todayEntry.shift, todayEntry.code) : null,
-        t ? h('a', { class: 'btn sm ghost', href: t.wa, target: '_blank', rel: 'noopener', onClick: e => e.stopPropagation() }, '💬') : null);
-    }));
-  }
-  renderList();
-  return [h('div', { class: 'row', style: { marginTop: '10px' } }, input), seg, h('div', { class: 'card', style: { marginTop: '12px' } }, listEl)];
-}
-
 // ---------------- next month's rota reminder ----------------
 // From the 22nd, if no rota for next month is loaded, say so (the files arrive late in the month).
 function rotaReminder(now = new Date()) {

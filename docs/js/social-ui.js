@@ -21,19 +21,30 @@ function reach(f, size = 'sm') {
 }
 
 // ───────────── adding people
-function addPeopleStarter(names) {
-  const s = S(), pending = [];
-  ctx.update(st => { let x = st; for (const nm of names) { const m = F.matchRota(x, nm);
-    if (m.length === 1) x = F.addFriend(x, { name: m[0].name.replace(/^Dr\.?\s*/i, ''), nick: nm.split(' ').length > 1 ? `${nm.split(' ')[0]} ${nm.split(' ')[1][0]}.` : nm, kind: 'gp', rotaKey: m[0].key, phone: m[0].mobile || '', every: 21 });
-    else { const f = F.friendList(x).find(f => f.name.toLowerCase() === nm.toLowerCase()); if (!f) { x = F.addFriend(x, { name: nm, kind: 'gp', every: 21 }); } if (m.length > 1) pending.push(nm); } } return x; });
-  ctx.render(); if (pending.length) toast(`More than one match for ${pending.join(', ')} — open them and pick the right row`);
+const STARTERS = [
+  { id: 'gp', title: 'Your GP friends', kind: 'gp', blurb: 'Added from your rota, so their shifts and free days work straight away. Phone numbers come from the rota where it has them.',
+    entries: ['Faisal', 'Meshal', 'Mariam', 'Mohammed Merri'].map(q => ({ q, nick: q.includes(' ') ? `${q.split(' ')[0]} ${q.split(' ')[1][0]}.` : q, every: 21 })) },
+  { id: 'nurse', title: 'Your nurses', kind: 'nurse', blurb: 'Linked to the nurses’ schedule. Cresilda can tell you who is posted where; Arnalyn is pulled out this month, so her shifts are entered by hand.',
+    entries: [
+      { q: 'Cresilda Belleza', nick: 'Cresilda', every: 30, note: 'Team leader and a close friend. She suggests the posting list to the Head Nurse (Odai), so she can tell me who goes where.' },
+      { q: 'Areej Patuguial', nick: 'Areej', every: 14, fav: true, note: 'Work daughter 💛' },
+      { q: 'Fatima Marwati', nick: 'Fatima M.', every: 14, fav: true, note: 'Work daughter 💛' },
+      { q: 'Arnalyn Akam', nick: 'Arnalyn', every: 14, fav: true, note: 'Work daughter 💛. Pulled out to the Narjis HMC branch this month, so her shifts are not in my schedule.' }] },
+];
+const startersLeft = () => { const s = S(), have = F.friendList(s), norm = (t) => String(t).toLowerCase().replace(/[^a-z ]/g, ' ').replace(/\s+/g, ' ').trim();
+  return STARTERS.map(g => ({ ...g, left: g.entries.filter(e => { const m = F.matchRota(s, e.q); return !have.some(f => (m.length === 1 && f.rotaKey === m[0].key) || norm(f.name) === norm(e.q) || norm(f.name).startsWith(norm(e.q))); }) })).filter(g => g.left.length); };
+function addStarter(g, entries) {
+  const pending = [];
+  ctx.update(st => { let x = st; for (const e of entries) { const m = F.matchRota(x, e.q);
+    if (m.length === 1) x = F.addFriend(x, { name: m[0].name.replace(/^Dr\.?\s*/i, ''), nick: e.nick, kind: g.kind, rotaKey: m[0].key, phone: m[0].mobile || '', notes: e.note || '', fav: !!e.fav, every: e.every });
+    else { x = F.addFriend(x, { name: e.q, nick: e.nick, kind: g.kind, notes: e.note || '', fav: !!e.fav, every: e.every }); if (m.length > 1) pending.push(e.q); } } return x; });
+  ctx.render(); if (pending.length) toast(`More than one match for ${pending.join(', ')}: open them and pick the right rota row`);
 }
-function starterCard() {
-  const names = ['Faisal', 'Meshal', 'Mariam', 'Mohammed Merri'], found = names.map(n => [n, F.matchRota(S(), n)]);
-  return h('div', { class: 'card sc-start' }, h('div', { class: 'title' }, 'Start with your GP friends'),
-    h('div', { class: 'small muted' }, 'Added from your rota, so their shifts and free days work straight away. Their phone numbers are filled in from the rota where it has them.'),
-    h('div', { class: 'chips', style: { margin: '10px 0' } }, found.map(([n, m]) => h('span', { class: `chip ${m.length === 1 ? 'sel' : ''}` }, `${n} · ${m.length === 1 ? 'in rota' : m.length > 1 ? `${m.length} matches` : 'not in rota'}`))),
-    h('div', { class: 'row wrap' }, h('button', { class: 'btn primary grow', onClick: () => addPeopleStarter(names) }, 'Add these four'), h('button', { class: 'btn grow', onClick: () => friendSheet(null) }, 'Someone else'), contactsButton()));
+function starterCard(g) {
+  const s = S(), list = g ? [g] : startersLeft();
+  return list.map(gr => h('div', { class: 'card sc-start' }, h('div', { class: 'title' }, gr.title), h('div', { class: 'small muted' }, gr.blurb),
+    h('div', { class: 'chips', style: { margin: '10px 0' } }, (gr.left || gr.entries).map(e => { const m = F.matchRota(s, e.q); return h('span', { class: `chip ${m.length === 1 ? 'sel' : ''}` }, `${e.nick} · ${m.length === 1 ? 'in schedule' : m.length > 1 ? `${m.length} matches` : 'not in a schedule'}`); })),
+    h('div', { class: 'row wrap' }, h('button', { class: 'btn primary grow', onClick: () => addStarter(gr, gr.left || gr.entries) }, `Add ${(gr.left || gr.entries).length === 1 ? 'her' : 'these ' + (gr.left || gr.entries).length}`), h('button', { class: 'btn grow', onClick: () => friendSheet(null) }, 'Someone else'), gr.id === 'gp' ? contactsButton() : null)));
 }
 function contactsButton() {
   const file = h('input', { type: 'file', accept: '.vcf,text/vcard,text/x-vcard', style: { display: 'none' }, onChange: async (e) => { const f = e.target.files?.[0]; if (!f) return; const list = F.parseVCF(await f.text()); e.target.value = ''; chooseContacts(list); } });
@@ -56,11 +67,11 @@ export function friendSheet(f) {
   const kind = h('select', {}, F.FRIEND_KINDS.map(k => h('option', { value: k.id, selected: k.id === v.kind }, k.label))), every = h('input', { type: 'number', min: 0, max: 365, value: v.every ?? 21 }), notes = h('textarea', { rows: 2, placeholder: 'Food they like, allergies, what to avoid…' }, v.notes || '');
   const rotaOpts = [{ key: '', name: 'Not in the rota (I enter their shifts)' }, ...F.matchRota(s0, '').concat(Object.values(s0.rotas || {}).flatMap(r => r.people).filter((p, i, a) => a.findIndex(q => q.name === p.name) === i).map(p => ({ key: p.id ? `id:${p.id}` : `name:${p.name.toLowerCase()}`, name: p.name, mobile: p.mobile })).filter(p => p.name !== s0.me?.name))];
   const uniq = rotaOpts.filter((o, i, a) => a.findIndex(q => q.key === o.key) === i), rota = h('select', {}, uniq.map(o => h('option', { value: o.key, selected: o.key === (v.rotaKey || '') }, o.name)));
-  rota.addEventListener('change', () => { const o = uniq.find(x => x.key === rota.value); if (o?.mobile && !phone.value) phone.value = o.mobile; if (o?.name && !name.value) name.value = o.name.replace(/^Dr\.?\s*/i, ''); paint.style.display = rota.value ? 'none' : ''; });
+  rota.addEventListener('change', () => { const o = uniq.find(x => x.key === rota.value); if (o?.mobile && !phone.value) phone.value = o.mobile; if (o?.name && !name.value) name.value = o.name.replace(/^Dr\.?\s*/i, ''); });
   const days = Array.from({ length: 14 }, (_, i) => addDays(startOfDay(new Date()), i)), CYCLE = ['', 'D', 'E', 'N', 'off', 'leave'];
   const cells = days.map(d => { const k = keyOf(d), b = h('button', { type: 'button', class: `sc-paint c-${sched[k] || 'none'}`, onClick: () => { const n = CYCLE[(CYCLE.indexOf(sched[k] || '') + 1) % CYCLE.length]; if (n) sched[k] = n; else delete sched[k]; b.className = `sc-paint c-${n || 'none'}`; b.lastChild.textContent = n || '·'; } }, h('small', {}, `${DAY_SHORT[d.getDay()][0]}${d.getDate()}`), h('b', {}, sched[k] || '·')); return b; });
   const wk = DAY_SHORT.map((n, i) => h('label', { class: 'chip' }, h('input', { type: 'checkbox', checked: weekly.has(i), onChange: (e) => e.target.checked ? weekly.add(i) : weekly.delete(i) }), ' ' + n));
-  const paint = h('div', { style: { display: v.rotaKey ? 'none' : '' } }, h('div', { class: 'small muted' }, 'Tap a day to cycle: D day · E evening · N night · off · leave. Clear = unknown.'), h('div', { class: 'sc-paints' }, cells), h('div', { class: 'tiny dim', style: { margin: '8px 0 4px' } }, 'Always off on:'), h('div', { class: 'chips' }, wk));
+  const paint = h('details', { open: !v.rotaKey || Object.keys(sched).length > 0 }, h('summary', {}, v.rotaKey ? 'Shifts I enter by hand (used when the schedule has nothing, e.g. pulled out)' : 'Their shifts'), h('div', { class: 'small muted', style: { marginTop: '6px' } }, 'Tap a day to cycle: D day · E evening · N night · off · leave. Clear = unknown.'), h('div', { class: 'sc-paints' }, cells), h('div', { class: 'tiny dim', style: { margin: '8px 0 4px' } }, 'Always off on:'), h('div', { class: 'chips' }, wk));
   const save = () => { if (!name.value.trim()) return toast('Give them a name', 'err'); const data = { name: name.value, nick: nick.value, kind: kind.value, phone: phone.value, whatsapp: wa.value, snap: snap.value, insta: ig.value, place: place.value, birthday: bd.value.trim(), every: +every.value || 0, notes: notes.value, rotaKey: rota.value, sched, weeklyOff: [...weekly] };
     ctx.update(s => f ? F.updateFriend(s, f.id, data) : F.addFriend(s, data)); box.close(); ctx.render(); };
   const box = ctx.sheet([h('h2', {}, f ? f.name : 'New friend'), field('Name', name), field('Nickname', nick), field('Type', kind),
@@ -137,9 +148,9 @@ export function outingSheet(o) {
 
 // ───────────── segments
 const friendCard = (f) => { const s = S(), next = F.meetups(s, { ids: [f.id], busyOf: ctx.busyOf, days: 21 })[0], ls = F.lastSeen(s, f.id), od = F.overdue(s, f), kindLabel = F.FRIEND_KINDS.find(k => k.id === f.kind)?.label;
-  return h('div', { class: 'card friend' }, h('div', { class: 'row' }, av(f), h('div', { class: 'grow' }, h('div', { class: 'name' }, f.name, f.fav ? ' ⭐' : ''), h('div', { class: 'tiny dim' }, [kindLabel, f.place, f.rotaKey ? 'linked to rota' : '', ls ? `seen ${relDay(fromKey(ls))}` : ''].filter(Boolean).join(' · '))), h('button', { class: 'btn sm ghost', 'aria-label': `Edit ${f.name}`, onClick: () => friendSheet(f) }, '⋯')),
-    reach(f, ''), h('div', { class: 'row wrap fr-foot' }, next ? h('span', { class: 'chip sel' }, `Free together: ${dayLabel(next.date)} ${win(next.window)}`) : h('span', { class: 'chip' }, 'No shared time found'), od ? h('span', { class: 'chip late' }, `${od}d overdue`) : null, h('button', { class: 'btn sm grow', onClick: () => inviteSheet([f.id]) }, 'Invite'))); };
-function friendsSeg() { const fr = F.friendList(S()); return [!fr.length ? starterCard() : null, ...fr.map(friendCard), h('div', { class: 'row wrap' }, h('button', { class: 'btn grow', onClick: () => friendSheet(null) }, '+ Add a friend'), fr.length ? contactsButton() : null)]; }
+  return h('div', { class: 'card friend' }, h('div', { class: 'row' }, av(f), h('div', { class: 'grow' }, h('div', { class: 'name' }, f.name, f.fav ? ' ⭐' : ''), h('div', { class: 'tiny dim' }, [kindLabel, f.place, f.rotaKey ? 'linked to schedule' : '', ls ? `seen ${relDay(fromKey(ls))}` : ''].filter(Boolean).join(' · ')), f.notes ? h('div', { class: 'tiny fr-note' }, f.notes) : null), h('button', { class: 'btn sm ghost', 'aria-label': `Edit ${f.name}`, onClick: () => friendSheet(f) }, '⋯')),
+    reach(f, ''), (() => { const st = F.dayState(s, f, new Date()); return st.why && st.free === 'unknown' ? h('div', { class: 'chip pull' }, `${st.why}: not in the schedule`) : null; })(), h('div', { class: 'row wrap fr-foot' }, next ? h('span', { class: 'chip sel' }, `Free together: ${dayLabel(next.date)} ${win(next.window)}`) : h('span', { class: 'chip' }, 'No shared time found'), od ? h('span', { class: 'chip late' }, `${od}d overdue`) : null, h('button', { class: 'btn sm grow', onClick: () => inviteSheet([f.id]) }, 'Invite'))); };
+function friendsSeg() { const fr = F.friendList(S()); return [...starterCard(), ...fr.map(friendCard), h('div', { class: 'row wrap' }, h('button', { class: 'btn grow', onClick: () => friendSheet(null) }, '+ Add a friend'), fr.length ? contactsButton() : null)]; }
 function outingsSeg() {
   const s = S(), list = F.outingList(s), today = keyOf(new Date()), up = list.filter(o => o.planned && o.date >= today).reverse(), past = list.filter(o => !(o.planned && o.date >= today));
   const row = (o) => h('div', { class: 'item clickable', onClick: () => outingSheet(o) }, h('div', { class: 'grow' }, h('div', { class: 'name' }, o.what || 'Meet-up', o.where ? ` · ${o.where}` : ''), h('div', { class: 'meta' }, `${relDay(fromKey(o.date))} · ${o.who.map(nameOf).join(', ') || 'solo'}${o.rating ? ' · ' + '★'.repeat(o.rating) : ''}`)), o.planned ? h('span', { class: 'chip sel' }, o.date <= today ? 'did it happen?' : 'planned') : null);
@@ -149,8 +160,8 @@ function outingsSeg() {
     h('div', { class: 'card' }, h('div', { class: 'title' }, 'History'), past.length ? [h('div', { class: 'tiny dim' }, `${yr.length} meet-up${yr.length === 1 ? '' : 's'} this year`), h('div', { class: 'list' }, past.slice(0, 40).map(row))] : h('div', { class: 'small muted' }, 'Nothing logged yet.'))];
 }
 function overviewSeg() {
-  const fr = F.friendList(S()); if (!fr.length) return [starterCard()];
-  return [gridCard(), bestCard(), nudgeCard()];
+  const fr = F.friendList(S()); if (!fr.length) return starterCard();
+  return [gridCard(), bestCard(), nudgeCard(), ...starterCard()];
 }
 
 export function renderSocial() {
