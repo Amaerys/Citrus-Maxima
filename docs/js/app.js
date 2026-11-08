@@ -8,7 +8,9 @@ import { normalizeStatus, validateStatus, CONTRACT } from './inbound.js';
 import * as M from './mind.js';
 import * as MU from './mind-ui.js';
 import { constellation } from './apps-ui.js';
-import { boardModel } from './board.js';
+import { boardModel, overlapModel } from './board.js';
+import * as SU from './social-ui.js';
+import * as CU from './chores-ui.js';
 import { h, toast, safeUrl, keyOf, fromKey, addDays, startOfDay, sameDay, fmtDate, fmtDateShort, fmtTime, fmtMin, fmtDur, relDay, pad2, DAY_SHORT, DAY_NAMES, MONTHS, telLink, firstName, atMin, minsOf, uid } from './util.js';
 
 // ---------------- runtime state (not persisted) ----------------
@@ -41,7 +43,7 @@ async function boot() {
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '') || document.activeElement?.isContentEditable;
     if (e.key === 'Escape') { document.querySelector('.search')?.remove(); document.querySelector('.sheet-bg')?.remove(); return; }
     if (typing) return;
-    const tabs = ['today', 'rota', 'team', 'plan', 'mind', 'apps'];
+    const tabs = ['today', 'rota', 'plan', 'mind', 'social', 'apps'];
     if (/^[1-6]$/.test(e.key)) { show(tabs[+e.key - 1]); e.preventDefault(); }
     else if (e.key === '/') { openSearch(); e.preventDefault(); }
     else if (e.key === 'r') refreshAll(true);
@@ -49,11 +51,14 @@ async function boot() {
   });
   window.addEventListener('online', () => { rt.online = true; renderSync(); flushOutbox().then(render).catch(() => {}); });
   window.addEventListener('offline', () => { rt.online = false; renderSync(); });
+  const addEventFn = async (it) => { const cal = S().settings.calendarIds?.[0] || 'primary'; const d = fromKey(it.date), hm = (v) => { const [a, b] = String(v).split(':').map(Number); return a * 60 + b; }, st = hm(it.start); await calendarCreate(cal, { title: it.title, start: atMin(d, st), end: atMin(d, it.end ? hm(it.end) : st + (it.minutes || 30)), description: it.text || '', reminders: planAlarm() }, { src: 'inbox' }); };
   MU.initMind({
     S, update: (fn) => store.update(fn), sheet, apps: mergedApps, appMeta: (n) => appMeta(n, mergedApps()[n] || {}), render: () => render(), regenerate: () => { regenerate(); render(); },
-    go: (v) => show(v), launch: (app, id) => launch(app, id), appUrl: (n) => launchUrl(n, mergedApps()[n] || {}, null),
-    addEvent: async (it) => { const cal = S().settings.calendarIds?.[0] || 'primary'; const d = fromKey(it.date), hm = (v) => { const [a, b] = String(v).split(':').map(Number); return a * 60 + b; }, st = hm(it.start); await calendarCreate(cal, { title: it.title, start: atMin(d, st), end: atMin(d, it.end ? hm(it.end) : st + (it.minutes || 30)), description: it.text || '', reminders: planAlarm() }, { src: 'inbox' }); },
+    go: (v, sub) => { if (v === 'rota' && sub) rt.workSeg = sub; show(v); }, launch: (app, id) => launch(app, id), appUrl: (n) => launchUrl(n, mergedApps()[n] || {}, null),
+    addEvent: addEventFn,
   });
+  const sub = { S, update: (fn) => store.update(fn), sheet, render: () => render(), go: (v, sub) => { if (v === 'rota' && sub) rt.workSeg = sub; show(v); }, busyOf: (d) => (rt.events[keyOf(d)] || []).filter(e => !e.allDay && e.start && e.end).map(e => [Math.max(0, Math.round((e.start - startOfDay(d)) / 60000)), Math.min(1440, Math.round((e.end - startOfDay(d)) / 60000))]), addEvent: addEventFn };
+  SU.initSocial(sub); CU.initChores(sub);
   store.subscribe(() => { render(); remindSoon(); });
   store.onRemoteSync(scheduleRemoteSave);
   loadCachedEvents();
@@ -109,8 +114,9 @@ function authBanner() {
     h('button', { class: 'btn sm primary', onClick: async () => { try { await G.signIn({ renew: G.wasSignedIn() }); refreshAll(true); } catch (e) { try { await G.signIn(); refreshAll(true); } catch (e2) { toast(e2.message, 'err'); } } } }, 'Reconnect'));
 }
 
-const VIEWS = ['today', 'rota', 'team', 'plan', 'mind', 'apps', 'more'];
+const VIEWS = ['today', 'rota', 'plan', 'mind', 'social', 'apps', 'more'];
 function show(view) {
+  if (view === 'team') { rt.workSeg = 'team'; view = 'rota'; }   // the old Team tab lives inside Work now
   if (!VIEWS.includes(view)) view = 'today';
   rt.view = view;
   for (const s of document.querySelectorAll('section.view')) s.classList.toggle('active', s.id === `view-${view}`);
@@ -122,7 +128,7 @@ function show(view) {
 
 function render() {
   ingestApps();   // numbers the apps report become history before anything is drawn
-  const fn = { today: renderToday, rota: renderRota, team: renderTeam, plan: renderPlan, mind: MU.renderMind, apps: renderApps, more: renderMore }[rt.view] || renderToday;
+  const fn = { today: renderToday, rota: renderWork, plan: renderPlan, mind: MU.renderMind, social: SU.renderSocial, apps: renderApps, more: renderMore }[rt.view] || renderToday;
   const el = $(`#view-${rt.view}`);
   el.replaceChildren(...[authBanner(), fn()].flat().filter(Boolean));
 }
@@ -668,9 +674,11 @@ function renderToday() {
   main.push(hero);
   const board = shiftBoard(info, today); if (board) main.push(board);
   main.push(MU.mindCard());
+  { const hc = CU.todayCard(); if (hc) main.push(hc); }
   if (info.hasRota) main.push(onCallCard(info));
   main.push(planCard(now));
   side.push(eventsCard(now));
+  { const fc = SU.todayCard(); if (fc) side.push(fc); }
   if (Object.keys(mergedApps()).length) side.push(appsCard());
   side.push(briefCard(now));
   side.push(noteCard(now));
@@ -1002,6 +1010,13 @@ function noteCard(date) {
 }
 
 // ---------------- ROTA ----------------
+let workSegDefault = 'calendar';
+function renderWork() {
+  const seg = rt.workSeg || workSegDefault, SEG = [['calendar', 'Calendar'], ['team', 'Team'], ['home', 'Home']];
+  const bar = h('div', { class: 'seg work-seg', role: 'tablist' }, SEG.map(([id, l]) => h('button', { class: seg === id ? 'active' : '', role: 'tab', 'aria-selected': seg === id ? 'true' : 'false', onClick: () => { rt.workSeg = id; render(); window.scrollTo(0, 0); } }, l)));
+  const body = seg === 'team' ? renderTeam() : seg === 'home' ? CU.renderHome() : renderRota();
+  return [h('h1', {}, 'Work'), bar, ...[body].flat()];
+}
 function renderRota() {
   const s = S();
   const m = rt.rotaMonth;
@@ -1010,7 +1025,7 @@ function renderRota() {
   const rotas = Object.values(s.rotas).filter(r => r.year === y && r.month === mo);
   const head = h('div', { class: 'row', style: { marginBottom: '10px' } },
     h('button', { class: 'btn icon', onClick: () => { rt.rotaMonth = new Date(y, mo - 2, 1); render(); } }, '‹'),
-    h('h1', { class: 'grow', style: { textAlign: 'center', fontSize: '20px' } }, `${MONTHS[mo - 1]} ${y}`),
+    h('h2', { class: 'grow', style: { textAlign: 'center', fontSize: '20px', margin: 0 } }, `${MONTHS[mo - 1]} ${y}`),
     h('button', { class: 'btn icon', onClick: () => { rt.rotaMonth = new Date(y, mo, 1); render(); } }, '›'));
   out.push(head);
   if (!rotas.length) {
@@ -1036,7 +1051,7 @@ function renderRota() {
     const cell = h('div', { class: `day ${keyOf(date) === today ? 'today' : ''} ${[5, 6].includes(date.getDay()) ? 'weekend' : ''} ${rt.rotaSel && keyOf(rt.rotaSel) === keyOf(date) ? 'sel' : ''} ${mine?.mci ? 'mci' : ''} ${mine?.swap ? 'swap' : ''}`, onClick: () => { rt.rotaSel = date; daySheet(date); } },
       h('span', { class: 'n' }, d),
       h('span', { class: `code ${cls}` }, !mine ? '·' : shift.kind === 'off' ? '·' : shift.kind === 'leave' ? 'L' : mine.code),
-      mine && shift.kind === 'work' && info.withMe.length ? h('span', { class: 'tiny dim with' }, `+${info.withMe.length}`) : null,
+      mine && shift.kind === 'work' && overlapCount(info) ? h('span', { class: 'tiny dim with' }, `+${overlapCount(info)}`) : null,
       (evs.length || plan.length) ? h('span', { class: 'dots' }, ...Array.from({ length: Math.min(3, evs.length + plan.length) }, () => h('i'))) : null);
     grid.append(cell);
   }
@@ -1055,6 +1070,38 @@ function renderRota() {
   // desktop: month grid on the left, everything else on the right
   return [head, h('div', { class: 'cols' }, h('div', {}, out[1]), h('div', {}, ...out.slice(2)))];
 }
+const hh = (m) => pad2(Math.floor(m / 60) % 24);
+const hm = (m) => `${hh(m)}:${pad2(m % 60)}`;
+/** Your shift with everyone who shares part of it: bars on one axis, solid where they overlap yours, faded where they don't. */
+function overlapCard(info, today) {
+  const others = [...info.withMe, ...info.alsoAtSite], m = overlapModel(info.mine, others); if (!m) return null;
+  const [a0, a1] = m.axis, W = a1 - a0, pct = (t) => `${((t - a0) / W * 100).toFixed(2)}%`, wpct = (x, y) => `${((y - x) / W * 100).toFixed(2)}%`;
+  const same = new Set(info.withMe.map(e => personKeyOf(e.person)));
+  const dup = (e) => m.rows.filter(r => firstName(r.entry.person.name) === firstName(e.person.name)).length > 1, label = (e) => { if (!dup(e)) return firstName(e.person.name); const w = e.person.name.replace(/^Dr\.?\s*/i, '').split(/\s+/); return `${w[0]} ${w[1]?.[0] || ''}.`.trim(); };
+  const full = m.alone.length === 0, soloMin = m.alone.reduce((t, [x, y]) => t + (y - x), 0);
+  const headline = !m.rows.length ? 'Nobody else overlaps your shift' : full ? `Someone is with you the whole shift` : `You’re on your own ${m.alone.map(([x, y]) => `${hm(x)}–${hm(y % 1440 || 1440)}`).join(', ')} (${fmtDur(soloMin)})`;
+  const ticks = []; for (let t = Math.ceil(a0 / 180) * 180; t <= a1; t += 180) ticks.push(h('span', { class: 'ov-tick', style: { left: pct(t) } }, h('small', {}, hh(t))));
+  // how many others are in with you, minute by minute → a coverage strip under your own bar
+  const edges = [...new Set([m.me[0], m.me[1], ...m.rows.flatMap(r => [r.from, r.to])])].sort((x, y) => x - y), cov = [];
+  for (let i = 0; i < edges.length - 1; i++) { const mid = (edges[i] + edges[i + 1]) / 2, n = m.rows.filter(r => r.from <= mid && mid < r.to).length; cov.push(h('i', { class: `ov-cv n${Math.min(n, 4)}`, title: `${hm(edges[i])}–${hm(edges[i + 1])}: ${n} with you`, style: { left: pct(edges[i]), width: wpct(edges[i], edges[i + 1]) } })); }
+  const rows = m.rows.slice(0, 12).map(r => { const e = r.entry, sameShift = same.has(personKeyOf(e.person)), kind = e.shift.type;
+    return h('button', { class: `ov-row ${sameShift ? 'same' : 'part'}`, onClick: () => personSheet(e.person), title: `${e.person.name} · ${e.shift.label} ${hm(r.start)}–${hm(r.end)}` },
+      h('span', { class: 'ov-name' }, h('span', { class: 'av' }, initials(e.person.name)), h('span', { class: 'ellipsis' }, label(e))),
+      h('span', { class: 'ov-track' }, h('i', { class: `ov-ghost ${kind}`, style: { left: pct(r.start), width: wpct(r.start, r.end) } }), h('i', { class: `ov-in ${kind}`, style: { left: pct(r.from), width: wpct(r.from, r.to) } })),
+      h('span', { class: 'ov-pct' }, r.pct >= 0.995 ? 'all' : `${Math.round(r.pct * 100)}%`, h('small', {}, sameShift ? 'same shift' : `${fmtDur(r.overlap)} · ${kind}`)));
+  });
+  return h('div', { class: 'card ov' }, h('div', { class: 'title' }, 'Who shares your shift'), h('div', { class: `ov-head ${full ? 'ok' : 'warn'}` }, headline),
+    h('div', { class: 'ov-plot' },
+      h('div', { class: 'ov-band', style: { left: pct(m.me[0]), width: wpct(m.me[0], m.me[1]) }, 'aria-hidden': 'true' }),
+      h('div', { class: 'ov-axis' }, h('span', { class: 'ov-name' }), h('span', { class: 'ov-track' }, ...ticks)),
+      h('div', { class: 'ov-row me' }, h('span', { class: 'ov-name' }, h('span', { class: 'av' }, 'You')), h('span', { class: 'ov-track' }, h('i', { class: `ov-in ${today.shift.type}`, style: { left: pct(m.me[0]), width: wpct(m.me[0], m.me[1]) } }, `${hm(m.me[0])}–${hm(m.me[1])}`)), h('span', { class: 'ov-pct' }, fmtDur(m.len))),
+      h('div', { class: 'ov-row cov' }, h('span', { class: 'ov-name' }, h('span', { class: 'tiny dim' }, 'cover')), h('span', { class: 'ov-track' }, ...cov), h('span', { class: 'ov-pct' })),
+      ...rows),
+    m.rows.length > 12 ? h('div', { class: 'tiny dim' }, `+${m.rows.length - 12} more`) : null,
+    h('div', { class: 'chips ov-key' }, h('span', { class: 'chip' }, h('i', { class: 'ov-sw in' }), 'with you'), h('span', { class: 'chip' }, h('i', { class: 'ov-sw ghost' }), 'their time outside your shift'), h('span', { class: 'chip' }, h('i', { class: 'ov-sw n1' }), '1', h('i', { class: 'ov-sw n2' }), '2', h('i', { class: 'ov-sw n3' }), '3+ others in')));
+}
+/** People who share at least two hours of your shift (same shift, or evening/early staff overlapping it). */
+function overlapCount(info) { const m = info.mine && info.mine.shift.kind === 'work' ? overlapModel(info.mine, [...info.withMe, ...info.alsoAtSite]) : null; return m ? m.rows.filter(r => r.overlap >= 120).length : 0; }
 function stat(v, l) { return h('div', { class: 'stat' }, h('b', {}, v), h('span', {}, l)); }
 
 function daySheet(date) {
@@ -1065,8 +1112,8 @@ function daySheet(date) {
   const content = [h('div', { class: 'row' }, h('h2', { class: 'grow' }, `${DAY_NAMES[date.getDay()]} ${fmtDate(date)}`), h('span', { class: 'small muted' }, relDay(date)))];
   if (today) content.push(h('div', { class: 'card hero' }, h('div', { class: 'title' }, 'Your shift'), h('div', { class: 'big' }, today.shift.label), h('div', { class: 'sub' }, `${fmtTime(today.window.start)} – ${fmtTime(today.window.end)} · ${fmtDur(today.shift.hours.durationMin)} · ${today.code}`),
     today.mci ? h('div', { style: { marginTop: '6px' } }, mciBadge()) : null,
-    info.withMe.length ? h('div', { style: { marginTop: '10px' } }, h('div', { class: 'small muted', style: { marginBottom: '4px' } }, 'With you'), h('div', { class: 'people' }, ...info.withMe.map(e => personPill(e)))) : h('div', { class: 'small muted', style: { marginTop: '8px' } }, 'Nobody else on your shift'),
-    info.alsoAtSite.length ? h('div', { style: { marginTop: '8px' } }, h('div', { class: 'tiny dim', style: { marginBottom: '4px' } }, 'Other shift, same site'), h('div', { class: 'people' }, ...info.alsoAtSite.map(e => personPill(e)))) : null));
+    null));
+  if (today) { const oc = overlapCard(info, today); if (oc) content.push(oc); }
   else if (info.mine?.shift.kind === 'leave') content.push(h('div', { class: 'card hero' }, h('div', { class: 'big' }, info.mine.shift.label)));
   else if (s.me && info.hasRota) content.push(h('div', { class: 'card hero' }, h('div', { class: 'big' }, overnightTail ? 'Off after night' : 'Day off'), overnightTail ? h('div', { class: 'sub' }, `Night ends ${fmtTime(overnightTail.window.end)}`) : null));
   // all sites
@@ -1131,7 +1178,7 @@ function renderTeam() {
     }));
   }
   renderList();
-  return [h('h1', {}, 'Team'), h('div', { class: 'row', style: { marginTop: '10px' } }, input), seg, h('div', { class: 'card', style: { marginTop: '12px' } }, listEl)];
+  return [h('div', { class: 'row', style: { marginTop: '10px' } }, input), seg, h('div', { class: 'card', style: { marginTop: '12px' } }, listEl)];
 }
 
 // ---------------- next month's rota reminder ----------------

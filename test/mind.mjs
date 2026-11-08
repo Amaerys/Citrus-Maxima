@@ -128,7 +128,7 @@ async function open(width, height, seed) {
   await page.goto(URL0); await sleep(500); return { ctx, page };
 }
 const tab = async (page, v) => { await page.click(`nav.tabs button[data-view=${v}]`); await sleep(250); };
-const seg = async (page, label) => { await page.click(`.mind-seg button:has-text("${label}")`); await sleep(350); };
+const seg = async (page, label) => { await page.click('.mn-main'); await sleep(150); await page.click(`.ml-tile:has-text("${label}")`); await sleep(350); };
 const overflow = (page) => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
 const rawLeak = (page) => page.evaluate(() => /\b(null|undefined|NaN|\[object Object\])\b/.test(document.querySelector('main')?.innerText || ''));
 

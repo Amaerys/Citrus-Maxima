@@ -18,10 +18,15 @@ async function walk(width, height) {
   await page.evaluate(async ({ steam }) => { const S = await import('/js/store.js'), L = await import('/js/media.js'); const r = L.parseSteam(steam); S.update(s => L.upsertMany(s, r.items).state); }, { steam });
   const ov = async (label) => { n++; const o = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth); if (o > 0) note(`${width}px overflow ${o}px: ${label}`); if (errs.length) { note(`${width}px errors at ${label}: ${errs.splice(0).join(' | ').slice(0, 200)}`); } };
   const click = async (sel, label) => { try { await page.click(sel, { timeout: 2500 }); await sleep(180); await ov(label); } catch (e) { note(`${width}px cannot click ${label} (${sel})`); } };
-  for (const v of ['today', 'rota', 'team', 'plan', 'mind', 'apps']) { const sel = width >= 1000 ? `.rail button[data-view=${v}], nav.tabs button[data-view=${v}]` : `nav.tabs button[data-view=${v}]`; await click(sel, `tab ${v}`); }
+  for (const v of ['today', 'rota', 'plan', 'mind', 'social', 'apps']) { const sel = width >= 1000 ? `.rail button[data-view=${v}], nav.tabs button[data-view=${v}]` : `nav.tabs button[data-view=${v}]`; await click(sel, `tab ${v}`); }
   await click('nav.tabs button[data-view=mind], .rail button[data-view=mind]', 'mind');
-  for (const sg of ['Overview', 'Tasks', 'Habits', 'Aims', 'Reflect', 'Year', 'Notes']) await click(`.mind-seg button:has-text("${sg}")`, `mind/${sg}`);
-  await click('.mind-seg button:has-text("Library")', 'mind/Library');
+  const mseg = async (sg) => { await click('.mn-main', `mind/open-launcher`); await click(`.ml-tile:has-text("${sg}")`, `mind/${sg}`); };
+  for (const sg of ['Overview', 'Tasks', 'Habits', 'Aims', 'Reflect', 'Year', 'Notes']) await mseg(sg);
+  await click('.mn-step[aria-label="Next section"]', 'mind/next'); await click('.mn-step[aria-label="Previous section"]', 'mind/prev');
+  await mseg('Library');
+  await click('nav.tabs button[data-view=rota], .rail button[data-view=rota]', 'work'); for (const sg of ['Team', 'Home', 'Calendar']) await click(`.work-seg button:has-text("${sg}")`, `work/${sg}`);
+  await click('nav.tabs button[data-view=social], .rail button[data-view=social]', 'social'); for (const sg of ['Friends', 'Outings', 'Overview']) await click(`#view-social .mind-seg button:has-text("${sg}")`, `social/${sg}`);
+  await click('nav.tabs button[data-view=mind], .rail button[data-view=mind]', 'mind again');
   const kinds = await page.locator('#view-mind .kinds button').allInnerTexts();
   for (let ki = 0; ki < kinds.length; ki++) { await page.locator('#view-mind .kinds button').nth(ki).click(); await sleep(150); for (const tb of ['Shelf', 'Discover', 'Review', 'Connect']) await click(`#view-mind .lib-tabs button:has-text("${tb}")`, `library/${kinds[ki].trim()}/${tb}`); await click('#view-mind .lib-tabs button:has-text("Shelf")', 'back to shelf'); }
   // a few interactions that touch lots of code
@@ -33,7 +38,7 @@ for (const [w, h] of [[360, 740], [768, 1024], [1280, 800]]) await walk(w, h);
 {
   const ctx = await browser.newContext({ viewport: { width: 390, height: 800 } }), page = await ctx.newPage(); await page.goto(URL0); await sleep(500);
   await page.evaluate(() => navigator.serviceWorker.ready); await sleep(1500); await page.reload(); await sleep(800); await ctx.setOffline(true);
-  try { await page.reload({ timeout: 8000 }); await sleep(800); const ok = await page.evaluate(() => !!document.querySelector('nav.tabs') && document.body.innerText.length > 50); if (!ok) note('offline reload rendered empty'); else console.log('  ✓ offline reload works'); await page.click('nav.tabs button[data-view=mind]'); await sleep(300); await page.click('.mind-seg button:has-text("Library")'); await sleep(300); console.log('  ✓ offline: Mind → Library opens'); }
+  try { await page.reload({ timeout: 8000 }); await sleep(800); const ok = await page.evaluate(() => !!document.querySelector('nav.tabs') && document.body.innerText.length > 50); if (!ok) note('offline reload rendered empty'); else console.log('  ✓ offline reload works'); await page.click('nav.tabs button[data-view=mind]'); await sleep(300); await page.click('.mn-main'); await sleep(200); await page.click('.ml-tile:has-text("Library")'); await sleep(300); console.log('  ✓ offline: Mind → Library opens'); }
   catch (e) { note('offline reload failed: ' + e.message.split('\n')[0]); } await ctx.close();
 }
 await browser.close(); server.close(); console.log(`\n${n} views visited`, bad.length ? `, ${bad.length} problem(s)` : ', all clean'); process.exit(bad.length ? 1 : 0);

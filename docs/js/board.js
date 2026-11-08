@@ -16,3 +16,21 @@ export function boardModel(entries, { nowMin = null, meKey = '', keyOf = (p) => 
   const next = edges.length ? { t: edges[0], arrive: rows.filter(r => r.start === edges[0]).length, leave: rows.filter(r => r.end === edges[0]).length } : null;
   return { rows, axisStart, axisEnd, hours, now, nowCount: inNow.length, next, peak: Math.max(...hours.map(x => x.n)) };
 }
+
+const span = (h) => { const { start, end, overnight } = h; return [start, overnight || end <= start ? end + 1440 : end]; };
+const merge = (iv) => { const s = iv.filter(x => x[1] > x[0]).sort((a, b) => a[0] - b[0]), o = []; for (const x of s) { const l = o[o.length - 1]; if (l && x[0] <= l[1]) l[1] = Math.max(l[1], x[1]); else o.push([x[0], x[1]]); } return o; };
+/**
+ * How much of YOUR shift each colleague shares. Evening or late-day staff who are with you for most of your shift count as with you, in proportion.
+ * mine: entry (shift.hours); others: entries. → { me:[start,end], rows:[{entry,start,end,overlap,pct,from,to}], alone:[[a,b]] (stretches of your shift with nobody else), covered:minutes, axis:[a,b] }
+ */
+export function overlapModel(mine, others) {
+  if (!mine?.shift?.hours) return null; const me = span(mine.shift.hours), len = me[1] - me[0];
+  const rows = others.filter(e => e.shift?.hours).map(e => { const [s, en] = span(e.shift.hours), a = Math.max(s, me[0]), b = Math.min(en, me[1]), ov = Math.max(0, b - a);
+    return { entry: e, start: s, end: en, overlap: ov, pct: len ? ov / len : 0, from: ov ? a : null, to: ov ? b : null }; })
+    .filter(r => r.overlap > 0).sort((a, b) => b.overlap - a.overlap || a.start - b.start);
+  const cov = merge(rows.map(r => [r.from, r.to])), alone = []; let cur = me[0];
+  for (const [a, b] of cov) { if (a > cur) alone.push([cur, a]); cur = Math.max(cur, b); } if (cur < me[1]) alone.push([cur, me[1]]);
+  const covered = len - alone.reduce((t, [a, b]) => t + (b - a), 0);
+  const axis = [Math.floor(Math.min(me[0], ...rows.map(r => r.start)) / 60) * 60, Math.ceil(Math.max(me[1], ...rows.map(r => r.end)) / 60) * 60];
+  return { me, len, rows, alone, covered, axis };
+}

@@ -73,7 +73,7 @@ console.log('\nS1 — first run, nothing set up, phone 390px');
   await shot(page, 's1-today-empty');
   const hero = await text(page, '#view-today');
   if (!/No rota/i.test(hero)) note('P2', 'empty state', 'Today does not explain that no rota is loaded'); else ok('empty', 'Today explains how to start');
-  for (const v of ['rota', 'team', 'plan', 'apps']) { await tab(page, v); await shot(page, `s1-${v}-empty`); await overflow(page, `empty ${v}`); }
+  for (const v of ['rota', 'plan', 'social', 'apps']) { await tab(page, v); await shot(page, `s1-${v}-empty`); await overflow(page, `empty ${v}`); }
   const plan = await text(page, '#view-plan');
   if (/USMLE|German/.test(plan) && !/rota/i.test(plan)) note('P3', 'plan', 'With no rota and no "me", Plan still suggests study blocks as if every day were free — no hint that shifts are missing');
   await page.click('#btnMore'); await sleep(150); await shot(page, 's1-settings');
@@ -244,7 +244,7 @@ console.log('\nS7 — second device (desktop) picks everything up from Drive');
   (acc >= 1 ? ok : (a, b) => note('P1', a, b))('device B', `sees ${acc} accepted block(s) from device A`);
   (swaps === 1 ? ok : (a, b) => note('P1', a, b))('device B', `sees ${swaps} swap(s) from device A`);
   (st.me?.name ? ok : (a, b) => note('P2', a, b))('device B', `"me" = ${st.me?.name}`);
-  for (const v of ['today', 'rota', 'team', 'plan', 'apps']) { await tab(B.page, v); await shot(B.page, `s7-desktop-${v}`, false); await overflow(B.page, `desktop ${v}`); }
+  for (const v of ['today', 'rota', 'plan', 'social', 'apps']) { await tab(B.page, v); await shot(B.page, `s7-desktop-${v}`, false); await overflow(B.page, `desktop ${v}`); }
   await B.page.click('#btnMore'); await sleep(200); await shot(B.page, 's7-desktop-settings', false);
   // B deletes the swap, A syncs: does the deletion propagate?
   await tab(B.page, 'rota');
@@ -297,7 +297,7 @@ console.log('\nS9 — 320px phone, light theme, keyboard, accessibility');
   const g = createFakeGoogle(); g.seed({ rotaFiles: ROTAS });
   const p = await device(g, { at: T(4, 9), width: 320, height: 640, signedIn: true, label: '320' });
   await waitSynced(p.page);
-  for (const v of ['today', 'rota', 'team', 'plan', 'apps']) { await tab(p.page, v); await overflow(p.page, `320px ${v}`); await shot(p.page, `s9-320-${v}`); }
+  for (const v of ['today', 'rota', 'plan', 'social', 'apps']) { await tab(p.page, v); await overflow(p.page, `320px ${v}`); await shot(p.page, `s9-320-${v}`); }
   await p.page.click('#btnMore'); await sleep(150); await overflow(p.page, '320px settings');
   await p.page.locator('.switch:has-text("Light theme") .toggle').click(); await sleep(150);
   for (const v of ['today', 'rota', 'plan']) { await tab(p.page, v); await shot(p.page, `s9-light-${v}`); }

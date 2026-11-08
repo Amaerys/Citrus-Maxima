@@ -52,10 +52,10 @@ await page.screenshot({ path: `${out}/04-day-sheet.png` });
 console.log('DAY SHEET >>>\n' + (await page.innerText('.sheet')).slice(0, 700));
 await page.click('.sheet-bg', { position: { x: 10, y: 10 } });
 
-await page.click('nav.tabs button[data-view=team]');
+await page.click('nav.tabs button[data-view=rota]'); await page.click('.work-seg button:has-text("Team")');
 await page.waitForTimeout(300);
 await page.screenshot({ path: `${out}/05-team.png`, fullPage: true });
-await page.click('#view-team .item >> nth=1');
+await page.click('#view-rota .item >> nth=1');
 await page.waitForTimeout(300);
 await page.screenshot({ path: `${out}/06-person.png` });
 console.log('PERSON >>>\n' + (await page.innerText('.sheet')).slice(0, 400));

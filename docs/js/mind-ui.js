@@ -493,12 +493,30 @@ export function mindCard() {
 }
 
 // ───────────────────────────────────────── the view
+const GROUPS = [['Today', ['overview', 'tasks', 'habits']], ['Direction', ['aims', 'year', 'reflect']], ['Keep', ['library', 'notes']]];
+const segSub = (id) => { const s = S(); try { switch (id) {
+  case 'overview': { const n = M.inboxPending(s, apps(), now()).length; return n ? `${n} from your apps` : 'The day at a glance'; }
+  case 'tasks': { const n = Object.values(s.tasks || {}).filter(t => !t.done).length; return n ? `${n} open` : 'Nothing open'; }
+  case 'habits': { const hs = M.activeHabits(s); return hs.length ? `${hs.length} active` : 'None yet'; }
+  case 'aims': { const n = Object.keys(s.aims || {}).length; return n ? `${n} objective${n === 1 ? '' : 's'}` : 'None yet'; }
+  case 'reflect': { const n = M.reflectionsList(s).length; return n ? `${n} entries` : 'Start one'; }
+  case 'year': return String(new Date().getFullYear());
+  case 'library': { const n = Object.keys(s.media || {}).length; return n ? `${n} items` : 'Books, films, games'; }
+  case 'notes': { const n = Object.keys(s.memos || {}).length; return n ? `${n} notes` : 'Quick notes'; }
+} } catch {} return ''; };
+function launcher() {
+  const by = Object.fromEntries(SEGS.map(x => [x[0], x])), box = ctx.sheet([]);
+  const go = (id) => { ui.seg = id; box.close(); ctx.render(); window.scrollTo(0, 0); };
+  box.box.append(h('h2', {}, 'Mind'), ...GROUPS.map(([g, ids]) => h('div', { class: 'ml-group' }, h('div', { class: 'ml-h' }, g), h('div', { class: 'ml-grid' }, ids.map(id => { const [, label, icon] = by[id], badge = id === 'overview' ? M.inboxPending(S(), apps(), now()).length : 0;
+    return h('button', { class: `ml-tile ${ui.seg === id ? 'on' : ''}`, 'data-seg': id, onClick: () => go(id) }, h('span', { class: 'ml-ic' }, icon), h('span', { class: 'ml-t' }, label), h('span', { class: 'ml-s' }, segSub(id)), badge ? h('span', { class: 'pill-n' }, badge) : null); })))));
+}
 export function renderMind() {
-  const seg = h('div', { class: 'seg mind-seg', role: 'tablist' }, SEGS.map(([id, label, icon]) => {
-    const badge = id === 'overview' ? M.inboxPending(S(), apps(), now()).length : 0;
-    return h('button', { class: ui.seg === id ? 'active' : '', role: 'tab', 'aria-selected': ui.seg === id, onClick: () => { ui.seg = id; ctx.render(); window.scrollTo(0, 0); } }, h('span', { class: 'sg-i' }, icon), label, badge ? h('span', { class: 'pill-n' }, badge) : null);
-  }));
-  setTimeout(() => seg.querySelector('.active')?.scrollIntoView({ inline: 'center', block: 'nearest' }), 0);
+  const i = SEGS.findIndex(x => x[0] === ui.seg), cur = SEGS[i < 0 ? 0 : i], step = (d) => { ui.seg = SEGS[(Math.max(i, 0) + d + SEGS.length) % SEGS.length][0]; ctx.render(); window.scrollTo(0, 0); };
+  const pending = M.inboxPending(S(), apps(), now()).length;
+  const seg = h('div', { class: 'mind-nav', role: 'navigation', 'aria-label': 'Mind sections' },
+    h('button', { class: 'mn-step', 'aria-label': 'Previous section', onClick: () => step(-1) }, '‹'),
+    h('button', { class: 'mn-main', 'aria-haspopup': 'dialog', 'aria-label': `${cur[1]} — change section`, onClick: launcher }, h('span', { class: 'mn-ic' }, cur[2]), h('span', { class: 'mn-txt' }, h('b', {}, cur[1]), h('small', {}, segSub(cur[0]))), pending && cur[0] !== 'overview' ? h('span', { class: 'pill-n' }, pending) : null, h('span', { class: 'mn-grid', 'aria-hidden': 'true' }, h('i'), h('i'), h('i'), h('i'))),
+    h('button', { class: 'mn-step', 'aria-label': 'Next section', onClick: () => step(1) }, '›'));
   const body = { overview, tasks: tasksView, habits: habitsView, aims: aimsView, reflect: reflectView, year: yearView, library: renderLibrary, notes: renderNotes }[ui.seg]();
   ui.pop = '';   // the enter animation plays once
   return [seg, h('div', { class: `mind-body seg-${ui.seg}` }, ...body.flat().filter(Boolean))];
