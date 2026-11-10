@@ -60,6 +60,7 @@ function defaults() {
     friends: {},              // id -> {name, kind, phone, whatsapp, snap, insta, rotaKey, sched, weeklyOff, every, birthday…}   (stays in your own state and Drive; never published to the hub)
     outings: {},              // id -> {date, who[], what, where, rating, planned}
     posts: {},                // 'YYYY-MM-DD:personKey' -> {site}   which site a floating nurse was posted to that day
+    rotaChanges: {},          // id -> brief of what changed when a schedule was uploaded again (last 30)
     dayLog: {},               // dateKey -> {score 1-5, note}   how each day felt
     study: {},                // id -> study subject {name, perWeek minutes, block minutes, app}
     studyLog: {},             // 'dateKey:subjectId' -> {mins}
@@ -84,7 +85,7 @@ function load() {
     if (!raw) return defaults();
     const s = JSON.parse(raw);
     if (!s || typeof s !== 'object') return defaults();
-    for (const k of ['rotas', 'plan', 'prefs', 'notes', 'swaps', 'deleted', 'apps', 'tasks', 'aims', 'habits', 'habitLog', 'reflections', 'resolutions', 'yearMeta', 'metricLog', 'inboxLog', 'media', 'mediaMeta', 'memos', 'reminders', 'friends', 'outings', 'chores', 'posts', 'contacts', 'jobs', 'offers', 'polls', 'wishlist', 'treats', 'dayLog', 'study', 'studyLog']) if (!s[k] || typeof s[k] !== 'object' || Array.isArray(s[k])) delete s[k];
+    for (const k of ['rotas', 'plan', 'prefs', 'notes', 'swaps', 'deleted', 'apps', 'tasks', 'aims', 'habits', 'habitLog', 'reflections', 'resolutions', 'yearMeta', 'metricLog', 'inboxLog', 'media', 'mediaMeta', 'memos', 'reminders', 'friends', 'outings', 'chores', 'posts', 'contacts', 'jobs', 'offers', 'polls', 'wishlist', 'treats', 'dayLog', 'study', 'studyLog', 'rotaChanges']) if (!s[k] || typeof s[k] !== 'object' || Array.isArray(s[k])) delete s[k];
     for (const [id, r] of Object.entries(s.rotas || {})) if (!r || !Array.isArray(r.people) || !r.legend) delete s.rotas[id];
     for (const [k, list] of Object.entries(s.plan || {})) if (!Array.isArray(list)) delete s.plan[k];
     if (!Array.isArray(s.goals)) delete s.goals; if (!Array.isArray(s.outbox)) delete s.outbox;
@@ -188,6 +189,7 @@ export function mergeStates(local, remote) {
   out.chores = mergeMap('chore', older.chores, newer.chores, at);
   out.posts = mergeMap('post', older.posts, newer.posts, at);
   out.contacts = mergeMap('contact', older.contacts, newer.contacts, at);
+  out.rotaChanges = mergeMap('rchg', older.rotaChanges, newer.rotaChanges, (x) => x?.at2 || x?.at || 0);
   out.dayLog = mergeMap('daylog', older.dayLog, newer.dayLog, at);
   out.study = mergeMap('study', older.study, newer.study, at);
   out.studyLog = mergeMap('slog', older.studyLog, newer.studyLog, at);

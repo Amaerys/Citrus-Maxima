@@ -16,6 +16,8 @@ import * as RU from './career-ui.js';
 import * as XU from './plans-ui.js';
 import * as EU from './extras-ui.js';
 import * as DU from './daily-ui.js';
+import * as RC from './changes.js';
+import * as CHU from './changes-ui.js';
 import * as PU from './people-ui.js';
 import { h, toast, safeUrl, keyOf, fromKey, addDays, startOfDay, sameDay, fmtDate, fmtDateShort, fmtTime, fmtMin, fmtDur, relDay, pad2, DAY_SHORT, DAY_NAMES, MONTHS, telLink, firstName, atMin, minsOf, uid } from './util.js';
 
@@ -64,7 +66,7 @@ async function boot() {
     addEvent: addEventFn,
   });
   const sub = { S, update: (fn) => store.update(fn), sheet, render: () => render(), go: (v, sub) => { if (v === 'rota' && sub) rt.workSeg = sub; show(v); }, busyOf: (d) => (rt.events[keyOf(d)] || []).filter(e => !e.allDay && e.start && e.end).map(e => [Math.max(0, Math.round((e.start - startOfDay(d)) / 60000)), Math.min(1440, Math.round((e.end - startOfDay(d)) / 60000))]), addEvent: addEventFn };
-  SU.initSocial({ ...sub, allPeople: () => allPeople(S()), isMeKey: (k) => { const m = S().me; return !!m && (k === `id:${m.id}` || k === `name:${String(m.name || '').toLowerCase()}`); } }); CU.initChores(sub); LU.initLabor(sub); RU.initCareer(sub); XU.initPlans(sub); DU.initDaily({ ...sub, hasApp: (n) => !!mergedApps()[n], launchApp: (n) => launch(n, null) }); EU.initExtras({ ...sub, invite: (ids, what) => SU.inviteSheet(ids, null, what) }); PU.initPeople({ ...sub, openDay: (d) => daySheet(d), personSheet, personKeyOf, shiftChip, importButton });
+  SU.initSocial({ ...sub, allPeople: () => allPeople(S()), isMeKey: (k) => { const m = S().me; return !!m && (k === `id:${m.id}` || k === `name:${String(m.name || '').toLowerCase()}`); } }); CU.initChores(sub); LU.initLabor(sub); RU.initCareer(sub); XU.initPlans(sub); CHU.initChanges(sub); DU.initDaily({ ...sub, hasApp: (n) => !!mergedApps()[n], launchApp: (n) => launch(n, null) }); EU.initExtras({ ...sub, invite: (ids, what) => SU.inviteSheet(ids, null, what) }); PU.initPeople({ ...sub, openDay: (d) => daySheet(d), personSheet, personKeyOf, shiftChip, importButton });
   store.subscribe(() => { render(); remindSoon(); });
   store.onRemoteSync(scheduleRemoteSave);
   loadCachedEvents();
@@ -383,7 +385,9 @@ async function pullRotasFromDrive() {
       const rota = serializeRota(await parseRotaFile(buf, f.name));
       rota.driveId = f.id; rota.driveModified = f.modifiedTime;
       if (!rota.weekdayOk) toast(`${f.name}: the weekdays don't match ${MONTHS[rota.month - 1]} ${rota.year} — check the month cell`, 'err');
-      store.update(s => ({ ...s, rotas: { ...s.rotas, [rota.id]: rota } }), { silent: true });
+      const prev = S().rotas[rota.id], diff = prev ? RC.diffRota(S(), prev, rota) : null;
+      store.update(s => { const st = { ...s, rotas: { ...s.rotas, [rota.id]: rota } }; return diff ? RC.recordChanges(st, diff) : st; }, { silent: true });
+      if (diff && (diff.total || diff.added.length || diff.removed.length)) toast(`${f.name} updated: ${RC.headline(diff)}`, 'ok');
       added++;
     } catch (e) { console.warn('rota parse failed', f.name, e.message); toast(`Could not read ${f.name}: ${e.message}`, 'err'); }
   }
@@ -471,16 +475,19 @@ function autoPickMe() {
 
 // ---------------- import ----------------
 async function importFiles(fileList) {
-  let ok = 0;
+  let ok = 0; const briefs = [];
   for (const f of fileList) {
     try {
       const rota = serializeRota(await parseRotaFile(await f.arrayBuffer(), f.name));
       if (!rota.weekdayOk) toast(`${f.name}: the weekdays don't match ${MONTHS[rota.month - 1]} ${rota.year} — check the month cell`, 'err');
-      store.update(s => { const deleted = { ...(s.deleted || {}) }; delete deleted[`rota:${rota.id}`]; return { ...s, rotas: { ...s.rotas, [rota.id]: rota }, deleted }; }, { silent: true });
+      const prev = S().rotas[rota.id], diff = prev ? RC.diffRota(S(), prev, rota) : null;
+      store.update(s => { const deleted = { ...(s.deleted || {}) }; delete deleted[`rota:${rota.id}`]; const st = { ...s, rotas: { ...s.rotas, [rota.id]: rota }, deleted }; return diff ? RC.recordChanges(st, diff) : st; }, { silent: true });
+      if (diff) briefs.push(diff.rotaId);
       ok++;
     } catch (e) { toast(`${f.name}: ${e.message}`, 'err'); }
   }
   if (ok) { toast(`Imported ${ok} rota${ok > 1 ? 's' : ''}`, 'ok'); autoPickMe(); regenerate(); render(); }
+  if (briefs.length) { const list = RC.unseen(S()).filter(d => briefs.includes(d.rotaId)); if (list.length) CHU.briefSheet(list); else toast('Same schedule as before: nothing changed', 'ok'); }
   if (ok && G.isSignedIn() && rt.online) uploadRotas(fileList).catch(e => console.warn('rota upload', e.message));
 }
 // Rotas imported on this device go to Drive › My Apps › Rotas too, named "YYYY-MM Unit.xlsx", so every device and Orange get them
@@ -677,6 +684,7 @@ function renderToday() {
   hero.append(weekStrip(now));
   main.push(hero);
   const board = shiftBoard(info, today); if (board) main.push(board);
+  { const uc = CHU.updatesCard({ today: true }); if (uc) main.push(uc); }
   for (const dc of DU.todayCards(now)) main.push(dc);
   main.push(MU.mindCard());
   { const nc = PU.todayCard(); if (nc) main.push(nc); }
@@ -1068,6 +1076,7 @@ function renderRota() {
     h('div', { class: 'grid2' }, stat(sum.work, 'shifts'), stat(sum.nights, 'nights'), stat(`${sum.hours}h`, 'rostered hours'), stat(sum.off, 'days off')),
     h('div', { class: 'chips', style: { marginTop: '10px' } }, ...Object.entries(sum.siteCount).map(([k, v]) => h('span', { class: 'chip' }, `${k} × ${v}`)))));
   // legend + sources
+  { const uc = CHU.updatesCard(); if (uc) out.push(uc); }
   { const mc = XU.monthCard(y, mo); if (mc) out.push(mc); }
   { const lc = LU.laborCard(y, mo); if (lc) out.push(lc); }
   out.push(h('div', { class: 'card' }, h('div', { class: 'title' }, 'Sources'),

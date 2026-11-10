@@ -609,3 +609,10 @@ button.sg-day{border:0;background:none;color:inherit;font:inherit;padding:0;curs
 .fd-res{margin-top:10px}.fd-day{display:flex;align-items:center;gap:12px;width:100%;padding:8px 10px;margin:4px 0;border:0;border-radius:12px;background:rgba(127,127,127,.1);color:inherit;font:inherit;text-align:left;cursor:pointer}
 .fd-day.all{background:rgba(47,179,106,.18)}.fd-day.we .fd-date b{color:var(--orange2)}
 .fd-date{display:flex;flex-direction:column;align-items:center;min-width:46px}.fd-date small{font-size:.65rem;opacity:.6}.fd-go{opacity:.4}
+
+/* ───── schedule update briefs */
+.rc-card.new{border:1px solid var(--orange2);background:linear-gradient(180deg,rgba(255,140,0,.12),transparent)}
+.rc-sec{margin-top:10px}.rc-sec>.title,.rc-sec>summary.title{margin-bottom:4px}
+.rc-row{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;padding:5px 0;border-bottom:1px solid rgba(127,127,127,.12);font-size:.84rem}
+.rc-row b{min-width:48px}.rc-row.past{opacity:.5}.rc-from{text-decoration:line-through;opacity:.6}.rc-arr{opacity:.5}.rc-to{font-weight:600}
+.rc-in{color:#2fb36a}.rc-out{color:#ff6b6b}

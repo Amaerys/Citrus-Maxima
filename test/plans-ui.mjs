@@ -12,7 +12,7 @@ const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, is
 await p.addInitScript(() => { if (!localStorage.getItem('citrus.state.v1')) localStorage.setItem('citrus.state.v1', JSON.stringify({ me: { name: 'Dr. Reem Mahgoub', id: '437326' } })); });
 await p.goto(URL0); await sleep(600); await p.click('nav.tabs button[data-view=rota]'); await p.locator('#view-rota input[type=file]').first().setInputFiles([data('main.xlsx')]); await sleep(2200);
 check(await p.locator('#view-rota .mr').count() === 1, 'month report card'); const t = await p.locator('#view-rota .mr').innerText(); check(/in numbers/.test(t) && /shifts/.test(t) && /longest run/.test(t), 'report numbers');
-check(!/NaN|undefined|null/.test(t), 'no stray words in the report');
+check(!/NaN|undefined|null/.test(t), 'no stray words in the report'); check(!/0\.00 SAR/.test(t), 'no 0.00 SAR rate when the basic wage is unknown');
 const dl = p.waitForEvent('download', { timeout: 8000 }).catch(() => null); await p.click('#view-rota .mr button:has-text("Share image")'); const d = await dl; check(!!d && /\.png$/.test(d.suggestedFilename()), 'share image downloads a PNG when the share sheet is unavailable: ' + (d && d.suggestedFilename()));
 if (d) { const f = path.join(here, 'shots/rota-image.png'); await d.saveAs(f); check(fs.statSync(f).size > 20000, 'picture is a real image (' + fs.statSync(f).size + ' bytes)'); }
 await p.click('#view-rota .mr button:has-text("Plan leave")'); await sleep(300); let st = await p.locator('.sheet').innerText(); check(/Plan leave/.test(st) && /Best use of your days/.test(st), 'leave planner opens'); check(await p.locator('.sheet .cr-key button, .sheet button.cr-key').count() >= 0, 'windows listed');
