@@ -580,3 +580,32 @@ nav.tabs button.active { color: var(--orange); }
 .sg-cell{position:relative;display:flex;align-items:center;justify-content:center;font-size:.62rem;font-weight:700;color:rgba(0,0,0,.65)}
 .sg-cell.wk,.sg-dot.wk{background-image:repeating-linear-gradient(135deg,rgba(0,0,0,.22) 0 3px,transparent 3px 7px)}
 .sg-cell.wk.busy{color:#fff}
+
+/* ───── Who is free v2: shift letters, free-hours line, counts, badges */
+.sg-cell{height:30px;overflow:hidden}
+.sg-cell b{position:relative;z-index:1;font-size:.66rem}
+.sg-cell.today{box-shadow:0 0 0 2px var(--orange2)}
+.sg-tl{position:absolute;left:3px;right:3px;bottom:3px;height:3px;border-radius:2px;background:rgba(0,0,0,.18)}
+.sg-tl i{position:absolute;top:0;bottom:0;border-radius:2px;background:#0b5d2e}
+.sg-cell.busy .sg-tl{display:none}
+.sg-badge{position:absolute;top:-1px;right:1px;font-size:.6rem;font-style:normal;line-height:1}
+.sg-badge.dot{width:6px;height:6px;top:3px;right:3px;border-radius:50%;background:var(--orange2)}
+button.sg-day{border:0;background:none;color:inherit;font:inherit;padding:0;cursor:pointer;display:flex;flex-direction:column;align-items:center}
+.sg-day.today{color:var(--orange2)}
+.sg-n{display:block;margin-top:2px;font-style:normal;font-size:.6rem;font-weight:700;min-width:16px;padding:0 4px;border-radius:8px;background:rgba(47,179,106,.25);text-align:center}
+.sg-n.zero{background:transparent;opacity:.35}
+.sg-name small{display:block;font-size:.6rem;opacity:.55;font-weight:400}
+.sg-key{display:flex;flex-wrap:wrap;gap:6px 12px;margin-top:10px;font-size:.7rem;opacity:.85}
+.sg-k{display:inline-flex;align-items:center;gap:5px}.sg-k .sg-cell{display:inline-flex;width:22px;height:18px;border-radius:5px}
+/* day timeline sheet */
+.dl{margin-top:10px}.dl-row,.dl-axis{display:grid;grid-template-columns:96px 1fr;gap:8px;align-items:center;margin:6px 0}
+.dl-axis>div{display:flex;justify-content:space-between;font-size:.6rem;opacity:.55}
+.dl-name b{display:block;font-size:.82rem}.dl-name small{display:block;font-size:.62rem;opacity:.6;line-height:1.2}
+.dl-bar{position:relative;height:16px;border-radius:6px;background:rgba(127,127,127,.15);overflow:hidden}
+.dl-bar i{position:absolute;top:0;bottom:0}.dl-work{background:color-mix(in srgb,var(--red,#ff6b6b) 60%,transparent)}.dl-free{background:#2fb36a;top:4px!important;bottom:4px!important;border-radius:3px}
+.dl-common{background:rgba(255,140,0,.28);outline:1px solid var(--orange2)}
+/* find a day */
+.fd-group{margin:6px 0}.fd-group summary{cursor:pointer;padding:4px 0}
+.fd-res{margin-top:10px}.fd-day{display:flex;align-items:center;gap:12px;width:100%;padding:8px 10px;margin:4px 0;border:0;border-radius:12px;background:rgba(127,127,127,.1);color:inherit;font:inherit;text-align:left;cursor:pointer}
+.fd-day.all{background:rgba(47,179,106,.18)}.fd-day.we .fd-date b{color:var(--orange2)}
+.fd-date{display:flex;flex-direction:column;align-items:center;min-width:46px}.fd-date small{font-size:.65rem;opacity:.6}.fd-go{opacity:.4}

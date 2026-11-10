@@ -8,7 +8,8 @@ const server = http.createServer((req, res) => { let p = path.join(root, decodeU
 await new Promise(r => server.on('listening', r)); const URL0 = `http://localhost:${server.address().port}/index.html`;
 const browser = await chromium.launch(), sleep = (ms) => new Promise(r => setTimeout(r, ms)); let bad = 0;
 const check = (c, m) => { if (!c) { bad++; console.log('  ✗', m); } else console.log('  ✓', m); };
-const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, serviceWorkers: 'block' }), p = await ctx.newPage(); const errors = [];
+const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, serviceWorkers: 'block', timezoneId: 'Asia/Riyadh' }), p = await ctx.newPage(); const errors = [];
+await p.clock.install({ time: new Date('2026-11-09T07:30:00+03:00') });   // the real November files: pin the day so checks don't drift with the calendar
 p.on('pageerror', e => errors.push(e.message)); p.on('console', m => { if (m.type() === 'error' && !/Failed to load resource|googleapis|gsi/.test(m.text())) errors.push(m.text()); });
 await p.addInitScript(() => { if (!localStorage.getItem('citrus.state.v1')) localStorage.setItem('citrus.state.v1', JSON.stringify({ me: { name: 'Dr. Reem Mahgoub', id: '437326' } })); });
 await p.goto(URL0); await sleep(600);

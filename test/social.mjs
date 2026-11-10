@@ -91,4 +91,18 @@ t('state merge keeps friends from both devices, newer wins, delete sticks', () =
 });
 
 
+await t('find a day: anyone from the rotas, together with me; missing and no-info people are named, never assumed free', () => {
+  const hrs = (a, b, o) => ({ start: a, end: b, overnight: !!o, durationMin: o ? b + 1440 - a : b - a });
+  const mk = (f) => Object.fromEntries(Array.from({ length: 30 }, (_, i) => [i + 1, f(i + 1)]));
+  const gp = { id: 'gp-2026-12', unitKind: 'gp', year: 2026, month: 12, daysInMonth: 30, legend: { D: { hours: hrs(480, 1200) }, N: { hours: hrs(1200, 480, 1) } },
+    people: [{ name: 'Dr Me', id: '1', days: mk(d => d % 2 ? 'D' : '') }, { name: 'Dr Ann', id: '2', days: mk(d => d % 3 ? '' : 'D') }, { name: 'Nurse Bo', id: '3', days: mk(d => d === 4 ? 'N' : '') }] };
+  const st = { rotas: { gp }, me: { id: '1', name: 'Dr Me' }, friends: {}, outings: {} };
+  const people = [S.personRecord(st, 'id:2', 'Dr Ann'), S.personRecord(st, 'id:3', 'Nurse Bo')]; assert.equal(people[0].rotaKey, 'id:2');
+  const r = S.commonFree(st, people, { from: new Date(2026, 11, 1), days: 6 }), by = (d) => r.find(x => x.key === `2026-12-0${d}`);
+  assert.ok(by(2).all && by(2).window[1] - by(2).window[0] >= 8 * 60, 'the 2nd: everyone off'); assert.ok(by(3).all && by(3).window[0] >= 20 * 60, 'the 3rd: Ann and I both work 8–20: together in the evening only');
+  assert.ok(by(4).all && by(4).window[1] <= 17 * 60, 'the 4th: Bo starts a night at 20:00, so only the early afternoon works');
+  const long = S.commonFree(st, people, { from: new Date(2026, 11, 4), days: 1, minMin: 240 })[0]; assert.ok(!long.all && long.missing.map(p => p.name).includes('Nurse Bo'), 'asking for 4h: Bo is the one missing'); assert.ok(by(6).missing.map(p => p.name).includes('Dr Ann') || by(6).free.length === 2);
+  const nm = S.commonFree(st, [S.personRecord(st, 'name:ghost', 'Ghost')], { from: new Date(2026, 11, 1), days: 2 }); assert.ok(nm.every(x => !x.all && x.unknown.length === 1), 'no schedule info → not counted as free');
+  const free = S.commonFree(st, people, { from: new Date(2026, 11, 1), days: 6, withMe: false }); assert.ok(free.filter(x => x.all).length >= by(2).all + 0, 'without me, more days can fit');
+});
 console.log(fails ? `${fails} FAILED` : 'social ok'); process.exit(fails ? 1 : 0);

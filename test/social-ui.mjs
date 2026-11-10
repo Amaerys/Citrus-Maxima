@@ -59,7 +59,25 @@ check(/Faisal/.test(await txt(p, '#view-social')) && await p.locator('#view-soci
   const lab = await p.locator('#view-social .sg-cell.wk').first().getAttribute('aria-label'); check(/working \d\d:\d\d–\d\d:\d\d/.test(lab), 'cell says when they work: ' + lab);
   check(/^[A-Z]$/.test((await p.locator('#view-social .sg-cell.wk').first().innerText()).trim()), 'shift letter shown');
   check(await p.locator('#view-social .sg-cell.wk').evaluateAll(els => els.every(e => !/day off/.test(e.getAttribute('aria-label')))), 'a working day is never described as a day off');
-  check(/working, free around it/.test(await txt(p, '#view-social')), 'legend explains the stripes'); }
+  check(/working · letter = shift/.test(await txt(p, '#view-social')), 'legend explains the letters');
+  check(await p.locator('#view-social .sg-cell .sg-tl i').count() > 10, 'free-hours line drawn inside cells'); check(await p.locator('#view-social .sg-day .sg-n').count() >= 10, 'each day says how many can meet you');
+  check(await p.locator('#view-social .sg-cell.today').count() >= 2, 'today column marked');
+  await p.click('#view-social .sg-day >> nth=1'); await sleep(300); check(await p.locator('.sheet .dl-row').count() >= 3 && await p.locator('.sheet .dl-free').count() >= 1, 'day sheet: everyone on a 08–24 line');
+  await p.screenshot({ path: `${shots}/day-timeline.png` }); await p.keyboard.press('Escape'); await sleep(200);
+  console.log('find a day');
+  await p.click('#view-social button:has-text("Find a day")'); await sleep(300); check(/Pick at least one person/.test(await txt(p, '.sheet')), 'empty state');
+  await p.click('.sheet .fd-group >> nth=0 >> .chip >> nth=0'); await sleep(200); await p.click('.sheet .fd-group >> nth=0 >> .chip >> nth=0'); await sleep(300);
+  check(await p.locator('.sheet .chips .chip.sel').count() >= 2, 'two friends picked'); let r = await txt(p, '.sheet'); check(/you are all free|No day where everyone is free/.test(r), 'answer given');
+  check(await p.locator('.sheet .fd-day').count() >= 1, 'days listed: ' + await p.locator('.sheet .fd-day').count());
+  await p.fill('.sheet .dir-search', 'Merri'); await sleep(250); const n0 = await p.locator('.sheet .chips .chip.sel').count();
+  await p.fill('.sheet .dir-search', ''); await sleep(200);
+  if (await p.locator('.sheet .fd-group summary:has-text("GPs")').count()) { await p.click('.sheet .fd-group summary:has-text("GPs")'); await sleep(150); const nm = (await p.locator('.sheet .fd-group:has(summary:has-text("GPs")) .chip').first().innerText()).trim(); await p.locator('.sheet .fd-group:has(summary:has-text("GPs")) .chip').first().click(); await sleep(300);
+    check(await p.locator('.sheet .chips .chip.sel').count() === n0 + 1, `a colleague who is not a friend can be picked (${nm})`); await p.fill('.sheet .dir-search', nm.slice(0, 5)); await sleep(250); check(!(await p.locator('.sheet .chip:not(.sel)').allInnerTexts()).includes(nm), 'search hides people already picked'); } else { console.log((await p.locator('.sheet').innerText()).slice(0, 400).replace(/\n/g, ' / ')); check(false, 'GP colleagues offered in the picker'); }
+  await p.fill('.sheet .dir-search', ''); await sleep(200);
+  await p.click('.sheet .chip:has-text("all day")'); await sleep(300); const allDay = await p.locator('.sheet .fd-day.all').count(); await p.click('.sheet .chip:has-text("1½h")'); await sleep(300); check(await p.locator('.sheet .fd-day.all').count() >= allDay, 'shorter meet-ups → at least as many days');
+  if (await p.locator('.sheet .fd-day').count()) { await p.locator('.sheet .fd-day').first().click(); await sleep(300); check(await p.locator('.sheet .dl-common').count() >= 1 || /No time when you are all free/.test(await txt(p, '.sheet')), 'a result opens the day with the shared window marked'); }
+  check(!/\b(null|undefined|NaN)\b/.test(await p.locator('body').innerText()), 'no stray words');
+  await p.screenshot({ path: `${shots}/find-a-day.png` }); await p.evaluate(() => document.querySelectorAll('.sheet-bg').forEach(e => e.remove())); await sleep(200); }
 check(/Best times to meet/.test(await txt(p, '#view-social')), 'best times shown');
 await p.screenshot({ path: `${shots}/social-overview.png`, fullPage: true });
 await p.click('#view-social .seg button:has-text("Friends")'); await sleep(250);

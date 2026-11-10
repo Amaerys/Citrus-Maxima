@@ -196,3 +196,21 @@ export function meState(s, date, busy = []) {
   const me = rec(s.rotas).flatMap(r => r.people).find(p => isMe(s, p)), key = me ? (me.id ? `id:${me.id}` : `name:${me.name.toLowerCase()}`) : ''; if (!key) return { status: 'unknown', windows: myWindows(s, date, busy) };
   const st = dayState(s, { rotaKey: key }, date); return { ...st, windows: myWindows(s, date, busy) };
 }
+
+// ───────── find a day: any people from the app (friends, colleagues, nurses), not only friends
+/** A friend-shaped record for anyone in the rotas, reusing their friend entry when there is one (so hand-entered shifts count). */
+export function personRecord(s, key, name) { const fr = friendList(s).find(f => f.rotaKey === key || f.id === key); return fr || { id: key, name: name || key.replace(/^(id|name):/, ''), rotaKey: key.startsWith('id:') || key.startsWith('name:') ? key : '' }; }
+/** For each day ahead: the time everyone picked is free together (you included unless `withMe` is false).
+ *  `all` = everyone free for at least `minMin`; otherwise who is missing. People with no schedule info are listed, never assumed free. */
+export function commonFree(s, people, { from = new Date(), days = 21, withMe = true, minMin = 120, busyOf = () => [] } = {}) {
+  const out = [], start = startOfDay(from);
+  for (let i = 0; i < days; i++) {
+    const date = addDays(start, i), states = people.map(p => ({ p, st: dayState(s, p, date) })), unknown = states.filter(x => x.st.free === 'unknown');
+    let win = withMe ? myWindows(s, date, busyOf(date)) : [[WAKE, LATE]]; if (!win.length) { out.push({ date, key: keyOf(date), all: false, me: false, window: null, free: [], missing: states.map(x => x.p), unknown: unknown.map(x => x.p) }); continue; }
+    const free = [], missing = [];
+    for (const x of states) { if (x.st.free === 'unknown') continue; const nw = intersect(win, x.st.windows).filter(w => w[1] - w[0] >= minMin); if (nw.length) { win = nw; free.push(x.p); } else missing.push(x.p); }
+    const w = win.filter(w => w[1] - w[0] >= minMin).sort((a, b) => (b[1] - b[0]) - (a[1] - a[0]))[0] || null;
+    out.push({ date, key: keyOf(date), all: !!w && !missing.length && !unknown.length && free.length === people.length, me: true, window: w, windows: win, free, missing, unknown: unknown.map(x => x.p), weekend: [5, 6].includes(date.getDay()) });
+  }
+  return out;
+}

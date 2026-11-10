@@ -82,25 +82,76 @@ export function friendSheet(f) {
 }
 
 // ───────────── free-days grid
+const T0 = 8 * 60, T1 = 24 * 60, pct = (m) => Math.max(0, Math.min(100, (m - T0) / (T1 - T0) * 100));
+/** Thin timeline at the bottom of a cell: green where they are free (08:00 → 24:00). */
+const tl = (wins) => h('span', { class: 'sg-tl' }, wins.map(([a, b]) => h('i', { style: { left: `${pct(a)}%`, width: `${Math.max(4, pct(b) - pct(a))}%` } })));
+const isBday = (f, d) => !!f.birthday && f.birthday.slice(-5) === keyOf(d).slice(5);
+const outingOn = (s, f, d) => F.outingList(s).some(o => o.date === keyOf(d) && (!f || o.who.includes(f.id)));
+const mark = (x) => x.status === 'work' ? String(x.type || 'W')[0].toUpperCase() : x.status === 'leave' ? 'L' : x.afterNight ? 'z' : '';
+const stateText = (x, wins) => { const free = wins.map(win).join(', '), tm = (m) => fmtMin(Math.min(m, 1439)); if (x.status === 'work') return `working${x.start != null ? ` ${tm(x.start)}–${tm(x.end % 1440 || 1439)}` : ''}${x.type === 'N' || x.end > 1440 ? ' (night)' : ''}${free ? `, free ${free}` : ', no free time'}`; if (x.status === 'leave') return `on leave${free ? `, free ${free}` : ''}`; if (x.status === 'off') return `${x.afterNight ? 'off after a night' : 'day off'}${free ? `, free ${free}` : ''}`; return free || (x.status === 'unknown' ? 'no shift info' : 'busy'); };
+
 function gridCard() {
   const s = S(), fr = F.friendList(s), start = startOfDay(new Date()), N = window.innerWidth < 520 ? 10 : 14, days = Array.from({ length: N }, (_, i) => addDays(start, i));
-  const me = days.map(d => F.myWindows(s, d, ctx.busyOf(d))), st = fr.map(f => days.map(d => F.dayState(s, f, d)));
-  const allFree = days.map((_, i) => me[i].length && fr.length && st.every(r => r[i].free === 'all' || r[i].free === 'part'));
-  const letter = (x) => String(x.type || 'W')[0].toUpperCase(), tm = (m) => fmtMin(Math.min(m, 1439));
-  const stateText = (x, wins) => { const free = wins.map(win).join(', '); if (x.status === 'work') return `working${x.start != null ? ` ${tm(x.start)}–${tm(x.end % 1440 || 1439)}` : ''}${x.type === 'N' || x.end > 1440 ? ' (night)' : ''}${free ? `, free ${free}` : ', no free time'}`; if (x.status === 'leave') return `on leave${free ? `, free ${free}` : ''}`; if (x.status === 'off') return `day off${free ? `, free ${free}` : ''}`; return free || (x.status === 'unknown' ? 'no shift info' : 'busy'); };
-  const cell = (cls, title, onClick, txt = '') => h('button', { class: `sg-cell ${cls}`, title, 'aria-label': title, onClick }, txt);
-  return h('div', { class: 'card sg' }, h('div', { class: 'row' }, h('div', { class: 'title grow' }, 'Who is free'), h('span', { class: 'tiny dim' }, `next ${N} days`)),
+  const me = days.map(d => F.meState(s, d, ctx.busyOf(d))), st = fr.map(f => days.map(d => F.dayState(s, f, d)));
+  const meets = days.map((d, i) => fr.filter((f, r) => me[i].windows.some(a => st[r][i].windows.some(b => Math.min(a[1], b[1]) - Math.max(a[0], b[0]) >= 90))).length);
+  const allFree = days.map((_, i) => fr.length && meets[i] === fr.length);
+  const cell = (x, wins, label, d, extra = {}) => { const free = wins.length ? (wins.some(w => w[1] - w[0] >= 480) ? 'all' : 'part') : x.status === 'unknown' ? 'unknown' : 'busy';
+    return h('button', { class: `sg-cell ${free} ${x.status === 'work' ? 'wk' : ''} ${+d === +start ? 'today' : ''}`, title: label, 'aria-label': label, onClick: () => daySheet(d) }, h('b', {}, mark(x)), extra.bday ? h('em', { class: 'sg-badge' }, '🎂') : extra.outing ? h('em', { class: 'sg-badge dot' }) : null, wins.length ? tl(wins) : null); };
+  return h('div', { class: 'card sg' }, h('div', { class: 'row' }, h('div', { class: 'title grow' }, 'Who is free'), h('button', { class: 'btn sm', onClick: () => findSheet() }, '🔎 Find a day')),
     h('div', { class: 'sg-wrap', style: { '--n': N } },
-      h('div', { class: 'sg-row sg-head' }, h('span', { class: 'sg-name' }), days.map((d, i) => h('span', { class: `sg-day ${[5, 6].includes(d.getDay()) ? 'we' : ''} ${allFree[i] ? 'best' : ''}` }, h('small', {}, DAY_SHORT[d.getDay()][0]), d.getDate()))),
-      h('div', { class: 'sg-row me' }, h('span', { class: 'sg-name' }, 'You'), days.map((d, i) => { const m = F.meState(s, d, ctx.busyOf(d)); return cell(`${me[i].length ? (me[i].some(w => w[1] - w[0] >= 480) ? 'all' : 'part') : 'busy'}${m.status === 'work' ? ' wk' : ''}`, `You, ${dayLabel(d)}: ${stateText(m, me[i])}`, () => daySheet(d), m.status === 'work' ? letter(m) : ''); })),
-      ...fr.map((f, r) => h('div', { class: 'sg-row' }, h('button', { class: 'sg-name', onClick: () => friendSheet(f) }, F.shortName(f)), days.map((d, i) => cell(`${st[r][i].free}${st[r][i].status === 'work' ? ' wk' : ''}`, `${F.shortName(f)}, ${dayLabel(d)}: ${stateText(st[r][i], st[r][i].windows)}`, () => daySheet(d), st[r][i].status === 'work' ? letter(st[r][i]) : ''))))),
-    h('div', { class: 'chips sg-key' }, h('span', { class: 'chip' }, h('i', { class: 'sg-dot all' }), 'day off, free'), h('span', { class: 'chip' }, h('i', { class: 'sg-dot part' }), 'partly free'), h('span', { class: 'chip' }, h('i', { class: 'sg-dot part wk' }), 'working, free around it (letter = shift)'), h('span', { class: 'chip' }, h('i', { class: 'sg-dot busy' }), 'working, no gap'), h('span', { class: 'chip' }, h('i', { class: 'sg-dot unknown' }), 'no info')));
+      h('div', { class: 'sg-row sg-head' }, h('span', { class: 'sg-name' }), days.map((d, i) => h('button', { class: `sg-day ${[5, 6].includes(d.getDay()) ? 'we' : ''} ${allFree[i] ? 'best' : ''} ${i === 0 ? 'today' : ''}`, 'aria-label': `${dayLabel(d)}: ${meets[i]} of ${fr.length} can meet you`, onClick: () => daySheet(d) }, h('small', {}, DAY_SHORT[d.getDay()][0]), d.getDate(), h('i', { class: `sg-n ${meets[i] ? '' : 'zero'}` }, meets[i])))),
+      h('div', { class: 'sg-row me' }, h('span', { class: 'sg-name' }, 'You'), days.map((d, i) => cell(me[i], me[i].windows, `You, ${dayLabel(d)}: ${stateText(me[i], me[i].windows)}`, d, { outing: outingOn(s, null, d) }))),
+      ...fr.map((f, r) => { const off = st[r].filter(x => x.free === 'all').length; return h('div', { class: 'sg-row' }, h('button', { class: 'sg-name', onClick: () => friendSheet(f) }, F.shortName(f), h('small', {}, off ? `${off} off` : st[r].every(x => x.free === 'unknown') ? 'no info' : '')),
+        days.map((d, i) => cell(st[r][i], st[r][i].windows, `${F.shortName(f)}, ${dayLabel(d)}: ${stateText(st[r][i], st[r][i].windows)}${isBday(f, d) ? ' · birthday' : ''}`, d, { bday: isBday(f, d), outing: outingOn(s, f, d) }))); })),
+    h('div', { class: 'sg-key' }, [['all', '', 'day off'], ['part', '', 'partly free'], ['part wk', 'D', 'working · letter = shift'], ['busy wk', 'N', 'working, no gap'], ['unknown', '', 'no info']].map(([c, t, l]) => h('span', { class: 'sg-k' }, h('i', { class: `sg-cell ${c}` }, h('b', {}, t)), l)),
+      h('span', { class: 'sg-k' }, h('i', { class: 'sg-cell part' }, h('b', {}, 'z')), 'after a night'), h('span', { class: 'sg-k' }, h('i', { class: 'sg-cell part' }, h('span', { class: 'sg-tl' }, h('i', { style: { left: '60%', width: '40%' } }))), 'green line = free hours 08–24'), h('span', { class: 'sg-k' }, h('i', { class: 'sg-n' }, '3'), 'can meet you that day')));
 }
-function daySheet(d) {
-  const s = S(), fr = F.friendList(s), mine = F.myWindows(s, d, ctx.busyOf(d));
-  const row = (label, wins, extra) => h('div', { class: 'item' }, h('div', { class: 'grow' }, h('div', { class: 'name' }, label), h('div', { class: 'meta' }, extra || '')), h('b', {}, wins.length ? wins.map(win).join(' · ') : '—'));
-  ctx.sheet([h('h2', {}, `${dayLabel(d)} · ${relDay(d)}`), h('div', { class: 'list' }, row('You', mine, mine.length ? '' : 'working or booked'), fr.map(f => { const x = F.dayState(s, f, d); return row(F.shortName(f), x.windows, x.free === 'unknown' ? 'no shift info for this day' : x.afterNight ? 'after a night shift' : x.status === 'work' ? `working ${x.type}` : x.status === 'leave' ? 'on leave' : x.status === 'off' ? 'off' : ''); }))]);
+
+/** One day, everyone on a 08:00–24:00 line: red = working, green = free, orange band = when you are all free. */
+function daySheet(d, people = null) {
+  const s = S(), list = people || F.friendList(s), me = F.meState(s, d, ctx.busyOf(d)), st = list.map(f => ({ f, x: F.dayState(s, f, d) }));
+  const common = F.commonFree(s, list, { from: d, days: 1, busyOf: ctx.busyOf, minMin: 60 })[0];
+  const band = common?.window ? h('i', { class: 'dl-common', style: { left: `${pct(common.window[0])}%`, width: `${pct(common.window[1]) - pct(common.window[0])}%` } }) : null;
+  const work = (x) => { if (x.status !== 'work' || x.start == null) return []; const a = x.start, b = x.end; return b > 1440 ? [[a, 1440], [0, b - 1440]] : [[a, b]]; };
+  const line = (label, x, sub) => h('div', { class: 'dl-row' }, h('div', { class: 'dl-name' }, h('b', {}, label), h('small', {}, sub)), h('div', { class: 'dl-bar' }, band ? band.cloneNode() : null, ...work(x).map(([a, b]) => h('i', { class: 'dl-work', style: { left: `${pct(a)}%`, width: `${Math.max(1, pct(b) - pct(a))}%` } })), ...x.windows.map(([a, b]) => h('i', { class: 'dl-free', style: { left: `${pct(a)}%`, width: `${pct(b) - pct(a)}%` } }))));
+  ctx.sheet([h('h2', {}, `${dayLabel(d)} · ${relDay(d)}`),
+    common?.window ? h('div', { class: 'cr-key soon' }, h('div', { class: 'grow' }, h('b', {}, common.all ? `Everyone free ${win(common.window)}` : `${common.free.length} of ${list.length} free together ${win(common.window)}`), common.missing.length || common.unknown.length ? h('div', { class: 'tiny dim' }, [common.missing.length ? `not free: ${common.missing.map(F.shortName).join(', ')}` : '', common.unknown.length ? `no info: ${common.unknown.map(F.shortName).join(', ')}` : ''].filter(Boolean).join(' · ')) : null), list.length ? h('button', { class: 'btn sm', onClick: () => { document.querySelectorAll('.sheet-bg').forEach(e => e.remove()); inviteSheet(common.free.filter(f => S().friends?.[f.id]).map(f => f.id), { date: d, window: common.window, who: common.free.map(f => f.id) }); } }, 'Invite') : null) : h('div', { class: 'small muted' }, 'No time when you are all free that day.'),
+    h('div', { class: 'dl' }, h('div', { class: 'dl-axis' }, h('span', {}), h('div', {}, ['08', '12', '16', '20', '24'].map(t => h('small', {}, t)))), line('You', me, stateText(me, me.windows)), st.map(({ f, x }) => line(F.shortName(f), x, stateText(x, x.windows))))]);
 }
+
+// ───────────── find a day for any group of people in the app
+let pick = new Set(), pickMin = 120, pickDays = 21, pickMe = true;
+export function findSheet(preset) {
+  if (preset) pick = new Set(preset);
+  const wrap = h('div', {}), box = ctx.sheet([wrap]); let q = '';
+  const everyone = () => { const s = S(), seen = new Set(), out = []; for (const f of F.friendList(s)) { out.push({ key: f.id, name: F.shortName(f), full: f.name, group: 'Friends', rec: f }); if (f.rotaKey) seen.add(f.rotaKey); }
+    for (const p of ctx.allPeople()) { if (seen.has(p.key) || ctx.isMeKey?.(p.key)) continue; const u = [...p.units]; out.push({ key: p.key, name: p.name.replace(/^Dr\.?\s*/i, ''), full: p.name, group: u.includes('nurse') ? 'Nurses' : u.includes('gp') ? 'GPs' : 'Specialists', rec: null }); } return out; };
+  const paint = () => {
+    const all = everyone(), byKey = new Map(all.map(x => [x.key, x])), chosen = [...pick].map(k => byKey.get(k)).filter(Boolean), s = S();
+    const people = chosen.map(c => c.rec || F.personRecord(s, c.key, c.full)), res = people.length ? F.commonFree(s, people, { days: pickDays, withMe: pickMe, minMin: pickMin, busyOf: ctx.busyOf }) : [];
+    const good = res.filter(r => r.all), near = res.filter(r => !r.all && r.window && r.missing.length + r.unknown.length === 1 && people.length > 1).slice(0, 5), unknownAll = chosen.filter((c, i) => res.length && res.every(r => r.unknown.includes(people[i])));
+    const matches = q ? all.filter(x => !pick.has(x.key) && x.full.toLowerCase().includes(q.toLowerCase())).slice(0, 12) : [];
+    const groups = ['Friends', 'GPs', 'Specialists', 'Nurses'].map(g => [g, all.filter(x => x.group === g && !pick.has(x.key))]).filter(([, l]) => l.length);
+    const search = h('input', { type: 'search', class: 'dir-search', placeholder: 'Search anyone in the app', value: q, onInput: (e) => { q = e.target.value; paint(); const i = wrap.querySelector('.dir-search'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); } });
+    const chip = (x, on) => h('button', { class: `chip ${on ? 'sel' : ''}`, 'aria-pressed': on ? 'true' : 'false', onClick: () => { on ? pick.delete(x.key) : pick.add(x.key); paint(); } }, on ? `${x.name} ✕` : x.name);
+    const dayRow = (r) => h('button', { class: `fd-day ${r.all ? 'all' : ''} ${r.weekend ? 'we' : ''}`, onClick: () => daySheet(r.date, people) }, h('div', { class: 'fd-date' }, h('b', {}, `${DAY_SHORT[r.date.getDay()]} ${r.date.getDate()}`), h('small', {}, MONTHS[r.date.getMonth()].slice(0, 3))),
+      h('div', { class: 'grow' }, h('div', {}, win(r.window), r.window[1] - r.window[0] >= 480 ? h('span', { class: 'chip sel', style: { marginLeft: '6px' } }, 'all day') : null), !r.all ? h('div', { class: 'tiny dim' }, r.missing.length ? `${r.missing.map(F.shortName).join(', ')} can't` : `no info for ${r.unknown.map(F.shortName).join(', ')}`) : null), h('span', { class: 'fd-go' }, '›'));
+    wrap.replaceChildren(h('h2', {}, 'Find a day'), h('div', { class: 'small muted' }, 'Pick anyone: friends, colleagues, nurses. You get the days you are all free.'),
+      chosen.length ? h('div', { class: 'chips', style: { margin: '8px 0' } }, chosen.map(x => chip(x, true)), h('button', { class: 'chip ghost', onClick: () => { pick.clear(); paint(); } }, 'Clear')) : null,
+      search, matches.length ? h('div', { class: 'chips', style: { margin: '6px 0' } }, matches.map(x => chip(x, false))) : null,
+      !q ? groups.map(([g, l]) => h('details', { class: 'fd-group', open: g === 'Friends' ? '' : null }, h('summary', { class: 'tiny dim' }, `${g} (${l.length})`), h('div', { class: 'chips' }, l.slice(0, 80).map(x => chip(x, false))))) : null,
+      h('div', { class: 'row wrap', style: { margin: '10px 0 4px', gap: '6px' } }, h('div', { class: 'chips' }, [[90, '1½h'], [120, '2h'], [240, '4h'], [480, 'all day']].map(([m, l]) => h('button', { class: `chip ${pickMin === m ? 'sel' : ''}`, onClick: () => { pickMin = m; paint(); } }, l))), h('div', { class: 'chips' }, [[14, '2 wks'], [21, '3 wks'], [42, '6 wks']].map(([n, l]) => h('button', { class: `chip ${pickDays === n ? 'sel' : ''}`, onClick: () => { pickDays = n; paint(); } }, l))),
+        h('label', { class: 'chip' }, h('input', { type: 'checkbox', checked: pickMe, onChange: (e) => { pickMe = e.target.checked; paint(); } }), ' include me')),
+      !chosen.length ? h('div', { class: 'empty small' }, 'Pick at least one person.') : h('div', { class: 'fd-res' },
+        unknownAll.length ? h('div', { class: 'lw-flag warn' }, `No schedule for ${unknownAll.map(x => x.name).join(', ')}: add their shifts on their friend card, or they can never count as free.`) : null,
+        h('div', { class: 'title' }, good.length ? `${good.length} day${good.length > 1 ? 's' : ''} you are all free` : 'No day where everyone is free'),
+        (() => { const whole = good.filter(r => r.window[1] - r.window[0] >= 480), part = good.filter(r => r.window[1] - r.window[0] < 480); return [whole.length && part.length ? h('div', { class: 'tiny dim', style: { margin: '6px 0 2px' } }, `Whole day (${whole.length})`) : null, whole.map(dayRow), whole.length && part.length ? h('div', { class: 'tiny dim', style: { margin: '8px 0 2px' } }, `Part of the day (${part.length})`) : null, part.map(dayRow)]; })(),
+        near.length ? [h('div', { class: 'title', style: { marginTop: '10px' } }, 'All but one'), near.map(dayRow)] : null,
+        good.length && chosen.every(c => c.rec) ? h('button', { class: 'btn primary', style: { marginTop: '10px' }, onClick: () => { document.querySelectorAll('.sheet-bg').forEach(e => e.remove()); ctx.update(st => XU_poll(st, chosen.map(c => c.key), good.slice(0, 4))); toast('Poll created in Social → Plans'); ctx.render(); } }, 'Make a poll from the best days') : null));
+  };
+  paint();
+}
+const XU_poll = (st, who, days) => ({ ...st, polls: { ...(st.polls || {}), ['p' + Date.now().toString(36)]: { id: 'p' + Date.now().toString(36), title: 'Meet up', slots: days.map(r => ({ date: r.key, start: r.window[0], end: Math.min(r.window[1], r.window[0] + 180) })), who, votes: {}, status: 'open', chosen: -1, at: Date.now() } } });
 
 // ───────────── best times and invitations
 function meetCard(m, small) {

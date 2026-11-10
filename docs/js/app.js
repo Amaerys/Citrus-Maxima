@@ -64,7 +64,7 @@ async function boot() {
     addEvent: addEventFn,
   });
   const sub = { S, update: (fn) => store.update(fn), sheet, render: () => render(), go: (v, sub) => { if (v === 'rota' && sub) rt.workSeg = sub; show(v); }, busyOf: (d) => (rt.events[keyOf(d)] || []).filter(e => !e.allDay && e.start && e.end).map(e => [Math.max(0, Math.round((e.start - startOfDay(d)) / 60000)), Math.min(1440, Math.round((e.end - startOfDay(d)) / 60000))]), addEvent: addEventFn };
-  SU.initSocial(sub); CU.initChores(sub); LU.initLabor(sub); RU.initCareer(sub); XU.initPlans(sub); DU.initDaily({ ...sub, hasApp: (n) => !!mergedApps()[n], launchApp: (n) => launch(n, null) }); EU.initExtras({ ...sub, invite: (ids, what) => SU.inviteSheet(ids, null, what) }); PU.initPeople({ ...sub, openDay: (d) => daySheet(d), personSheet, personKeyOf, shiftChip, importButton });
+  SU.initSocial({ ...sub, allPeople: () => allPeople(S()), isMeKey: (k) => { const m = S().me; return !!m && (k === `id:${m.id}` || k === `name:${String(m.name || '').toLowerCase()}`); } }); CU.initChores(sub); LU.initLabor(sub); RU.initCareer(sub); XU.initPlans(sub); DU.initDaily({ ...sub, hasApp: (n) => !!mergedApps()[n], launchApp: (n) => launch(n, null) }); EU.initExtras({ ...sub, invite: (ids, what) => SU.inviteSheet(ids, null, what) }); PU.initPeople({ ...sub, openDay: (d) => daySheet(d), personSheet, personKeyOf, shiftChip, importButton });
   store.subscribe(() => { render(); remindSoon(); });
   store.onRemoteSync(scheduleRemoteSave);
   loadCachedEvents();
