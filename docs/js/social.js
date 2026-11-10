@@ -190,3 +190,9 @@ export function friendFromPerson(s, person, key, kind) {
   const old = s.contacts?.[key] || {};
   return addFriend(s, { name: person.name.replace(/^Dr\.?\s*/i, ''), kind, rotaKey: key, phone: old.phone || person.mobile || '', whatsapp: old.whatsapp || '', snap: old.snap || '', insta: old.insta || '', notes: old.note || '', every: 30 });
 }
+
+/** Your own day in the same shape as a friend's (status work/off/leave, shift type, free windows), so the grid can show you working too. */
+export function meState(s, date, busy = []) {
+  const me = rec(s.rotas).flatMap(r => r.people).find(p => isMe(s, p)), key = me ? (me.id ? `id:${me.id}` : `name:${me.name.toLowerCase()}`) : ''; if (!key) return { status: 'unknown', windows: myWindows(s, date, busy) };
+  const st = dayState(s, { rotaKey: key }, date); return { ...st, windows: myWindows(s, date, busy) };
+}

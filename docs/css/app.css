@@ -575,3 +575,8 @@ nav.tabs button.active { color: var(--orange); }
 .brief2>summary{display:flex;justify-content:space-between;align-items:center;cursor:pointer;list-style:none}.brief2>summary::-webkit-details-marker{display:none}
 .rate{margin-top:10px}.rate-faces{display:flex;gap:8px;margin-top:4px}.rate-f{flex:1;font-size:1.4rem;padding:6px 0;border-radius:12px;border:1px solid transparent;background:rgba(127,127,127,.12);cursor:pointer}.rate-f.sel{border-color:var(--orange2);background:var(--orange-soft)}
 .study-row{padding:8px 0;border-top:1px solid rgba(127,127,127,.15)}.study-row .bar{height:6px;border-radius:3px;background:rgba(127,127,127,.2);margin:6px 0 2px;overflow:hidden}.study-row .bar i{display:block;height:100%;background:var(--orange2)}
+
+/* working-but-free-around-it: striped, with the shift letter, so it never reads as a day off */
+.sg-cell{position:relative;display:flex;align-items:center;justify-content:center;font-size:.62rem;font-weight:700;color:rgba(0,0,0,.65)}
+.sg-cell.wk,.sg-dot.wk{background-image:repeating-linear-gradient(135deg,rgba(0,0,0,.22) 0 3px,transparent 3px 7px)}
+.sg-cell.wk.busy{color:#fff}

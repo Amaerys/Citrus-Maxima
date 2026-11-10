@@ -55,6 +55,11 @@ await tab(p, 'social'); check(/Your GP friends/.test(await txt(p, '#view-social'
 check(/Mohammed[^·]*· in schedule/.test(await txt(p, '#view-social')), 'full name matches exactly one rota row');
 await p.click('#view-social button:has-text("Add these 4")'); await sleep(400);
 check(/Faisal/.test(await txt(p, '#view-social')) && await p.locator('#view-social .sg-row').count() >= 5, 'free-days grid with four friends');
+{ const wk = await p.locator('#view-social .sg-cell.wk').count(); check(wk >= 1, `working days are striped and carry the shift letter (${wk} cells)`);
+  const lab = await p.locator('#view-social .sg-cell.wk').first().getAttribute('aria-label'); check(/working \d\d:\d\d–\d\d:\d\d/.test(lab), 'cell says when they work: ' + lab);
+  check(/^[A-Z]$/.test((await p.locator('#view-social .sg-cell.wk').first().innerText()).trim()), 'shift letter shown');
+  check(await p.locator('#view-social .sg-cell.wk').evaluateAll(els => els.every(e => !/day off/.test(e.getAttribute('aria-label')))), 'a working day is never described as a day off');
+  check(/working, free around it/.test(await txt(p, '#view-social')), 'legend explains the stripes'); }
 check(/Best times to meet/.test(await txt(p, '#view-social')), 'best times shown');
 await p.screenshot({ path: `${shots}/social-overview.png`, fullPage: true });
 await p.click('#view-social .seg button:has-text("Friends")'); await sleep(250);
