@@ -616,3 +616,8 @@ button.sg-day{border:0;background:none;color:inherit;font:inherit;padding:0;curs
 .rc-row{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;padding:5px 0;border-bottom:1px solid rgba(127,127,127,.12);font-size:.84rem}
 .rc-row b{min-width:48px}.rc-row.past{opacity:.5}.rc-from{text-decoration:line-through;opacity:.6}.rc-arr{opacity:.5}.rc-to{font-weight:600}
 .rc-in{color:#2fb36a}.rc-out{color:#ff6b6b}
+
+/* ───── Today: folded lower-priority cards */
+.more-today{margin:4px 0 12px}.more-today>summary{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;cursor:pointer;list-style:none;padding:12px 14px;border-radius:16px;background:var(--card,rgba(127,127,127,.08));border:1px dashed var(--line,rgba(127,127,127,.3))}
+.more-today>summary::-webkit-details-marker{display:none}.more-today>summary::after{content:'▾';margin-left:auto;opacity:.5}.more-today[open]>summary::after{content:'▴'}
+.more-today>summary .chips{display:flex;flex-wrap:wrap;gap:4px}.more-today>summary .chip{font-size:.7rem;padding:2px 8px}.more-today[open]>summary{margin-bottom:10px}

@@ -16,6 +16,7 @@ import * as RU from './career-ui.js';
 import * as XU from './plans-ui.js';
 import * as EU from './extras-ui.js';
 import * as DU from './daily-ui.js';
+import * as DY from './daily.js';
 import * as RC from './changes.js';
 import * as CHU from './changes-ui.js';
 import * as PU from './people-ui.js';
@@ -66,7 +67,7 @@ async function boot() {
     addEvent: addEventFn,
   });
   const sub = { S, update: (fn) => store.update(fn), sheet, render: () => render(), go: (v, sub) => { if (v === 'rota' && sub) rt.workSeg = sub; show(v); }, busyOf: (d) => (rt.events[keyOf(d)] || []).filter(e => !e.allDay && e.start && e.end).map(e => [Math.max(0, Math.round((e.start - startOfDay(d)) / 60000)), Math.min(1440, Math.round((e.end - startOfDay(d)) / 60000))]), addEvent: addEventFn };
-  SU.initSocial({ ...sub, allPeople: () => allPeople(S()), isMeKey: (k) => { const m = S().me; return !!m && (k === `id:${m.id}` || k === `name:${String(m.name || '').toLowerCase()}`); } }); CU.initChores(sub); LU.initLabor(sub); RU.initCareer(sub); XU.initPlans(sub); CHU.initChanges(sub); DU.initDaily({ ...sub, hasApp: (n) => !!mergedApps()[n], launchApp: (n) => launch(n, null) }); EU.initExtras({ ...sub, invite: (ids, what) => SU.inviteSheet(ids, null, what) }); PU.initPeople({ ...sub, openDay: (d) => daySheet(d), personSheet, personKeyOf, shiftChip, importButton });
+  SU.initSocial({ ...sub, allPeople: () => allPeople(S()), isMeKey: (k) => { const m = S().me; return !!m && (k === `id:${m.id}` || k === `name:${String(m.name || '').toLowerCase()}`); } }); CU.initChores(sub); LU.initLabor(sub); RU.initCareer(sub); XU.initPlans(sub); CHU.initChanges(sub); DU.initDaily({ ...sub, briefText: (d) => briefText(d), planned: (d) => { const k = keyOf(d), acc = (S().plan[k] || []).filter(p => p.status === 'accepted' || p.status === 'done'); return [...acc, ...(rt.suggestions[k] || []).filter(b => !acc.some(x => x.id === b.id))]; }, hasApp: (n) => !!mergedApps()[n], launchApp: (n) => launch(n, null) }); EU.initExtras({ ...sub, invite: (ids, what) => SU.inviteSheet(ids, null, what) }); PU.initPeople({ ...sub, openDay: (d) => daySheet(d), personSheet, personKeyOf, shiftChip, importButton });
   store.subscribe(() => { render(); remindSoon(); });
   store.onRemoteSync(scheduleRemoteSave);
   loadCachedEvents();
@@ -683,19 +684,25 @@ function renderToday() {
   const nu = nextUp(now); if (nu) hero.append(nu);
   hero.append(weekStrip(now));
   main.push(hero);
-  const board = shiftBoard(info, today); if (board) main.push(board);
-  { const uc = CHU.updatesCard({ today: true }); if (uc) main.push(uc); }
-  for (const dc of DU.todayCards(now)) main.push(dc);
-  main.push(MU.mindCard());
-  { const nc = PU.todayCard(); if (nc) main.push(nc); }
-  { const hc = CU.todayCard(); if (hc) main.push(hc); }
-  { const cc = RU.todayCard(); if (cc) main.push(cc); }
-  if (info.hasRota) main.push(onCallCard(info));
-  main.push(planCard(now));
+  // Everything below the hero is ranked by what matters right now; the top few stay open, the rest fold into "More for today".
+  const working = !!today && Date.now() < today.window.end, hr = now.getHours(), ranked = [];
+  const add = (el, score, label) => { if (el) ranked.push({ el, score, label }); };
+  add(shiftBoard(info, today), working ? 92 : 30, 'Shift board');
+  add(CHU.updatesCard({ today: true }), 100, 'Schedule update');
+  for (const c of DU.todayCards(now)) add(c.el, c.score, c.label);
+  add(PU.todayCard(), working ? 86 : 25, 'Nurses');
+  add(RU.todayCard(), 80, 'Contract dates');
+  add(planCard(now), 70, 'Plan');
+  add(CU.todayCard(), 62, 'Home');
+  add(MU.mindCard(), 58, 'Mind');
+  if (info.hasRota) add(onCallCard(info), working ? 40 : 22, 'On call');
+  ranked.sort((x, y) => y.score - x.score);
+  const TOP = 5, top = ranked.slice(0, TOP), rest = ranked.slice(TOP);
+  main.push(...top.map(r => r.el));
+  if (rest.length) main.push(h('details', { class: 'more-today', open: rt.moreOpen ? '' : null, onToggle: (e) => { rt.moreOpen = e.currentTarget.open; } }, h('summary', {}, h('span', { class: 'title' }, 'More for today'), h('span', { class: 'chips' }, rest.map(r => h('span', { class: 'chip' }, r.label)))), ...rest.map(r => r.el)));
   side.push(eventsCard(now));
   { const fc = SU.todayCard(); if (fc) side.push(fc); }
   if (Object.keys(mergedApps()).length) side.push(appsCard());
-  side.push(briefCard(now));
   side.push(noteCard(now));
   return h('div', { class: 'cols' }, h('div', {}, ...main), h('div', {}, ...side));
 }
@@ -956,7 +963,7 @@ async function removeBlock(k, b) {
   publishPlanSoon();
 }
 function setBlockStatus(k, b, status) {
-  store.update(s => { const n = { ...s, plan: { ...s.plan, [k]: (s.plan[k] || []).map(p => p.id === b.id ? { ...p, status, at: Date.now() } : p) } }; return status === 'done' ? M.completeFromBlock(n, b.goalId, k) : n; });
+  store.update(s => { const n = { ...s, plan: { ...s.plan, [k]: (s.plan[k] || []).map(p => p.id === b.id ? { ...p, status, at: Date.now() } : p) } }; if (status !== 'done') return n; const sj = DY.subjectOf(n, b.title); return M.completeFromBlock(sj && !DY.studyOn(n, k, sj.id) ? DY.logStudy(n, k, sj.id, (b.end || 0) - (b.start || 0)) : n, b.goalId, k); });
 }
 function moveBlock(k, b, isSuggestion = false) {
   const st = h('input', { type: 'time', value: fmtMin(b.start) }), en = h('input', { type: 'time', value: fmtMin(b.end % 1440) }), dt = h('input', { type: 'date', value: k });

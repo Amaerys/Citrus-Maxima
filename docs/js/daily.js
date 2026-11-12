@@ -59,6 +59,10 @@ export function dayInsights(s) {
 }
 
 // ───────── study planner
+const STOP = new Set(['and', 'the', 'of', 'for', 'study', 'app', 'review', 'read', 'reading', 'questions', 'qbank', '&', '/', '-']);
+const words = (t) => String(t || '').toLowerCase().replace(/step\s*(\d)/g, 'step$1').split(/[^a-z0-9]+/).filter(w => w.length > 1 && !STOP.has(w));
+/** The study subject a planner block belongs to, if any: shares a meaningful word with its name or app ("USMLE Step 1" ↔ "Step 1 pathology"). */
+export function subjectOf(s, title) { const tw = new Set(words(title)); if (!tw.size) return null; let best = null, n = 0; for (const x of subjects(s)) { const k = [...new Set([...words(x.name), ...words(x.app)])].filter(w => tw.has(w)).length; if (k > n) { n = k; best = x; } } return best; }
 export const SUBJECT_STARTERS = [{ name: 'Anatomy & imaging', app: 'Anatomy' }, { name: 'ER textbook / MRCEM', app: 'ER textbook' }, { name: 'Step 1 pathology', app: 'Step 1 pathology' }];
 export const subjects = (s) => rec(s.study).sort((a, b) => a.name.localeCompare(b.name));
 export function saveSubject(s, x) { const id = x.id || 's' + Math.random().toString(36).slice(2, 8), name = String(x.name || '').trim().slice(0, 60); if (!name) return s; return { ...s, study: { ...(s.study || {}), [id]: { id, name, app: String(x.app || '').slice(0, 60), perWeek: Math.max(0, Math.min(3000, Math.round(+x.perWeek) || 150)), block: Math.max(15, Math.min(240, Math.round(+x.block) || 45)), at: Date.now() } } }; }
@@ -70,13 +74,16 @@ export function weekMinutes(s, id, now = new Date()) { let t = 0; const ws = wee
 /** Consecutive days with any study logged, counting back from today (yesterday still counts if today is not done yet). */
 export function studyStreak(s, now = new Date()) { const any = (k) => subjects(s).some(x => studyOn(s, k, x.id) > 0); let d = startOfDay(now), n = 0; if (!any(keyOf(d))) d = addDays(d, -1); while (any(keyOf(d))) { n++; d = addDays(d, -1); } return n; }
 /** Blocks for the next days: the subject furthest behind its weekly target gets the next free window (after-shift evenings first). */
-export function studyPlan(s, now = new Date(), { days = 7, busyOf = () => [] } = {}) {
+/** `planned(date)` = the planner's blocks for that day ({title,start,end}): they are never overlapped, and one that is about a subject counts as that subject's block. */
+export function studyPlan(s, now = new Date(), { days = 7, busyOf = () => [], planned = () => [] } = {}) {
   const subs = subjects(s).filter(x => x.perWeek > 0); if (!subs.length) return [];
   const plan = [], got = new Map(subs.map(x => [x.id, weekMinutes(s, x.id, now)])), today = startOfDay(now), nowMin = now.getHours() * 60 + now.getMinutes();
   for (let i = 0; i < days; i++) {
-    const date = addDays(today, i); let wins = F.myWindows(s, date, busyOf(date)); if (i === 0) wins = wins.map(([a, b]) => [Math.max(a, nowMin + 15), b]).filter(w => w[1] - w[0] >= 30);
+    const date = addDays(today, i), pl = planned(date) || [], busy = [...busyOf(date), ...pl.map(b => [b.start, b.end])]; let wins = F.myWindows(s, date, busy); if (i === 0) wins = wins.map(([a, b]) => [Math.max(a, nowMin + 15), b]).filter(w => w[1] - w[0] >= 30);
     wins.sort((a, b) => (b[0] >= 17 * 60) - (a[0] >= 17 * 60) || a[0] - b[0]); const key = keyOf(date);
     if (i > 0 && date.getDay() === 0) for (const x of subs) got.set(x.id, 0);
+    let fromPlan = false; for (const b of pl) { const sub = subjectOf(s, b.title); if (!sub || plan.some(p => p.date === key && p.subject === sub.id)) continue; plan.push({ date: key, subject: sub.id, name: sub.name, app: sub.app, start: b.start, end: b.end, fromPlan: true, title: b.title }); got.set(sub.id, got.get(sub.id) + (b.end - b.start)); fromPlan = true; }
+    if (fromPlan) continue;   // the planner already has study on this day: don't stack a second block
     const sub = [...subs].sort((a, b) => got.get(a.id) / a.perWeek - got.get(b.id) / b.perWeek)[0];
     { if (studyOn(s, key, sub.id) >= sub.block || got.get(sub.id) >= sub.perWeek) continue; const w = wins.find(w => w[1] - w[0] >= sub.block); if (!w) continue;
       const start = w[0] >= 17 * 60 || w[1] - w[0] < sub.block + 60 ? w[0] : w[0] + 30; plan.push({ date: key, subject: sub.id, name: sub.name, app: sub.app, start, end: start + sub.block }); got.set(sub.id, got.get(sub.id) + sub.block);

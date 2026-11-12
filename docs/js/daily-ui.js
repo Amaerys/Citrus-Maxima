@@ -10,9 +10,10 @@ const fd = (k) => { const d = fromKey(k); return `${DAY_SHORT[d.getDay()]} ${d.g
 
 export function todayCards(now = new Date()) {
   const s = S(), out = [], hr = now.getHours();
-  const b = D.briefing(s, now); if (b.length) out.push(briefCard(b, hr < 14, now));
-  if (hr >= 18 || hr < 3) { const w = windCard(now); if (w) out.push(w); }
-  out.push(studyCard(now)); return out.filter(Boolean);
+  const b = D.briefing(s, now); if (b.length) out.push({ el: briefCard(b, hr < 14, now), score: hr < 12 ? 95 : hr < 18 ? 60 : 35, label: 'Briefing' });
+  if (hr >= 18 || hr < 3) { const w = windCard(now); if (w) out.push({ el: w, score: 94, label: 'Tonight' }); }
+  const subs = D.subjects(s), blk = subs.length ? D.studyPlan(s, now, { busyOf: ctx.busyOf, planned: ctx.planned, days: 1 }).length : 0;
+  out.push({ el: studyCard(now), score: !subs.length ? 20 : blk ? 66 : 45, label: 'Study' }); return out.filter(x => x.el);
 }
 
 function rateRow(key, label) {
@@ -21,8 +22,10 @@ function rateRow(key, label) {
 }
 function briefCard(lines, open, now) {
   const s = S(), yk = keyOf(addDays(startOfDay(now), -1)), ask = now.getHours() < 12 && !D.dayRating(s, yk) && s.rotas && Object.keys(s.rotas).length && D.dayInsights(s).total + 1 >= 0;
+  const text = () => ctx.briefText ? ctx.briefText(now) : lines.map(l => `${l.icon} ${l.text}`).join('\n');
+  const share = h('div', { class: 'row', style: { justifyContent: 'flex-end', gap: '6px', marginTop: '6px' } }, navigator.share ? h('button', { class: 'btn sm ghost', onClick: () => navigator.share({ title: 'Today', text: text() }).catch(() => {}) }, 'Share') : null, h('button', { class: 'btn sm ghost', onClick: async () => { try { await navigator.clipboard.writeText(text()); toast('Copied'); } catch { toast('Could not copy', 'err'); } } }, 'Copy'));
   return h('details', { class: 'card brief2', open: open ? '' : null }, h('summary', {}, h('span', { class: 'title' }, now.getHours() < 12 ? 'Your morning' : 'Your day'), h('span', { class: 'tiny dim' }, `${lines.length} things`)),
-    lines.map(l => h('div', { class: 'row ch-line' }, h('span', { class: 'ch-ic sm' }, l.icon), h('div', { class: 'grow small' }, l.text))), ask ? rateRow(yk, 'How was yesterday?') : null);
+    lines.map(l => h('div', { class: 'row ch-line' }, h('span', { class: 'ch-ic sm' }, l.icon), h('div', { class: 'grow small' }, l.text))), ask ? rateRow(yk, 'How was yesterday?') : null, share);
 }
 function windCard(now) {
   const s = S(), w = D.windDown(s, now), key = keyOf(startOfDay(now).getTime() && now.getHours() < 3 ? addDays(startOfDay(now), -1) : startOfDay(now)), ins = D.dayInsights(s);
@@ -40,20 +43,20 @@ function sleepSheet() {
 function studyCard(now) {
   const s = S(), subs = D.subjects(s), key = keyOf(startOfDay(now));
   if (!subs.length) return h('div', { class: 'card' }, h('div', { class: 'row' }, h('div', { class: 'title grow' }, 'Study'), h('button', { class: 'btn sm', onClick: () => studySheet() }, 'Set up')), h('div', { class: 'small muted' }, 'Plan study blocks around your shifts for your medical apps, with streaks.'));
-  const plan = D.studyPlan(s, now, { busyOf: ctx.busyOf }), todays = plan.filter(p => p.date === key), streak = D.studyStreak(s, now);
+  const plan = D.studyPlan(s, now, { busyOf: ctx.busyOf, planned: ctx.planned }), todays = plan.filter(p => p.date === key), streak = D.studyStreak(s, now);
   return h('div', { class: 'card' }, h('div', { class: 'row' }, h('div', { class: 'title grow' }, 'Study'), streak ? h('span', { class: 'chip sel' }, `🔥 ${streak} day${streak > 1 ? 's' : ''}`) : null, h('button', { class: 'btn sm ghost', onClick: () => studySheet() }, 'Plan')),
     subs.map(sub => { const wk = D.weekMinutes(s, sub.id, now), pct = Math.min(100, Math.round(wk / (sub.perWeek || 1) * 100)), today = D.studyOn(s, key, sub.id), blk = todays.find(p => p.subject === sub.id);
-      return h('div', { class: 'study-row' }, h('div', { class: 'row' }, h('div', { class: 'grow' }, h('div', { class: 'name' }, sub.name), h('div', { class: 'tiny dim' }, blk ? `Today ${hm(blk.start)}–${hm(blk.end)}` : today ? `${today} min today` : 'No window today')), sub.app && ctx.hasApp?.(sub.app) ? h('button', { class: 'btn sm ghost', onClick: () => ctx.launchApp(sub.app) }, 'Open') : null,
+      return h('div', { class: 'study-row' }, h('div', { class: 'row' }, h('div', { class: 'grow' }, h('div', { class: 'name' }, sub.name), h('div', { class: 'tiny dim' }, blk ? `Today ${hm(blk.start)}–${hm(blk.end)}${blk.fromPlan ? ' · in your plan' : ''}` : today ? `${today} min today` : 'No window today')), sub.app && ctx.hasApp?.(sub.app) ? h('button', { class: 'btn sm ghost', onClick: () => ctx.launchApp(sub.app) }, 'Open') : null,
         [15, 30].map(m => h('button', { class: 'btn sm', 'aria-label': `Log ${m} minutes of ${sub.name}`, onClick: () => ctx.update(x => D.logStudy(x, key, sub.id, m)) }, `+${m}`))), h('div', { class: 'bar' }, h('i', { style: { width: `${pct}%` } })), h('div', { class: 'tiny dim' }, `${wk} of ${sub.perWeek} min this week`)); }));
 }
 function studySheet() {
   const wrap = h('div', {}), box = ctx.sheet([wrap]); const paint = () => {
-    const s = S(), subs = D.subjects(s), plan = D.studyPlan(s, new Date(), { busyOf: ctx.busyOf }), have = new Set(subs.map(x => x.name)), left = D.SUBJECT_STARTERS.filter(x => !have.has(x.name));
+    const s = S(), subs = D.subjects(s), plan = D.studyPlan(s, new Date(), { busyOf: ctx.busyOf, planned: ctx.planned }), have = new Set(subs.map(x => x.name)), left = D.SUBJECT_STARTERS.filter(x => !have.has(x.name));
     wrap.replaceChildren(h('h2', {}, 'Study plan'),
       left.length ? h('div', { class: 'card' }, h('div', { class: 'small' }, 'Your apps'), h('div', { class: 'chips', style: { marginTop: '6px' } }, left.map(x => h('button', { class: 'chip', onClick: () => { ctx.update(st => D.saveSubject(st, { ...x, perWeek: 150, block: 45 })); setTimeout(paint, 0); } }, `＋ ${x.name}`)))) : null,
       subs.map(sub => { const v = { ...sub }; return h('div', { class: 'card' }, h('div', { class: 'row' }, h('b', { class: 'grow' }, sub.name), h('button', { class: 'btn sm ghost', 'aria-label': `Delete ${sub.name}`, onClick: () => { if (confirm(`Remove ${sub.name}?`)) { ctx.update(st => D.deleteSubject(st, sub.id)); setTimeout(paint, 0); } } }, '🗑')),
         h('div', { class: 'row wrap' }, field('Minutes a week', h('input', { type: 'number', value: sub.perWeek, onChange: (e) => { ctx.update(st => D.saveSubject(st, { ...sub, perWeek: +e.target.value })); setTimeout(paint, 0); } })), field('Block length', h('input', { type: 'number', value: sub.block, onChange: (e) => { ctx.update(st => D.saveSubject(st, { ...sub, block: +e.target.value })); setTimeout(paint, 0); } })))); }),
       h('div', { class: 'card' }, h('input', { id: 'new-subj', placeholder: 'Another subject…' }), h('button', { class: 'btn sm', style: { marginTop: '6px' }, onClick: () => { const i = wrap.querySelector('#new-subj'); if (!i.value.trim()) return toast('Name it first', 'err'); ctx.update(st => D.saveSubject(st, { name: i.value })); setTimeout(paint, 0); } }, 'Add')),
-      h('div', { class: 'title', style: { marginTop: '10px' } }, 'The week ahead'), plan.length ? plan.map(p => h('div', { class: 'cr-key' }, h('div', { class: 'grow' }, h('b', {}, p.name), h('div', { class: 'tiny dim' }, `${fd(p.date)} ${hm(p.start)}–${hm(p.end)}`)))) : h('div', { class: 'small muted' }, subs.length ? 'No free windows found, or the weekly targets are already met.' : 'Add a subject to see where it fits around your shifts.'));
+      h('div', { class: 'title', style: { marginTop: '10px' } }, 'The week ahead'), plan.length ? plan.map(p => h('div', { class: 'cr-key' }, h('div', { class: 'grow' }, h('b', {}, p.name), h('div', { class: 'tiny dim' }, `${fd(p.date)} ${hm(p.start)}–${hm(p.end)}${p.fromPlan ? ` · your plan: ${p.title}` : ''}`)))) : h('div', { class: 'small muted' }, subs.length ? 'No free windows found, or the weekly targets are already met.' : 'Add a subject to see where it fits around your shifts.'));
   }; paint();
 }

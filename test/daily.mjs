@@ -32,5 +32,13 @@ await t('study plan: blocks fit free windows, never on top of a shift, furthest-
   assert.ok(plan.length >= 3); for (const p of plan) { assert.ok(p.end - p.start === (p.name === 'A' ? 45 : 60)); assert.ok(p.start >= 0 && p.end <= 1440); }
   assert.ok(plan.filter(p => p.name === 'A').length <= 2, 'A target 90 min = two 45 min blocks'); assert.equal(D.studyPlan(s0).length, 0);
 });
+await t('study + planner: planner blocks are never overlapped, and a planner block about a subject is that subject\'s block', () => {
+  let s = D.saveSubject(D.saveSubject(s0, { name: 'Step 1 pathology', app: 'Step 1 pathology', perWeek: 300, block: 45 }), { name: 'Anatomy', perWeek: 300, block: 45 });
+  assert.equal(D.subjectOf(s, 'USMLE Step 1')?.name, 'Step 1 pathology'); assert.equal(D.subjectOf(s, 'Gym'), null); assert.equal(D.subjectOf(s, 'Anatomy review')?.name, 'Anatomy');
+  const planned = (d) => d.getDate() === 12 ? [{ title: 'USMLE Step 1', start: 1275, end: 1320 }] : d.getDate() === 14 ? [{ title: 'Gym', start: 1245, end: 1440 }] : [];
+  const plan = D.studyPlan(s, new Date(2026, 10, 11, 23), { days: 5, planned });
+  const d12 = plan.filter(p => p.date === '2026-11-12'); assert.equal(d12.length, 1); assert.ok(d12[0].fromPlan && d12[0].start === 1275, 'the planner\'s Step 1 slot is used, not a second block');
+  for (const p of plan.filter(p => p.date === '2026-11-14')) assert.ok(p.end <= 1245 || p.start >= 1440, 'never on top of the planner\'s Gym block');
+});
 await t('merge keeps ratings and study logs from both devices', () => { const a = D.rateDay({ dayLog: {}, study: {}, studyLog: {} }, '2026-11-01', 3), b = D.logStudy({ dayLog: {}, study: {}, studyLog: {} }, '2026-11-01', 'x', 20); const m = mergeStates(a, b); assert.ok(m.dayLog['2026-11-01']); assert.ok(m.studyLog['2026-11-01:x']); });
 console.log(fails ? `${fails} FAILED` : 'daily ok'); process.exit(fails ? 1 : 0);
