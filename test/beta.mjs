@@ -299,7 +299,7 @@ console.log('\nS9 — 320px phone, light theme, keyboard, accessibility');
   await waitSynced(p.page);
   for (const v of ['today', 'rota', 'plan', 'social', 'apps']) { await tab(p.page, v); await overflow(p.page, `320px ${v}`); await shot(p.page, `s9-320-${v}`); }
   await p.page.click('#btnMore'); await sleep(150); await overflow(p.page, '320px settings');
-  await p.page.locator('.switch:has-text("Light theme") .toggle').click(); await sleep(150);
+  await p.page.locator('.ui-opt:has-text("Paper")').click(); await sleep(150);
   for (const v of ['today', 'rota', 'plan']) { await tab(p.page, v); await shot(p.page, `s9-light-${v}`); }
   // unlabeled controls
   const unlabeled = await p.page.evaluate(() => [...document.querySelectorAll('button, a, input, select, textarea')].filter(el => el.offsetParent && !(el.getAttribute('aria-label') || el.innerText.trim() || el.getAttribute('title') || el.getAttribute('placeholder') || el.labels?.length)).map(el => el.outerHTML.slice(0, 70)));

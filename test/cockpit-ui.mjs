@@ -1,0 +1,42 @@
+// Cockpit (who's with me + week hours, 3 columns on wide screens) and interfaces (Arcade / Clean / Paper + text size). Run: node test/cockpit-ui.mjs
+import { chromium } from '/opt/npm-tools/node_modules/playwright/index.mjs';
+import http from 'node:http'; import fs from 'node:fs'; import path from 'node:path';
+const here = path.dirname(new URL(import.meta.url).pathname), root = path.resolve(here, '../docs'), data = (f) => path.join(here, 'data', f), shots = path.join(here, 'shots/cockpit'); fs.mkdirSync(shots, { recursive: true });
+if (!fs.existsSync(data('main.xlsx'))) { console.log('no main.xlsx: skipped'); process.exit(0); }
+const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.svg': 'image/svg+xml', '.png': 'image/png' };
+const server = http.createServer((req, res) => { let p = path.join(root, decodeURIComponent(req.url.split('?')[0])); if (p.endsWith('/')) p += 'index.html'; if (!fs.existsSync(p)) { res.writeHead(404); return res.end(); } res.writeHead(200, { 'content-type': mime[path.extname(p)] || 'application/octet-stream' }); res.end(fs.readFileSync(p)); }).listen(0);
+await new Promise(r => server.on('listening', r)); const URL0 = `http://localhost:${server.address().port}/index.html`;
+const browser = await chromium.launch(), sleep = (ms) => new Promise(r => setTimeout(r, ms)); let bad = 0; const errors = [];
+const check = (c, m) => { if (!c) { bad++; console.log('  ✗', m); } else console.log('  ✓', m); };
+const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, serviceWorkers: 'block', timezoneId: 'Asia/Riyadh' }), p = await ctx.newPage(); p.on('pageerror', e => errors.push(e.message));
+await p.clock.install({ time: new Date('2026-11-09T09:30:00+03:00') });
+await p.addInitScript(() => { if (!localStorage.getItem('citrus.state.v1')) localStorage.setItem('citrus.state.v1', JSON.stringify({ me: { name: 'Dr. Reem Mahgoub', id: '437326' } })); });
+await p.goto(URL0); await sleep(600); await p.click('nav.tabs button[data-view=rota]'); await p.locator('#view-rota input[type=file]').first().setInputFiles([data('main.xlsx'), ...(fs.existsSync(data('nurses.xlsx')) ? [data('nurses.xlsx')] : [])]); await sleep(2500);
+await p.click('nav.tabs button[data-view=today]'); await sleep(400);
+console.log('cockpit on the phone');
+const hero = await p.locator('#view-today .card.hero').innerText(); check(await p.locator('#view-today .card.hero .tm-line').count() >= 1 && /Doctors/i.test(hero), 'who is with me sits in the hero');
+check(await p.locator('#view-today .card.hero .tm-pill').count() >= 2, 'colleagues as pills: ' + (await p.locator('#view-today .card.hero .tm-pill').allInnerTexts()).slice(0, 6).join(', ').replace(/\n/g, ' '));
+check(await p.locator('#view-today .wd .wh').count() >= 2, 'week strip shows hours per shift'); check(/h this week · .*(over|left of) 48h/.test(await p.locator('#view-today .wk-hours').innerText()), 'week total against 48h');
+const box = await p.locator('#view-today .wk-hours').boundingBox(); check(box && box.y + box.height < 844 + 120, 'week hours visible without much scrolling');
+await p.locator('#view-today .card.hero .tm-pill').first().click(); await sleep(300); check(await p.locator('.sheet').count() >= 1, 'tapping a colleague opens them'); await p.evaluate(() => document.querySelectorAll('.sheet-bg').forEach(e => e.remove()));
+check(!/\b(null|undefined|NaN)\b/.test(await p.locator('#view-today').innerText()), 'no stray words'); await p.screenshot({ path: `${shots}/phone-clean.png` });
+console.log('interfaces');
+check(await p.evaluate(() => document.documentElement.dataset.ui) === 'clean', 'Clean by default');
+await p.click('#btnMore'); await sleep(300); check(await p.locator('.ui-opt').count() === 3, 'three interfaces offered in Settings');
+await p.click('.ui-opt:has-text("Arcade")'); await sleep(300); check(await p.evaluate(() => document.documentElement.dataset.ui) === 'arcade', 'Arcade applied');
+check(await p.evaluate(() => JSON.parse(localStorage.getItem('citrus.ui')).ui) === 'arcade', 'saved on this device'); check(await p.evaluate(() => !('ui' in (JSON.parse(localStorage.getItem('citrus.state.v1')).settings || {}))), 'not synced to other devices');
+await p.click('.ui-size button:has-text("L")'); await sleep(200); check(await p.evaluate(() => document.documentElement.dataset.size) === 'large', 'text size large');
+await p.reload(); await sleep(150); check(await p.evaluate(() => document.documentElement.dataset.ui === 'arcade' && document.documentElement.dataset.size === 'large'), 'applied before first paint after reload'); await sleep(600);
+check(await p.evaluate(() => getComputedStyle(document.querySelector('h1, .card.hero .big')).fontFamily).then(f => /Pixelify/.test(f)), 'Arcade uses the pixel font for headings');
+check(await p.evaluate(() => document.documentElement.scrollWidth - innerWidth) <= 0, 'large text: no sideways scroll'); await p.screenshot({ path: `${shots}/phone-arcade-large.png` });
+await p.click('#btnMore'); await sleep(300); await p.click('.ui-opt:has-text("Paper")'); await p.click('.ui-size button:has-text("M")'); await sleep(300);
+check(await p.evaluate(() => document.documentElement.dataset.theme === 'light' && getComputedStyle(document.body).backgroundColor === 'rgb(243, 244, 249)'), 'Paper is a light page'); await p.evaluate(() => document.querySelectorAll('.sheet-bg').forEach(e => e.remove()));
+await p.click('nav.tabs button[data-view=today]'); await sleep(300); await p.screenshot({ path: `${shots}/phone-paper.png` });
+console.log('wide-screen cockpit');
+await p.setViewportSize({ width: 1600, height: 1000 }); await sleep(500);
+check(await p.locator('#view-today .cockpit .ck-col').count() === 3, 'Today, Work and Plan side by side'); const heads = await p.locator('#view-today .ck-head h2').allInnerTexts(); check(heads.join() === 'Work', 'Work column titled; Plan keeps its own header: ' + heads.join()); check(await p.locator('#view-today .ck-plan').count() === 1, 'plan column');
+check(await p.locator('#view-today .cockpit .cal').count() >= 1, 'calendar in the Work column'); check(await p.evaluate(() => document.documentElement.scrollWidth - innerWidth) <= 0, 'no sideways scroll');
+await p.evaluate(() => document.querySelectorAll('.sheet-bg').forEach(e => e.remove()));
+for (const ui of ['clean', 'arcade', 'paper']) { await p.evaluate((u) => { localStorage.setItem('citrus.ui', JSON.stringify({ ui: u, size: 'normal' })); }, ui); await p.reload(); await sleep(800); await p.click('nav.tabs button[data-view=today]'); await sleep(400); await p.screenshot({ path: `${shots}/wide-${ui}.png` }); check(await p.locator('#view-today .cockpit').count() === 1, `${ui}: cockpit renders`); }
+await p.setViewportSize({ width: 1200, height: 900 }); await sleep(400); check(await p.locator('#view-today .cockpit').count() === 0 && await p.locator('#view-today .cols').count() === 1, 'narrower window: back to two columns');
+check(errors.length === 0, 'no page errors: ' + errors.join('|').slice(0, 200)); await browser.close(); server.close(); console.log(bad ? `${bad} FAILED` : 'cockpit ui ok'); process.exit(bad ? 1 : 0);

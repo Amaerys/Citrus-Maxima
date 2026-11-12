@@ -20,6 +20,8 @@ import * as DY from './daily.js';
 import * as RC from './changes.js';
 import * as CHU from './changes-ui.js';
 import * as PU from './people-ui.js';
+import * as N from './nurses.js';
+import * as L from './labor.js';
 import { h, toast, safeUrl, keyOf, fromKey, addDays, startOfDay, sameDay, fmtDate, fmtDateShort, fmtTime, fmtMin, fmtDur, relDay, pad2, DAY_SHORT, DAY_NAMES, MONTHS, telLink, firstName, atMin, minsOf, uid } from './util.js';
 
 // ---------------- runtime state (not persisted) ----------------
@@ -142,7 +144,11 @@ function render() {
   el.replaceChildren(...[authBanner(), fn()].flat().filter(Boolean));
 }
 
-function applyTheme() { document.documentElement.dataset.theme = S().settings.theme || 'dark'; }
+// Interfaces (Orange 8.12 pattern): Arcade / Clean / Paper + text size, chosen per device (localStorage, never synced); index.html applies them before first paint.
+const UI_KEY = 'citrus.ui';
+function getUi() { let u = {}; try { u = JSON.parse(localStorage.getItem(UI_KEY) || '{}') || {}; } catch {} if (!u.ui) u.ui = S().settings.theme === 'light' ? 'paper' : 'clean'; if (!u.size) u.size = 'normal'; return u; }
+function setUi(patch) { const u = { ...getUi(), ...patch }; try { localStorage.setItem(UI_KEY, JSON.stringify(u)); } catch {} applyTheme(); render(); }
+function applyTheme() { const u = getUi(), r = document.documentElement; r.dataset.ui = u.ui; r.dataset.size = u.size; r.dataset.theme = u.ui === 'paper' ? 'light' : 'dark'; const m = document.querySelector('meta[name=theme-color]'); if (m) m.content = u.ui === 'paper' ? '#F3F4F9' : u.ui === 'arcade' ? '#12141F' : '#0e0f13'; }
 
 // ---------------- sync ----------------
 function renderSync() {
@@ -682,6 +688,7 @@ function renderToday() {
   if (tmr) say(h('div', { class: 'small', style: { marginTop: '10px' } }, h('span', { class: 'muted' }, 'Tomorrow '), tmr));
   hero.append(h('div', { class: 'hero-grid' }, words, info.hasRota && s.me ? dayDial(now) : null));
   const nu = nextUp(now); if (nu) hero.append(nu);
+  { const tm = heroTeam(info, today, now); if (tm) hero.append(tm); }
   hero.append(weekStrip(now));
   main.push(hero);
   // Everything below the hero is ranked by what matters right now; the top few stay open, the rest fold into "More for today".
@@ -704,8 +711,20 @@ function renderToday() {
   { const fc = SU.todayCard(); if (fc) side.push(fc); }
   if (Object.keys(mergedApps()).length) side.push(appsCard());
   side.push(noteCard(now));
+  if (cockpitWide()) return h('div', { class: 'cockpit' }, h('div', { class: 'ck-col' }, ...main, ...side),
+    h('div', { class: 'ck-col' }, h('div', { class: 'ck-head' }, h('h2', {}, 'Work'), h('button', { class: 'btn sm ghost', onClick: () => show('rota') }, 'Open')), ...[renderRota()].flat().filter(Boolean)),
+    h('div', { class: 'ck-col ck-plan' }, ...[renderPlan()].flat().filter(Boolean)));
   return h('div', { class: 'cols' }, h('div', {}, ...main), h('div', {}, ...side));
 }
+function uiPicker() {
+  const u = getUi(), opt = (id, name, note) => h('button', { class: `ui-opt ${u.ui === id ? 'sel' : ''}`, 'aria-pressed': u.ui === id ? 'true' : 'false', onClick: () => setUi({ ui: id }) }, h('span', { class: `ui-thumb ui-${id}` }, h('i'), h('i'), h('b', {}, 'Aa')), h('b', {}, name), h('small', {}, note));
+  return h('div', { class: 'ui-pick' }, h('div', { class: 'title' }, 'Interface on this device'), h('div', { class: 'ui-opts' }, opt('arcade', 'Arcade', '8-bit, the family look'), opt('clean', 'Clean', 'Calm, rounded, dark'), opt('paper', 'Paper', 'Light, for daylight')),
+    h('div', { class: 'row', style: { marginTop: '10px' } }, h('span', { class: 'small grow' }, 'Text size'), h('div', { class: 'seg ui-size' }, [['small', 'S'], ['normal', 'M'], ['large', 'L']].map(([k, l]) => h('button', { class: u.size === k ? 'active' : '', 'aria-label': `Text size ${k}`, onClick: () => setUi({ size: k }) }, l)))),
+    h('div', { class: 'row', style: { marginTop: '8px' } }, h('span', { class: 'small grow' }, 'Wide-screen cockpit (Today, Work, Plan side by side)'), h('input', { type: 'checkbox', 'aria-label': 'Wide-screen cockpit', checked: u.cockpit !== false, onChange: (e) => setUi({ cockpit: e.target.checked }) })));
+}
+/** Wide screens (27" monitor, Steam Deck docked) show Today, Work and Plan side by side. */
+const cockpitWide = () => window.innerWidth >= 1400 && getUi().cockpit !== false;
+let wideWas = window.innerWidth >= 1400; addEventListener('resize', () => { const w = cockpitWide(); if (w !== wideWas && rt.view === 'today') render(); wideWas = w; });
 
 // ---- the day dial: 24 hours around a ring; shift, commute, sleep, calendar and plan drawn as arcs ----
 function dayDial(date) {
@@ -749,6 +768,22 @@ function dayDial(date) {
 }
 
 // next 7 days at a glance
+/** Above the fold: who you are with today — doctors whose shift overlaps yours by 2h+, likely nurses, the specialist covering your site. */
+function heroTeam(info, today, now) {
+  if (!today || !info.mine) return null; const s = S(), mw = today.window, first = (p) => p.name.replace(/^Dr\.?\s*/i, '').split(' ')[0];
+  const docs = info.gp.filter(e => !isMe(s, e.person) && e.shift.kind === 'work').map(e => ({ e, w: shiftWindow(startOfDay(now), e.shift) })).filter(x => x.w && Math.min(x.w.end, mw.end) - Math.max(x.w.start, mw.start) >= 120 * 60000)
+    .sort((a, b) => (b.e.shift.site === info.mine.shift.site) - (a.e.shift.site === info.mine.shift.site) || a.w.start - b.w.start);
+  const site = info.mine.shift.site || '', spec = /upper/i.test(site) ? info.uv : /lower/i.test(site) ? info.lv : info.fsed.filter(e => e.shift.type === info.mine.shift.type);
+  let nurses = []; if (N.nurseRotas(s).length) { const w = N.workingWithMe(s, startOfDay(now), info.mine); if (w?.hasNurses) nurses = (w.confirmed.length ? w.confirmed.map(r => ({ r, tag: '' })) : [...(w.tipped || []).map(r => ({ r, tag: 'heard' })), ...w.possible.slice(0, 3).map(r => ({ r, tag: `${Math.round((r.chance || 0) * 100)}%` }))]).slice(0, 4); }
+  const pill = (name, sub, onClick, cls = '') => h('button', { class: `tm-pill ${cls}`, onClick }, name, sub ? h('small', {}, sub) : null);
+  const line = (label, kids) => kids.length ? h('div', { class: 'tm-line' }, h('span', { class: 'tm-lab' }, label), h('div', { class: 'tm-pills' }, kids)) : null;
+  const hm = (d) => `${String(d.getHours()).padStart(2, '0')}`;
+  const rows = [line('Doctors', docs.slice(0, 6).map(x => pill(first(x.e.person), x.e.shift.site === site && x.e.shift.type === info.mine.shift.type ? '' : `${hm(x.w.start)}–${hm(x.w.end)}`, () => personSheet(x.e.person), x.e.shift.site === site ? 'same' : ''))),
+    line('Nurses', nurses.map(x => pill(first(x.r.person), x.tag, () => { show('rota'); rt.workSeg = 'nurses'; render(); }, x.tag ? 'maybe' : 'same'))),
+    line('Specialist', spec.slice(0, 2).map(e => pill(first(e.person), e.shift.type, () => personSheet(e.person))))].filter(Boolean);
+  return rows.length ? h('div', { class: 'tm' }, rows) : null;
+}
+
 function weekStrip(from) {
   const s = S();
   const strip = h('div', { class: 'week', style: { marginTop: '14px' } });
@@ -757,9 +792,14 @@ function weekStrip(from) {
     const cls = !sh || sh.kind === 'off' ? 'off' : sh.kind === 'leave' ? 'leave' : (/^[DNE]$/.test(sh.type) ? sh.type : 'other');
     strip.append(h('div', { class: `wd ${i === 0 ? 'today' : ''}`, onClick: () => { rt.rotaSel = d; daySheet(d); } },
       h('div', { class: 'd' }, DAY_SHORT[d.getDay()]), h('div', { class: 'n' }, d.getDate()),
-      h('span', { class: `code ${cls}`, style: cls === 'off' ? { color: 'var(--dim)' } : {} }, !info.mine || sh.kind === 'off' ? '·' : sh.kind === 'leave' ? 'L' : info.mine.code)));
+      h('span', { class: `code ${cls}`, style: cls === 'off' ? { color: 'var(--dim)' } : {} }, !info.mine || sh.kind === 'off' ? '·' : sh.kind === 'leave' ? 'L' : info.mine.code),
+      sh?.kind === 'work' && sh.hours ? h('small', { class: 'wh' }, `${Math.round(sh.hours.durationMin / 60)}h`) : null));
   }
-  return strip;
+  // this Sunday–Saturday week against the weekly limit
+  const ws = addDays(startOfDay(from), -startOfDay(from).getDay()), we = addDays(ws, 7), cap = L.settings(s).weeklyH || 48; let mins = 0;
+  for (const w of L.windows(s, ws, we)) mins += Math.max(0, Math.min(w.end, we) - Math.max(w.start, ws)) / 60000;
+  if (!mins) return strip; const hrs = Math.round(mins / 6) / 10, pct = Math.min(100, hrs / cap * 100), over = hrs - cap;
+  return h('div', {}, strip, h('div', { class: 'wk-hours' }, h('div', { class: 'wk-bar' }, h('i', { class: over > 0 ? 'over' : '', style: { width: `${pct}%` } })), h('span', { class: 'small' }, h('b', {}, `${hrs}h`), ` this week · ${over > 0 ? `${Math.round(over * 10) / 10}h over ${cap}h` : `${Math.round(-over * 10) / 10}h left of ${cap}h`}`)));
 }
 
 // a plain-language brief you can copy or share (also what a morning notification would say)
@@ -1418,7 +1458,7 @@ function renderMore() {
   out.push(diagnosticsCard());
   // Appearance + backup
   out.push(h('div', { class: 'card' }, h('div', { class: 'title' }, 'App'),
-    toggleRow('Light theme', s.settings.theme === 'light', (on) => { store.update(x => ({ ...x, settings: { ...x.settings, theme: on ? 'light' : 'dark' } }), { silent: true }); applyTheme(); }),
+    uiPicker(),
     h('div', { class: 'row wrap', style: { marginTop: '10px' } },
       h('button', { class: 'btn', onClick: () => { const blob = new Blob([store.exportJSON()], { type: 'application/json' }); const a = h('a', { href: URL.createObjectURL(blob), download: `citrus-maxima-backup-${keyOf(new Date())}.json` }); a.click(); } }, '⬇ Backup'),
       (() => { const inp = h('input', { type: 'file', accept: '.json', style: { display: 'none' }, onChange: async (e) => { try { const j = JSON.parse(await e.target.files[0].text()); if (!j || typeof j !== 'object' || !j.rotas) throw new Error('bad'); store.replaceState(j, { bump: true }); regenerate(); toast('Restored', 'ok'); } catch (err) { toast('Bad backup file', 'err'); } } }); return h('span', {}, inp, h('button', { class: 'btn', onClick: () => inp.click() }, '⬆ Restore')); })(),
