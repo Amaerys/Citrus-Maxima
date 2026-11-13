@@ -18,6 +18,8 @@
 //  - duplicates (a create whose answer was lost) are healed: newest wins, the rest go to the trash
 //  - retries with jittered backoff for dropped connections (~25 s), rate limits and 5xx; offline fails fast
 
+import { salvageJSON } from './store.js';
+
 const SCOPES = 'https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const TOKEN_KEY = 'citrus.google';     // {access_token, exp, email}
 const IDS_KEY = 'citrus.drive.ids';    // path → folder id, file ids by "path/name"
@@ -432,7 +434,15 @@ export async function loadRemoteState(root) {
   if (!file) { seenState = null; return null; }
   for (const t of twins) trash(t.id).catch(() => {});
   ids[`file:${dir}/state.json`] = file.id; persistIds();
-  const data = await readJsonFile(file);
+  let data = await readJsonFile(file);
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    // unreadable (cut off, garbage): merge in whatever can still be read, and move the damaged file aside instead of overwriting it
+    let text = ''; try { text = decode(await downloadFile(file.id)); } catch {}
+    data = salvageJSON(text);
+    await gfetch(`${DRIVE}/files/${encodeURIComponent(file.id)}?fields=id`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: `state.damaged-${new Date().toISOString().replace(/[:.]/g, '-')}.json` }) }).catch(() => {});
+    delete ids[`file:${dir}/state.json`]; persistIds(); lastWritten.delete(`${dir}/state.json`); seenState = null; stats.healed++;
+    return data;
+  }
   seenState = { id: file.id, rev: file.appProperties?.rev || '', modifiedTime: file.modifiedTime };
   if (file.appProperties?.h) lastWritten.set(`${dir}/state.json`, file.appProperties.h); else lastWritten.delete(`${dir}/state.json`);
   return data;

@@ -52,7 +52,15 @@ async function waitSynced(page, ms = 15000) {
   const t0 = Date.now();
   await page.waitForFunction(() => JSON.parse(localStorage.getItem('citrus.state.v1') || '{}')?.google?.lastSync > 0, null, { timeout: ms }).catch(() => {});
   await page.waitForFunction(() => !document.querySelector('#syncDot.busy'), null, { timeout: ms }).catch(() => {});
+  await pickMe(page);
   return Date.now() - t0;
+}
+// "me" is never guessed any more (beta T10-01): the first import asks "Which one is you?" — answer it like a user would
+async function pickMe(page, who = 'Amro') {
+  await page.waitForSelector('.sheet .me-pick', { timeout: 1500 }).catch(() => {});
+  if (!(await page.locator('.sheet .me-pick').count())) return;
+  await page.fill('.sheet .me-pick input[type=search]', who); await sleep(100);
+  await page.locator('.sheet .me-row').first().click(); await sleep(250);
 }
 async function tab(page, v) { await page.click(`nav.tabs button[data-view=${v}]`); await sleep(150); }
 // every screenshot doubles as a check: no view may print JavaScript leftovers as text
@@ -72,7 +80,7 @@ console.log('\nS1 — first run, nothing set up, phone 390px');
   const { ctx, page } = await device(g, { at: T(4, 9), label: 'fresh' });
   await shot(page, 's1-today-empty');
   const hero = await text(page, '#view-today');
-  if (!/No rota/i.test(hero)) note('P2', 'empty state', 'Today does not explain that no rota is loaded'); else ok('empty', 'Today explains how to start');
+  if (!/No rota|Import your rota/i.test(hero)) note('P2', 'empty state', 'Today does not explain that no rota is loaded'); else ok('empty', 'Today explains how to start');
   for (const v of ['rota', 'plan', 'social', 'apps']) { await tab(page, v); await shot(page, `s1-${v}-empty`); await overflow(page, `empty ${v}`); }
   const plan = await text(page, '#view-plan');
   if (/USMLE|German/.test(plan) && !/rota/i.test(plan)) note('P3', 'plan', 'With no rota and no "me", Plan still suggests study blocks as if every day were free — no hint that shifts are missing');
@@ -135,7 +143,7 @@ console.log('\nS3 — planner: accept, move, skip, reload');
   (evs.length === before + 1 && created ? ok : (a, b) => note('P1', a, b))('accept', created ? `→ Google event "${created.summary}" ${created.start.dateTime.slice(11, 16)}Z` : 'no calendar event created');
   // move the accepted block
   await page.locator('#view-plan .tl-block:not(.suggested) button:has-text("Move")').first().dispatchEvent('click'); await sleep(200);
-  await page.locator('.sheet input[type=time]').first().fill('22:30'); await page.locator('.sheet input[type=time]').nth(1).fill('23:15');
+  await page.locator('.sheet input[name=start]').fill('22:30'); await page.locator('.sheet input[name=end]').fill('23:15');
   await page.locator('.sheet button:has-text("Save")').click(); await sleep(600);
   const moved = [...G.calendars.get('primary').events.values()].find(e => e.id === created?.id);
   (moved && new Date(moved.start.dateTime).getHours() === 22 ? ok : (a, b) => note('P1', a, b))('move', moved ? `calendar event moved to ${new Date(moved.start.dateTime).getHours()}:${String(new Date(moved.start.dateTime).getMinutes()).padStart(2, '0')}` : 'event not patched');
@@ -287,7 +295,7 @@ console.log('\nS8 — night 17/11, post-night 18/11, month rollover');
   else ok('month end', 'night from 30/11 is shown on 01/12');
   await shot(m.page, 's8-dec-first');
   await tab(m.page, 'rota'); const rt = await text(m.page, '#view-rota');
-  (/No rota loaded for December/.test(rt) ? ok : (a, b) => note('P3', a, b))('month end', 'Rota explains December is missing');
+  (/No rota (loaded )?for December/.test(rt) ? ok : (a, b) => note('P3', a, b))('month end', 'Rota explains December is missing');
   errorsOf(m.page, 'S8'); await m.ctx.close();
 }
 
@@ -332,7 +340,7 @@ console.log('\nS10 — corrupt storage, bad files, speed');
   const toastTxt = await c.page.evaluate(() => document.querySelector('#toasts')?.innerText || '');
   (/fake\.xlsx/.test(toastTxt) ? ok : (a, b) => note('P2', a, b))('bad file', `rejected with: "${toastTxt.split('\n')[0]}"`);
   c.page.errors.length = 0;
-  await c.page.setInputFiles('#view-today input[type=file]', ROTAS.map(r => r.path)); await sleep(600);
+  await c.page.setInputFiles('#view-today input[type=file]', ROTAS.map(r => r.path)); await sleep(600); await pickMe(c.page);
   const perf = await c.page.evaluate(async () => { const t0 = performance.now(); for (let i = 0; i < 10; i++) { document.querySelector('nav.tabs button[data-view=today]').click(); } const t1 = performance.now(); document.querySelector('nav.tabs button[data-view=plan]').click(); const t2 = performance.now(); document.querySelector('nav.tabs button[data-view=rota]').click(); const t3 = performance.now(); return { today: (t1 - t0) / 10, plan: t2 - t1, rota: t3 - t2 }; });
   const slow = Object.entries(perf).filter(([, v]) => v > 120);
   (slow.length ? (a, b) => note('P3', a, b) : ok)('speed', `render Today ${perf.today.toFixed(0)} ms, Plan ${perf.plan.toFixed(0)} ms, Rota ${perf.rota.toFixed(0)} ms`);
@@ -345,7 +353,7 @@ console.log('\nS11 — rota imported on the phone is saved to Drive for other de
   const g = createFakeGoogle();
   const d = await device(g, { at: T(4, 9), signedIn: true, label: 'upload' });
   await waitSynced(d.page);
-  await d.page.setInputFiles('#view-today input[type=file]', ROTAS.map(r => r.path)); await sleep(2500);
+  await d.page.setInputFiles('#view-today input[type=file]', ROTAS.map(r => r.path)); await sleep(2500); await pickMe(d.page);
   const names = g.tree().filter(l => l.includes('.xlsx')).map(l => l.trim());
   (names.some(n => n.includes('2026-11 GP rota.xlsx')) ? ok : (a, b) => note('P2', a, b))('rota upload', `Drive › My Apps › Rotas now has: ${names.join(', ')}`);
   await tab(d.page, 'rota'); await d.page.setInputFiles('#view-rota input[type=file]', ROTAS.map(r => r.path)); await sleep(2000);

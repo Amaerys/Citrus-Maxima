@@ -15,10 +15,10 @@ if (fs.existsSync(file)) {
     assert.ok(!nurse.people.some(p => /construction|qiddiyah project|free standing|upper\s+plat/i.test(p.name))); const c = nurse.people.find(p => /Cresilda/.test(p.name));
     assert.equal(c.id, '418467'); assert.equal(c.title, 'RN'); assert.equal(c.name, 'Cresilda Belleza'); assert.ok(c.leader); assert.equal(c.group, 'leaders'); assert.equal(c.mobile, '501215648'); assert.equal(c.clinic, 'QIC');
   });
-  await t('groups: leaders, first aiders, pool, FSED, Aqua Arabia, Upper Plateau, Nairiya', () => {
+  await t('groups: leaders, first aiders, pool, FSED, Aqua Arabia, Six Flags, Upper Plateau, Nairiya', () => {
     const g = (re) => nurse.people.find(p => re.test(p.name)).group;
-    assert.equal(g(/Mary Rose/), 'fa'); assert.equal(g(/Anika/), 'pool'); assert.equal(g(/Narita/), 'fsed'); assert.equal(g(/Sillina/), 'aqua'); assert.equal(g(/Ara Karla/), 'aqua'); assert.equal(g(/Kharmina/), 'plateau'); assert.equal(g(/Jesther/), 'nairiya'); assert.equal(g(/Odai/), 'head');
-    const n = {}; nurse.people.forEach(p => n[p.group] = (n[p.group] || 0) + 1); assert.deepEqual(n, { head: 1, leaders: 6, fa: 2, pool: 25, fsed: 6, aqua: 8, plateau: 1, nairiya: 1 });
+    assert.equal(g(/Mary Rose/), 'fa'); assert.equal(g(/Anika/), 'pool'); assert.equal(g(/Narita/), 'fsed'); assert.equal(g(/Sillina/), 'aqua'); assert.equal(g(/Ara Karla/), 'sixflags'); assert.equal(g(/Kharmina/), 'plateau'); assert.equal(g(/Jesther/), 'nairiya'); assert.equal(g(/Odai/), 'head');
+    const n = {}; nurse.people.forEach(p => n[p.group] = (n[p.group] || 0) + 1); assert.deepEqual(n, { head: 1, leaders: 6, fa: 2, pool: 25, fsed: 6, aqua: 4, sixflags: 4, plateau: 1, nairiya: 1 });
   });
   await t('legend: hours for every code, leave, training, rest days are off', () => {
     const L = nurse.legend; assert.deepEqual([L.D.hours.start, L.D.hours.end], [480, 1200]); assert.ok(L.N.hours.overnight); assert.deepEqual([L.M.hours.start, L.M.hours.end], [720, 1440]); assert.deepEqual([L.A.hours.start, L.A.hours.end], [480, 960]); assert.equal(L['A+'].hours.start, 600); assert.ok(L.A2.hours.overnight); assert.equal(L['B+'].hours.durationMin, 570);
@@ -53,7 +53,7 @@ if (nurse) {
     s = N.setPost(s, D(9), who.key, 'UPV'); s = N.setPost(s, D(8), who.key, 'UPV');
     assert.equal(N.rowsFor(s, D(10)).find(r => r.key === who.key).suggest, 'UPV');
     const w0 = N.workingWithMe(base(), D(11), dayInfo(base(), D(11)).mine); const w1 = N.workingWithMe(s, D(11), dayInfo(s, D(11)).mine);
-    s = N.applySuggestions(s, D(10)); assert.equal(N.postOf(s, D(10), who.key), 'UPV');
+    s = N.applySuggestions(s, D(10)); assert.equal(N.postOf(s, D(10), who.key), '', 'a guess is never a confirmed posting'); assert.equal(N.tipOf(s, D(10), who.key).site, 'UPV');
   });
   await t('tips: heard postings rank above guesses, never count as fact or history', () => {
   let s = base(); const mine = () => dayInfo(s, D(9)).mine, who = N.rowsFor(s, D(9)).find(r => r.group === 'pool' && r.shift.type === 'D');
@@ -63,17 +63,9 @@ if (nurse) {
   s = N.setPost(s, D(9), who.key, 'LPV', { tip: true, from: 'Cresilda' }); w = N.workingWithMe(s, D(9), mine()); assert.equal(w.tipped.length, 0); assert.equal(w.tippedElsewhere, 1); assert.ok(!w.possible.some(x => x.key === who.key));
   s = N.setPost(s, D(9), who.key, 'UPV'); w = N.workingWithMe(s, D(9), mine()); assert.equal(w.confirmed.length, 1); assert.equal(w.tipped.length, 0, 'confirming replaces the tip');
 });
-await t('tips: heard postings rank above guesses, never count as fact or history', () => {
-  let s = base(); const mine = () => dayInfo(s, D(9)).mine, who = N.rowsFor(s, D(9)).find(r => r.group === 'pool' && r.shift.type === 'D');
-  s = N.setPost(s, D(9), who.key, 'UPV', { tip: true, from: 'Cresilda' }); assert.equal(N.postOf(s, D(9), who.key), ''); assert.deepEqual(N.tipOf(s, D(9), who.key), { site: 'UPV', from: 'Cresilda' });
-  let w = N.workingWithMe(s, D(9), mine()); assert.equal(w.confirmed.length, 0); assert.equal(w.tipped.length, 1); assert.equal(w.tipped[0].heardFrom, 'Cresilda'); assert.ok(!w.possible.some(x => x.key === who.key));
-  assert.equal(N.history(s, who.key, D(20)).length, 0, 'a tip is not history'); assert.equal(N.staffing(s, D(9)).bySite.UPV, undefined, 'a tip is not on the board as posted');
-  s = N.setPost(s, D(9), who.key, 'LPV', { tip: true, from: 'Cresilda' }); w = N.workingWithMe(s, D(9), mine()); assert.equal(w.tipped.length, 0); assert.equal(w.tippedElsewhere, 1); assert.ok(!w.possible.some(x => x.key === who.key));
-  s = N.setPost(s, D(9), who.key, 'UPV'); w = N.workingWithMe(s, D(9), mine()); assert.equal(w.confirmed.length, 1); assert.equal(w.tipped.length, 0, 'confirming replaces the tip');
-});
-await t('leaders can go to any site; fixed groups carry their place; posts merge across devices', () => {
+await t('leaders go to UPV/LPV only (the sheet heading); fixed groups carry their place; posts merge across devices', () => {
     const s = base(), rows = N.rowsFor(s, D(1)); const lead = rows.find(r => r.group === 'leaders'), fsed = rows.find(r => r.group === 'fsed');
-    assert.deepEqual(lead.choices, ['UPV', 'LPV', 'UPO', 'LPO']); assert.equal(fsed.post, 'FSED'); assert.equal(N.setPost(s, D(1), fsed.key, 'UPV').posts[`2026-11-01:${fsed.key}`].site, 'UPV');
+    assert.deepEqual(lead.choices, ['UPV', 'LPV']); assert.equal(fsed.post, 'FSED'); assert.equal(N.setPost(s, D(1), fsed.key, 'UPV').posts[`2026-11-01:${fsed.key}`].site, 'UPV');
     const a = N.setPost(s, D(1), lead.key, 'UPV'), b = N.setPost(s, D(1), 'id:99', 'LPO'); const m = mergeStates(a, b); assert.equal(Object.keys(m.posts).length, 2);
   });
 }

@@ -6,7 +6,20 @@ export function initChanges(c) { ctx = c; }
 const S = () => ctx.S(), UNIT = { gp: 'GP rota', fsed: 'FSED', uv: 'Upper Village', lv: 'Lower Village', nurse: 'Nurses' };
 const fd = (k) => { const d = fromKey(k); return `${DAY_SHORT[d.getDay()]} ${d.getDate()}`; };
 const when = (t) => { const m = Math.round((Date.now() - t) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : new Date(t).toLocaleDateString(); };
-const chRow = (c) => h('div', { class: `rc-row ${c.ahead ? '' : 'past'}` }, h('b', {}, fd(c.date)), h('span', { class: 'rc-from' }, c.from), h('span', { class: 'rc-arr' }, '→'), h('span', { class: 'rc-to' }, c.to));
+const chRow = (c) => h('div', { class: `rc-row ${c.ahead ? '' : 'past'}` }, h('b', {}, fd(c.date)), h('span', { class: 'rc-ch' }, h('span', { class: 'rc-from' }, c.from), h('span', { class: 'rc-arr' }, ' → '), h('span', { class: 'rc-to' }, c.to)));
+
+const ppl = (n) => `${n} ${n === 1 ? 'person' : 'people'}`;
+/** One day in "Who works with you": same site and ≥2h shared, like the day sheet. Your own changed shift lists everyone you'll be with;
+ *  other days show who joined (+) or left (−). Briefs saved before the site rule have no names/site, so fall back to the newcomers. */
+function withRow(x) {
+  const site = x.site ? ` at ${x.site}` : '', names = x.names || x.joined, away = x.elsewhere ? h('span', { class: 'tiny dim' }, ` · ${x.elsewhere} at other sites`) : null;
+  if (x.mine) return h('div', { class: 'rc-row rc-wm mine' }, h('b', {}, fd(x.date)),
+    h('span', { class: 'grow' }, h('span', { class: 'rc-tag' }, 'new shift'), ' ', h('span', { class: 'small' }, x.count ? `with ${ppl(x.count)}${site}` : `on your own${site}`), away,
+      names.length ? h('div', { class: 'tiny rc-names' }, names.join(' · ')) : null));
+  return h('div', { class: 'rc-row rc-wm' }, h('b', {}, fd(x.date)), h('span', { class: 'grow' },
+    x.joined.length ? h('span', { class: 'rc-in' }, `+ ${x.joined.join(', ')}`) : null, x.joined.length && x.left.length ? '  ' : null, x.left.length ? h('span', { class: 'rc-out' }, `− ${x.left.join(', ')}`) : null,
+    x.count != null ? h('span', { class: 'tiny dim' }, x.count ? ` · now ${ppl(x.count)}${site}` : ` · now on your own${site}`) : null));
+}
 
 function block(d) {
   const ahead = d.mine.filter(c => c.ahead), past = d.mine.filter(c => !c.ahead);
@@ -14,7 +27,7 @@ function block(d) {
     h('div', { class: 'row' }, h('div', { class: 'grow' }, h('b', {}, `${UNIT[d.unitKind] || d.unitKind} · ${MONTHS[d.month - 1]} ${d.year}`), h('div', { class: 'tiny dim' }, `${when(d.at)}${d.source ? ` · ${d.source}` : ''}`)), !d.seen ? h('span', { class: 'chip sel' }, 'new') : null),
     h('div', { class: 'small', style: { margin: '6px 0' } }, RC.headline(d)),
     d.unitKind !== 'nurse' ? h('div', { class: 'rc-sec' }, h('div', { class: 'title' }, 'Your shifts'), ahead.length ? ahead.map(chRow) : h('div', { class: 'small muted' }, 'No change to your shifts ahead.'), past.length ? h('details', {}, h('summary', { class: 'tiny dim' }, `${past.length} past day${past.length > 1 ? 's' : ''} corrected`), past.map(chRow)) : null) : null,
-    d.withMe.length ? h('div', { class: 'rc-sec' }, h('div', { class: 'title' }, 'Who works with you'), d.withMe.map(x => x.mine ? h('details', { class: 'rc-row' }, h('summary', {}, h('b', {}, fd(x.date)), ` your new shift: with ${x.count} ${x.count === 1 ? 'person' : 'people'}`), h('div', { class: 'tiny rc-in' }, x.joined.join(', '))) : h('div', { class: 'rc-row' }, h('b', {}, fd(x.date)), h('span', { class: 'grow' }, x.joined.length ? h('span', { class: 'rc-in' }, `+ ${x.joined.join(', ')}`) : null, x.joined.length && x.left.length ? '  ' : null, x.left.length ? h('span', { class: 'rc-out' }, `− ${x.left.join(', ')}`) : null)))) : null,
+    d.withMe.length ? h('div', { class: 'rc-sec' }, h('div', { class: 'title' }, 'Who works with you'), d.withMe.map(withRow)) : null,
     d.friends.length ? h('div', { class: 'rc-sec' }, h('div', { class: 'title' }, 'Friends'), d.friends.map(f => { const a = f.changes.filter(c => c.ahead); return h('details', { open: a.length <= 3 ? '' : null }, h('summary', { class: 'small' }, h('b', {}, f.friend), ` · ${a.length} ahead${f.changes.length > a.length ? `, ${f.changes.length - a.length} past` : ''}`), (a.length ? a : f.changes).map(chRow)); })) : null,
     d.added.length || d.removed.length ? h('div', { class: 'rc-sec' }, h('div', { class: 'title' }, 'People'), d.added.length ? h('div', { class: 'small rc-in' }, `Added: ${d.added.join(', ')}`) : null, d.removed.length ? h('div', { class: 'small rc-out' }, `Removed: ${d.removed.join(', ')}`) : null) : null,
     d.others.length ? h('details', { class: 'rc-sec' }, h('summary', { class: 'title' }, `Everyone else (${d.others.length})`), d.others.map(p => h('details', {}, h('summary', { class: 'small' }, `${p.name} · ${p.changes.length}`), p.changes.map(chRow)))) : null);

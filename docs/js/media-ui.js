@@ -2,6 +2,12 @@
 import { h, toast, fromKey, fmtDate, keyOf } from './util.js';
 import * as L from './media.js';
 import { ring, bars } from './mind-viz.js';
+import { undoToast } from './mind-ui.js';
+/** Delete with a 5 s Undo (T07-28): put the record back as it was, newer than the tombstone, and drop the tombstone. */
+function delWithUndo(coll, prefix, id, label, del) {
+  const keep = ctx.S()[coll]?.[id]; up(st => del(st, id));
+  if (keep) undoToast(`${label} deleted`, () => up(st => { const d = { ...(st.deleted || {}) }; delete d[`${prefix}:${id}`]; return { ...st, [coll]: { ...(st[coll] || {}), [id]: { ...keep, at: Date.now() } }, deleted: d }; }));
+}
 
 let ctx = null;
 export function initMedia(c) { ctx = c; setTimeout(() => { try { if (!ctx.S().mediaMeta?.datefix1) ctx.update(st => { const r = L.repairDates(st); return L.setMeta(r.state, { datefix1: true }); }); } catch {} }, 800); }
@@ -126,23 +132,35 @@ function review() {
       ys.undated ? h('div', { class: 'dim small' }, `${ys.undated} finished item${ys.undated === 1 ? ' has' : 's have'} no date, so ${ys.undated === 1 ? 'it isn’t' : 'they aren’t'} counted in any year. Open one and set “Finished on” to place it.`) : null,
       ys.worst.length ? h('div', { class: 'card' }, h('div', { class: 'title' }, 'Not for you'), h('div', { class: 'mlist' }, ys.worst.map(mediaRow))) : null]];
 }
+/** First run (or an empty kind): one welcome card instead of zero-filled stats and filters. */
+function emptyShelf() {
+  const k = ui.kind ? L.kindOf(ui.kind) : null, any = L.mediaList(S()).length > 0;
+  const svc = !k ? IMPORTS : IMPORTS.filter(x => x.kinds.includes(k.id));
+  return h('div', { class: 'card lib-welcome' },
+    h('div', { class: 'lbw-head' }, h('span', { class: 'lbw-emoji' }, k ? k.emoji : '📚🎬🎮'), h('div', { class: 'grow' }, h('div', { class: 'title' }, k ? (any ? `No ${k.name.toLowerCase()} yet` : `Start your ${k.name.toLowerCase()} shelf`) : 'Your library starts here'),
+      h('div', { class: 'dim small' }, 'Log what you watch, read and play and rate it. Citrus learns your taste, ranks your backlog and writes your year in review.'))),
+    h('div', { class: 'row' }, h('button', { class: 'btn primary', onClick: () => addSheet(k ? { kind: k.id } : {}) }, k ? `+ Log ${k.name.toLowerCase().replace(/s$/, '')}` : '+ Log something')),
+    svc.length ? [h('div', { class: 'eyebrow lbw-or' }, 'or bring your history'), h('div', { class: 'lbw-svcs' }, svc.map(x => h('button', { class: 'lbw-svc', onClick: () => { ui.tab = 'connect'; ui.openImp = x.id; ctx.render(); } }, h('span', {}, x.emoji), h('b', {}, x.name), h('small', {}, x.what))))] : null);
+}
 function shelf() {
-  const s = S(), list = L.mediaList(s, ui.kind), st = L.libraryStats(s, new Date()), y = new Date().getFullYear();
+  const s = S(), list = L.mediaList(s, ui.kind); if (!list.length) return [emptyShelf()];
+  const kinds = ui.kind ? [ui.kind] : null, st = L.libraryStats(s, new Date(), kinds), y = new Date().getFullYear(), k1 = ui.kind ? L.kindOf(ui.kind) : null;
   const shown = L.filterShelf(list, ui.f), groups = ['doing', 'planned', 'paused', 'done', 'dropped'].map(g => [g, shown.filter(m => m.status === g)]).filter(([, l]) => l.length);
   const goal = (k) => st.goal[k] || 0;
   const goalKinds = (ui.kind ? [ui.kind] : ['book']).filter(k => goal(k) || k === 'book');
+  const facts = [st.avg != null ? `avg ★ ${st.avg.toFixed(1)}` : '', `${st.total} in ${k1 ? 'your ' + k1.name.toLowerCase() : 'library'}`, st.hours && (!ui.kind || ui.kind === 'game') ? `${st.hours}h played` : ''].filter(Boolean).join(' · ');
   return [
     ui.kind === 'book' || !ui.kind ? readingDash() : null,
-    h('div', { class: 'card space slim' }, h('div', { class: 'row' }, h('div', { class: 'grow' }, h('div', { class: 'eyebrow' }, `${y} so far`), h('div', { class: 'big' }, st.doneYear, h('small', {}, ' finished')), h('div', { class: 'dim tiny' }, st.avg != null ? `Average rating ${st.avg.toFixed(1)}/10 · ${st.total} in library${st.hours ? ` · ${st.hours}h played` : ''}` : `${st.total} in library`)),
-      goalKinds.map(k => { const g = goal(k), n = st.byKind[k].year; return h('button', { class: 'goal-ring', onClick: () => goalSheet(k), 'aria-label': `${L.kindOf(k).name} goal` }, ring(g ? n / g : null, { size: 64, stroke: 6, color: L.kindOf(k).color, label: g ? `${n}/${g}` : String(n), sub: L.kindOf(k).name.toLowerCase(), cls: 'breathing' })); })),
+    h('div', { class: 'card space slim lib-year' }, h('div', { class: 'row' }, h('div', { class: 'grow' }, h('div', { class: 'eyebrow' }, `${y} so far · ${k1 ? k1.name : 'all kinds'}`), h('div', { class: 'big' }, st.doneYear, h('small', {}, ' finished')), h('div', { class: 'dim tiny' }, facts)),
+      goalKinds.map(k => { const g = goal(k), n = st.byKind[k].year; return h('button', { class: 'goal-ring', onClick: () => goalSheet(k), 'aria-label': `${L.kindOf(k).name} goal` }, ring(g ? n / g : null, { size: 64, stroke: 6, color: L.kindOf(k).color, label: g ? `${n}/${g}` : String(n), sub: g ? L.kindOf(k).name.toLowerCase() : 'set goal', cls: 'breathing' })); })),
       st.doneYear ? bars(st.months.map((v, i) => ({ v: Math.min(1, v / Math.max(1, ...st.months)), label: 'JFMAMJJASOND'[i], now: i === new Date().getMonth(), title: `${v}` })), { h: 40, color: 'var(--cyan)' }) : null),
     ui.kind === 'book' ? booksInsights() : null,
     ui.kind === 'game' ? gamesCard() : null,
     insights(),
-    filterBar(list),
+    list.length >= 6 || ui.f.q || ui.f.genre || ui.f.min || ui.f.year ? filterBar(list) : null,
     h('div', { class: 'row' }, h('div', { class: 'title grow' }, 'Your shelf'), h('button', { class: 'btn sm primary', onClick: () => addSheet() }, '+ Log')),
     ...groups.map(([g, l]) => h('div', { class: 'card' }, h('div', { class: 'row' }, h('div', { class: 'title grow' }, g === 'doing' ? 'Now' : L.STATUS[g] === 'Plan to' ? 'Up next' : L.STATUS[g]), h('span', { class: 'dim tiny' }, l.length)), h('div', { class: 'mlist' }, l.slice(0, g === 'done' ? 30 : 60).map(mediaRow)))),
-    !groups.length ? h('div', { class: 'card empty' }, h('p', {}, 'Log what you watch, read and play, rate it, and Citrus learns your taste. Import from Goodreads, IMDb, AniList or Steam under Connect.'), h('div', { class: 'row center' }, h('button', { class: 'btn primary', onClick: () => addSheet() }, 'Log something'), h('button', { class: 'btn', onClick: () => { ui.tab = 'connect'; ctx.render(); } }, 'Connect'))) : null,
+    !groups.length ? h('div', { class: 'card empty' }, h('p', {}, 'Nothing matches these filters.'), h('button', { class: 'btn', onClick: () => { ui.f = { q: '', genre: '', min: 0, year: '', sort: ui.f.sort }; ctx.render(); } }, 'Clear filters')) : null,
   ];
 }
 
@@ -208,38 +226,69 @@ function suggRow(x) {
 }
 
 // ───────────────────────────────────────── Connect (imports)
+/** One row per service in the Import picker (and the shortcuts on the empty shelf). */
+const IMPORTS = [
+  { id: 'anilist', emoji: '🍥', name: 'AniList', what: 'Anime & manga · live sync', kinds: ['anime', 'manga'] },
+  { id: 'mal', emoji: '🗯', name: 'MyAnimeList', what: 'Anime & manga · export file', kinds: ['anime', 'manga'] },
+  { id: 'goodreads', emoji: '📚', name: 'Goodreads', what: 'Books & Kindle · export file', kinds: ['book'] },
+  { id: 'imdb', emoji: '🎬', name: 'IMDb', what: 'Films & shows · export file', kinds: ['movie', 'show'] },
+  { id: 'steam', emoji: '🎮', name: 'Steam', what: 'Games & hours · one paste', kinds: ['game'] },
+];
+const readFile = async (f) => { if (/\.gz$/i.test(f.name) || f.type === 'application/gzip') { if (!('DecompressionStream' in window)) throw new Error('This browser cannot open .gz files. Unzip it first and choose the .xml file.'); return new Response(f.stream().pipeThrough(new DecompressionStream('gzip'))).text(); } return f.text(); };
+/** "Choose export file" button with its own hidden input. Every file goes through the same reader, which recognises the service by its columns. */
+function fileButton(accept, label = 'Choose export file') {
+  const file = h('input', { type: 'file', accept, style: { display: 'none' }, onChange: async () => { const f = file.files[0]; if (!f) return; try { importText(await readFile(f), f.name); } catch (e) { toast(e.message, 'err'); } file.value = ''; } });
+  return [file, h('button', { class: 'btn primary', onClick: () => file.click() }, label)];
+}
+const steps = (...lines) => h('ol', { class: 'imp-steps' }, lines.map(l => h('li', {}, l)));
 function connect() {
-  const s = S(), meta = s.mediaMeta || {};
-  const aniIn = h('input', { type: 'text', value: meta.anilist || '', placeholder: 'AniList username', autocomplete: 'off', spellcheck: false });
-  const readFile = async (f) => { if (/\.gz$/i.test(f.name) || f.type === 'application/gzip') { if (!('DecompressionStream' in window)) throw new Error('This browser cannot open .gz files. Unzip it first and choose the .xml file.'); return new Response(f.stream().pipeThrough(new DecompressionStream('gzip'))).text(); } return f.text(); };
-  const file = h('input', { type: 'file', accept: '.csv,.xml,.gz,text/csv,text/xml,application/gzip', style: { display: 'none' }, onChange: async () => { const f = file.files[0]; if (!f) return; try { importText(await readFile(f), f.name); } catch (e) { toast(e.message, 'err'); } file.value = ''; } });
-  const key = h('input', { type: 'password', placeholder: 'Steam Web API key (stays in this box)', autocomplete: 'off' }), sid = h('input', { type: 'text', value: meta.steamId || '', placeholder: 'e.g. 76561198000000000 or gaben', autocomplete: 'off', spellcheck: false }), link = h('div', { class: 'tiny' }), paste = h('textarea', { rows: 3, placeholder: 'Paste the page’s text here…', spellcheck: false });
+  const s = S(), meta = s.mediaMeta || {}, srcN = (src) => L.mediaList(s).filter(m => m.src === src).length;
+  const when = (t) => t ? new Date(t).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '';
+  const aniIn = h('input', { type: 'text', value: meta.anilist || '', placeholder: 'AniList username', autocomplete: 'off', spellcheck: false, 'aria-label': 'AniList username' });
+  const key = h('input', { type: 'password', placeholder: 'Steam Web API key (stays in this box)', autocomplete: 'off', 'aria-label': 'Steam Web API key' }), sid = h('input', { type: 'text', value: meta.steamId || '', placeholder: 'e.g. 76561198000000000 or gaben', autocomplete: 'off', spellcheck: false, 'aria-label': 'Steam profile' }), link = h('div', { class: 'tiny' }), paste = h('textarea', { rows: 3, placeholder: 'Paste the page’s text here…', spellcheck: false, 'aria-label': 'Steam page text' });
   const link2 = h('div', { class: 'tiny' }), id17 = () => sid.value.trim();
   const paintLink = () => { link.replaceChildren(); link2.replaceChildren(); const v = id17();
-    if (v && /^[A-Za-z0-9_-]{2,40}$/.test(v)) link.append(h('a', { class: 'btn sm', href: L.steamListUrl(v), target: '_blank', rel: 'noopener noreferrer' }, '1 · Open my games list'), h('span', { class: 'dim' }, ' then select all, copy, and paste below'));
+    if (v && /^[A-Za-z0-9_-]{2,40}$/.test(v)) link.append(h('a', { class: 'btn sm', href: L.steamListUrl(v), target: '_blank', rel: 'noopener noreferrer' }, 'Open my games list'), h('span', { class: 'dim' }, ' then select all, copy, and paste below'));
     if (key.value && /^\d{17}$/.test(v)) link2.append(h('a', { class: 'btn sm', href: L.steamUrl(key.value.trim(), v), target: '_blank', rel: 'noopener noreferrer' }, 'Open Steam data (API)')); };
   const doSteam = (text) => { const r = L.parseSteam(text); if (r.error) return toast(r.error, 'err'); let res; up(s => { const x = L.upsertMany(s, r.items); res = x; return L.setMeta(x.state, { steamId: id17(), steamAt: Date.now() }); }); ui.importMsg = `Steam: ${res.added} added, ${res.updated} updated, ${res.skipped} unchanged`; toast(ui.importMsg, 'ok'); paste.value = ''; ctx.render(); };
   const steamFile = h('input', { type: 'file', accept: '.xml,.json,.txt,text/*,application/json', style: { display: 'none' }, onChange: async () => { const f = steamFile.files[0]; if (f) doSteam(await f.text()); steamFile.value = ''; } });
   key.addEventListener('input', paintLink); sid.addEventListener('input', paintLink); paintLink();
+  const syncAni = async () => {
+    const u = aniIn.value.trim(); if (!u) return toast('Enter your AniList username'); ui.busy = 'ani'; ctx.render(); toast('Fetching…');
+    try { const items = await L.fetchAniList(u); let r; up(s => { const x = L.upsertMany(s, items); r = x; return L.setMeta(x.state, { anilist: u, anilistAt: Date.now() }); }); ui.importMsg = `AniList: ${r.added} added, ${r.updated} updated, ${r.skipped} unchanged`; toast(ui.importMsg, 'ok'); }
+    catch (e) { toast(e.message, 'err'); } ui.busy = ''; ctx.render();
+  };
+  aniIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); syncAni(); } });
+  const body = {
+    anilist: [steps('Type your AniList username (the profile must be public).', 'Sync. Run it again any time: it adds new entries and fills gaps, never your own ratings.'),
+      h('div', { class: 'imp-ctl' }, aniIn, h('button', { class: 'btn primary', disabled: !!ui.busy, onClick: syncAni }, ui.busy === 'ani' ? 'Syncing…' : meta.anilist ? 'Sync now' : 'Connect'))],
+    mal: [steps('On MyAnimeList: Profile → Export My List. You get one .xml.gz for anime and one for manga.', 'Choose each file here as it is, no need to unzip.'),
+      h('div', { class: 'dim tiny' }, 'Also on AniList? Both are matched through the MyAnimeList id, so nothing counts twice.'),
+      h('div', { class: 'imp-ctl' }, ...fileButton('.xml,.gz,text/xml,application/gzip'))],
+    goodreads: [steps('On Goodreads: My Books → Import and export → Export library.', 'Choose the .csv here. Kindle books you track on Goodreads come through too.'),
+      h('div', { class: 'imp-ctl' }, ...fileButton('.csv,text/csv'))],
+    imdb: [steps('On IMDb: your Ratings or Watchlist page → ⋯ → Export.', 'Say what the file is, then choose the .csv.'),
+      field('This IMDb file is my…', h('select', { 'aria-label': 'IMDb list type', onChange: (e) => { ui.importMode = e.target.value; } }, MODES.map(([v, l]) => h('option', { value: v, ...((ui.importMode || 'auto') === v ? { selected: true } : {}) }, l)))),
+      h('label', { class: 'check small' }, h('input', { type: 'checkbox', checked: !ui.noImdbDates, onChange: (e) => { ui.noImdbDates = !e.target.checked; } }), ' Use “Date Rated” as the day I watched it'),
+      h('label', { class: 'check small' }, h('input', { type: 'checkbox', checked: !ui.noSync, onChange: (e) => { ui.noSync = !e.target.checked; } }), ' Re-importing corrects status, date and rating of items from the same file'),
+      h('div', { class: 'imp-ctl' }, ...fileButton('.csv,text/csv'), h('button', { class: 'btn', disabled: !!ui.enBusy, onClick: () => addEnglishTitles(false), title: 'Films are saved under their original title; this adds the English one in brackets when it differs' }, ui.enBusy ? 'Looking up…' : `English titles${L.needsEnglish(s).length ? ` (${L.needsEnglish(s).length})` : ''}`))],
+    steam: [steps('In Steam › Profile › Privacy, set Game details to Public.', 'Enter your profile, open the games list, select all, copy, and paste it below.'),
+      field('Steam profile (SteamID64 or custom URL name)', sid), link,
+      h('details', { class: 'tiny' }, h('summary', {}, 'No luck? Use a free API key instead'), h('div', { class: 'dim small' }, 'Make a key at steamcommunity.com/dev/apikey. It is only used to build the link and is never saved.'), field('', key), link2),
+      field('', paste), h('div', { class: 'imp-ctl' }, steamFile, h('button', { class: 'btn primary', onClick: () => doSteam(paste.value) }, 'Import games'), h('button', { class: 'btn', onClick: () => steamFile.click() }, 'Choose saved file')),
+      h('div', { class: 'dim tiny' }, 'Played games become Played, under an hour Dropped, opened in the last two weeks Playing, unopened go to your Backlog. Re-importing refreshes hours, never your ratings.')],
+  };
+  const status = { anilist: meta.anilistAt ? `synced ${when(meta.anilistAt)}` : '', steam: meta.steamAt ? `imported ${when(meta.steamAt)}` : '' };
+  const row = (x) => { const n = srcN(x.id), st = status[x.id] || (n ? `${n} item${n === 1 ? '' : 's'}` : '');
+    return h('details', { class: 'imp-row', open: ui.openImp === x.id, dataset: { imp: x.id }, onToggle: (e) => { if (e.target.open) ui.openImp = x.id; else if (ui.openImp === x.id) ui.openImp = ''; } },
+      h('summary', {}, h('span', { class: 'imp-ic' }, x.emoji), h('span', { class: 'grow' }, h('b', {}, x.name), h('small', {}, x.what)), st ? h('span', { class: 'imp-st' }, st) : null),
+      h('div', { class: 'imp-body' }, ...body[x.id])); };
   return [
     importPreview(),
-    h('div', { class: 'card' }, h('div', { class: 'title' }, '🍥 AniList'), h('div', { class: 'dim small' }, 'Live: your anime and manga lists, scores and progress. Public profiles only. Safe to run again — it never overwrites your own ratings.'),
-      field('', aniIn), h('div', { class: 'row' }, h('button', { class: 'btn primary', disabled: !!ui.busy, onClick: async () => {
-        const u = aniIn.value.trim(); if (!u) return toast('Enter your AniList username'); ui.busy = 'ani'; toast('Fetching…');
-        try { const items = await L.fetchAniList(u); let r; up(s => { const x = L.upsertMany(s, items); r = x; return L.setMeta(x.state, { anilist: u, anilistAt: Date.now() }); }); ui.importMsg = `AniList: ${r.added} added, ${r.updated} updated, ${r.skipped} unchanged`; toast(ui.importMsg, 'ok'); }
-        catch (e) { toast(e.message, 'err'); } ui.busy = ''; ctx.render();
-      } }, meta.anilist ? 'Sync now' : 'Connect'), meta.anilistAt ? h('span', { class: 'dim tiny' }, `last ${new Date(meta.anilistAt).toLocaleDateString('en-GB')}`) : null)),
-    h('div', { class: 'card' }, h('div', { class: 'title' }, '📚🎬 Goodreads · IMDb · MyAnimeList files'), h('div', { class: 'dim small' }, 'Neither offers a connection for apps, so Citrus reads their export files. MyAnimeList too: Profile → Export My List gives a .xml.gz for anime and another for manga; choose each file here as it is. Goodreads: My Books → Import and export → Export library. IMDb: your Ratings or Watchlist page → ⋯ → Export. Re-import any time; duplicates are merged. Kindle books you track on Goodreads come through this way.'),
-      field('This IMDb file is my…', h('select', { 'aria-label': 'IMDb list type', onChange: (e) => { ui.importMode = e.target.value; } }, MODES.map(([v, l]) => h('option', { value: v, ...((ui.importMode || 'auto') === v ? { selected: true } : {}) }, l)))),
-      h('label', { class: 'check small' }, h('input', { type: 'checkbox', checked: !ui.noImdbDates, onChange: (e) => { ui.noImdbDates = !e.target.checked; } }), ' Use IMDb’s “Date Rated” as the date I watched it (it is when you rated, which can be later than when you watched; untick to leave films undated)'),
-      h('label', { class: 'check small' }, h('input', { type: 'checkbox', checked: !ui.noSync, onChange: (e) => { ui.noSync = !e.target.checked; } }), ' Re-importing a file corrects status, date and rating of items that came from the same service'),
-      h('div', { class: 'row' }, file, h('button', { class: 'btn primary', onClick: () => file.click() }, 'Choose CSV file'), h('button', { class: 'btn', disabled: !!ui.enBusy, onClick: () => addEnglishTitles(false), title: 'Films are saved under their original title; this adds the English one in brackets when it differs' }, ui.enBusy ? 'Looking up…' : `English titles${L.needsEnglish(S()).length ? ` (${L.needsEnglish(S()).length})` : ''}`)), ui.importMsg ? h('div', { class: 'ok small', style: { marginTop: '8px' } }, ui.importMsg) : null),
-    h('div', { class: 'card' }, h('div', { class: 'title' }, '🎮 Steam library'), h('div', { class: 'dim small' }, 'Steam blocks direct calls from a web page, so it takes one copy-paste. Set Game details to Public in Steam › Profile › Privacy first. Hours played, last-played dates and covers come through; played games become Played, under an hour becomes Dropped, anything opened in the last two weeks is Playing, and unopened games go to your Backlog. Your own ratings and statuses are never overwritten, and re-importing refreshes hours.'),
-      field('Steam profile (SteamID64 or custom URL name)', sid), h('div', { class: 'tiny' }, link),
-      h('details', { class: 'tiny' }, h('summary', {}, 'No luck? Use a free API key instead'), h('div', { class: 'dim small' }, 'Make a key at steamcommunity.com/dev/apikey. It is only used to build the link and is never saved.'), field('', key), link2),
-      field('Paste the page text, or choose the saved file', paste), h('div', { class: 'row' }, steamFile, h('button', { class: 'btn', onClick: () => steamFile.click() }, 'Choose file'), h('button', { class: 'btn primary', onClick: () => doSteam(paste.value) }, 'Import games')),
-      meta.steamAt ? h('div', { class: 'dim tiny' }, `Last import ${new Date(meta.steamAt).toLocaleDateString('en-GB')}`) : null),
-    h('div', { class: 'card' }, h('div', { class: 'title' }, 'Anything else'), h('div', { class: 'dim small' }, 'Log by hand with search: books from Open Library, anime from AniList; shows, movies and games by title. Everything syncs through Drive with the rest of Citrus.'), h('div', { class: 'row' }, h('button', { class: 'btn', onClick: () => addSheet() }, '+ Log something'))),
+    h('div', { class: 'card imp' }, h('div', { class: 'title' }, 'Import'), h('div', { class: 'dim small' }, 'Pick a service. Re-import any time: duplicates are merged and your own ratings stay.'),
+      ui.importMsg ? h('div', { class: 'ok small imp-msg' }, ui.importMsg) : null,
+      h('div', { class: 'imp-list' }, IMPORTS.map(row)),
+      h('div', { class: 'imp-hand' }, h('span', { class: 'grow dim small' }, 'Or log by hand: books search Open Library, anime AniList.'), h('button', { class: 'btn sm', onClick: () => addSheet() }, '+ Log something'))),
   ];
 }
 /** Looks up English titles on Wikidata for films imported under their original title, then writes "Original (English)". */
@@ -262,7 +311,7 @@ function importPreview() {
   const word = (k) => ({ done: imdb ? 'Watched' : gr ? 'Read' : 'Completed', doing: gr ? 'Currently reading' : mal ? 'Watching / reading' : 'In progress', planned: gr ? 'Want to read' : imdb ? 'Watchlist' : 'Plan to', dropped: gr ? 'Did not finish' : 'Dropped', paused: 'Paused' }[k]);
   const rows = ['done', 'doing', 'planned', 'dropped', 'paused'].filter(k => sm[k]).map(k => h('div', { class: 'row' }, h('div', { class: 'grow' }, word(k)), h('b', {}, String(sm[k]))));
   const fmt = (k) => k ? fmtDate(fromKey(k)) : '';
-  return h('div', { class: 'card preview' }, h('div', { class: 'title' }, `${r.source} file: ${sm.n} items`), h('div', { class: 'dim tiny' }, p.name),
+  return h('div', { class: 'card preview' }, h('div', { class: 'title' }, `${r.source} file: ${sm.n} item${sm.n === 1 ? '' : 's'}`), h('div', { class: 'dim tiny' }, p.name),
     ...rows, sm.done ? h('div', { class: 'dim small' }, sm.from ? `Finished dates run ${fmt(sm.from)} to ${fmt(sm.to)}.` : 'None of the finished items have a date.', sm.undated ? ` ${sm.undated} have no date and will stay undated.` : '', ` ${sm.rated} rated.`) : null,
     imdb ? h('div', { class: 'dim small' }, `Read as: ${MODES.find(m => m[0] === p.mode)[1]}.`) : null,
     h('div', { class: 'dim tiny' }, r.items.slice(0, 4).map(i => i.title).join(' · '), sm.n > 4 ? ` … +${sm.n - 4} more` : ''),
@@ -301,7 +350,7 @@ function mediaSheet(id, preset = {}) {
   const statBox = h('div', {}), paintStat = () => { statBox.replaceChildren(pick(Object.keys(L.STATUS).map(x => [x, L.statusWord(f.kind, x)]), f.status, v => { f.status = v; })); }; paintDyn(); paintStat();
   sh.box.append(h('h3', {}, cur ? 'Details' : 'Log it'), kindBox, field('', title), field('', creator), statBox, dyn, fmtBox, field('Your rating', rate, rateLabel), field('Finished on', fin), field('Notes', review), quotesBox,
     cur?.src && cur.src !== 'manual' ? h('div', { class: 'dim tiny' }, `From ${cur.src}`) : null,
-    h('div', { class: 'row end' }, cur ? confirmBtn('Delete', () => { up(st => L.deleteMedia(st, id)); sh.close(); }) : null, h('span', { class: 'grow' }), h('button', { class: 'btn', onClick: () => sh.close() }, 'Cancel'), h('button', { class: 'btn primary', onClick: () => {
+    h('div', { class: 'row end' }, cur ? confirmBtn('Delete', () => { delWithUndo('media', 'media', id, 'Item', L.deleteMedia); sh.close(); }) : null, h('span', { class: 'grow' }), h('button', { class: 'btn', onClick: () => sh.close() }, 'Cancel'), h('button', { class: 'btn primary', onClick: () => {
       if (!title.value.trim()) return toast('Add a title');
       const v = { kind: f.kind, title: title.value.trim(), creator: creator.value.trim(), status: f.status, rating: f.rating, progress: +prog.value || 0, total: +total.value || 0, minutes: f.kind === 'game' ? (+hrs.value || 0) * 60 : f.minutes, finishedAt: fin.value, review: review.value.trim(), ...(f.format != null ? { format: f.format } : {}) };
       up(st => cur ? L.updateMedia(st, id, v) : L.addMedia(st, { ...preset, ...v })); sh.close(); toast(v.status === 'done' && v.rating ? 'Logged' : 'Saved');
@@ -314,10 +363,16 @@ export function logReadingSheet(id) {
   const quote = h('textarea', { rows: 2, placeholder: 'A line worth keeping (optional)' }), eta = L.finishEta(s, b), timer = { t: 0, id: 0 }, tl = h('span', { class: 'dim tiny' }, ''), tbtn = h('button', { type: 'button', class: 'btn sm' }, '▶ Timer');
   const paintT = () => { const m = Math.floor(timer.t / 60); tl.textContent = `${m}:${String(timer.t % 60).padStart(2, '0')}`; mins.value = Math.max(1, Math.round(timer.t / 60)); };
   tbtn.addEventListener('click', () => { if (timer.id) { clearInterval(timer.id); timer.id = 0; tbtn.textContent = '▶ Timer'; return; } tbtn.textContent = '⏸ Stop'; timer.id = setInterval(() => { timer.t++; paintT(); }, 1000); });
-  const close = sh.close; sh.close = () => { clearInterval(timer.id); close(); };
-  const chips = h('div', { class: 'seg mini' }, [5, 10, 20, 30, 50].map(n => h('button', { type: 'button', onClick: () => { pages.value = n; now.value = ''; } }, `+${n}`)));
+  // The sheet can close by Cancel, Log, a backdrop tap or Escape; only watching the DOM catches all of them, so the timer never outlives it.
+  const mo = new MutationObserver(() => { if (!sh.box.isConnected) { clearInterval(timer.id); timer.id = 0; mo.disconnect(); } }); mo.observe(document.body, { childList: true, subtree: true });
+  // "Pages read" and "page you are on" are two ways to say the same thing: typing in one clears the other, and a line says what will be logged.
+  const before = b.progress || 0, hint = h('div', { class: 'log-hint tiny' }), paintHint = () => {
+    const pn = now.value === '' ? null : Math.round(+now.value), n = pn != null ? Math.max(0, pn - before) : Math.max(0, Math.round(+pages.value || 0)), to = b.total ? Math.min(b.total, before + n) : before + n;
+    hint.textContent = pn != null && pn <= before ? `You were already on page ${before}. Nothing new to log.` : n ? `Logs ${n} page${n === 1 ? '' : 's'}: p. ${before} → ${to}${b.total && to >= b.total ? ' · finished 🎉' : ''}` : ''; };
+  pages.addEventListener('input', () => { if (pages.value !== '') now.value = ''; paintHint(); }); now.addEventListener('input', () => { if (now.value !== '') pages.value = ''; paintHint(); });
+  const chips = h('div', { class: 'seg mini' }, [5, 10, 20, 30, 50].map(n => h('button', { type: 'button', onClick: () => { pages.value = n; now.value = ''; paintHint(); } }, `+${n}`)));
   sh.box.append(h('h3', {}, b.title), h('div', { class: 'dim tiny' }, [b.creator, b.total ? `page ${b.progress || 0} of ${b.total}` : '', eta ? `finish ~${fmtDate(fromKey(eta.date))} at ${eta.pace}/day` : ''].filter(Boolean).join(' · ')),
-    h('div', { class: 'grid2' }, field('Pages read today', pages, chips), field('…or the page you are on', now)), h('div', { class: 'row' }, h('div', { class: 'grow' }, field('Time', mins)), h('div', { class: 'col' }, tbtn, tl)), field('Highlight', quote),
+    h('div', { class: 'grid2' }, field('Pages read today', pages, chips), field('…or the page you are on', now)), hint, h('div', { class: 'row' }, h('div', { class: 'grow' }, field('Time', mins)), h('div', { class: 'col' }, tbtn, tl)), field('Highlight', quote),
     (b.log || []).length ? h('div', { class: 'dim tiny' }, 'Recent: ', (b.log || []).slice(-5).reverse().map(x => `${fmtDate(fromKey(x.d)).slice(0, 5)} +${x.p}p`).join(' · ')) : null,
     h('div', { class: 'row end' }, h('button', { class: 'btn', onClick: () => { sh.close(); mediaSheet(id); } }, 'Details'), h('span', { class: 'grow' }), h('button', { class: 'btn', onClick: () => sh.close() }, 'Cancel'), h('button', { class: 'btn primary', onClick: () => {
       let r; up(st => { r = L.logReading(st, id, { pages: +pages.value, pageNow: now.value === '' ? null : +now.value, minutes: +mins.value }); return quote.value.trim() ? L.addQuote(r.state, id, { text: quote.value, page: +now.value || (b.progress || 0) + (+pages.value || 0) }) : r.state; });
@@ -354,7 +409,7 @@ export function memoSheet(id, preset = {}) {
   let pinned = !!f.pinned;
   sh.box.append(h('h3', {}, cur ? 'Note' : 'New note'), field('', title), field('', body), field('Tags', tags),
     h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: pinned, onChange: (e) => { pinned = e.target.checked; } }), 'Pin to the top'),
-    h('div', { class: 'row end' }, cur ? [confirmBtn('Delete', () => { up(st => L.deleteMemo(st, id)); sh.close(); }), h('button', { class: 'btn', onClick: () => { sh.close(); ctx.openTask?.({ title: (f.title || f.body.split('\n')[0]).slice(0, 100), notes: f.body.slice(0, 500) }); } }, '→ Task')] : null, h('span', { class: 'grow' }), h('button', { class: 'btn', onClick: () => sh.close() }, 'Close'),
+    h('div', { class: 'row end' }, cur ? [confirmBtn('Delete', () => { delWithUndo('memos', 'memo', id, 'Note', L.deleteMemo); sh.close(); }), h('button', { class: 'btn', onClick: () => { sh.close(); ctx.openTask?.({ title: (f.title || f.body.split('\n')[0]).slice(0, 100), notes: f.body.slice(0, 500) }); } }, '→ Task')] : null, h('span', { class: 'grow' }), h('button', { class: 'btn', onClick: () => sh.close() }, 'Close'),
       h('button', { class: 'btn primary', onClick: () => { if (!title.value.trim() && !body.value.trim()) { sh.close(); return; } const v = { title: title.value, body: body.value, tags: tags.value, pinned }; up(st => cur ? L.updateMemo(st, id, v) : L.addMemo(st, v)); sh.close(); } }, 'Save')));
   if (!cur) setTimeout(() => body.focus(), 60);
 }

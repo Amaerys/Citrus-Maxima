@@ -12,16 +12,35 @@ const fn = (p) => p.name.replace(/^Dr\.?\s*/i, '').split(' ')[0];
 const rec = (o) => Object.values(o || {});
 
 export const DAY_DEFAULTS = { sleepH: 8, prepMin: 90 };
+export const SLEEP_LIMITS = { sleepH: [4, 12], prepMin: [15, 240] };
 export const daySettings = (s) => ({ ...DAY_DEFAULTS, ...(s.settings?.day || {}) });
+/** A settings value the sheet can save, or null with the reason (no silent replacement, beta T01-10). */
+export function checkSetting(k, raw) {
+  const [lo, hi] = SLEEP_LIMITS[k], v = String(raw ?? '').trim() === '' ? NaN : +raw;
+  if (!Number.isFinite(v)) return { ok: false, msg: `Enter a number from ${lo} to ${hi}` };
+  if (v < lo || v > hi) return { ok: false, msg: `Must be ${lo}–${hi}` };
+  return { ok: true, value: k === 'sleepH' ? Math.round(v * 2) / 2 : Math.round(v) };
+}
+/** "Day · Upper Village, 08:00–20:00" — but never the hours twice when the rota label already has them (beta T01-25). */
+export const shiftLabel = (sh) => /\d\d?:\d\d/.test(sh.label) ? sh.label : `${sh.label}, ${hm(sh.hours.start)}–${hm(sh.hours.end)}`;
+/** Before this hour the night is still "tonight": a 02:00 check plans for today's shift, not tomorrow's (beta T01-06). */
+export const NIGHT_ENDS = 4;
+/** Am I on a shift right now (today's, or the tail of last night's)? Returns its end, or null. */
+export function onShiftNow(s, now = new Date()) {
+  const md = myDay(s, startOfDay(now)), live = (w) => w && now >= w.start && now < w.end;
+  if (live(md.today?.window)) return md.today.window.end; if (live(md.overnightTail?.window)) return md.overnightTail.window.end; return null;
+}
 
 /** What the day holds, in the order you would want to know it. */
 export function briefing(s, now = new Date()) {
   const out = [], day = startOfDay(now), md = myDay(s, day), info = md.info, mine = info.mine, key = keyOf(day);
-  if (md.today) { const w = md.today.shift; out.push({ icon: w.type === 'N' ? '🌙' : '🩺', text: `${w.label}, ${hm(w.hours.start)}–${hm(w.hours.end)} (${Math.round(w.hours.durationMin / 60 * 10) / 10}h)` }); }
+  if (md.today) { const w = md.today.shift; out.push({ icon: w.type === 'N' ? '🌙' : '🩺', text: `${shiftLabel(w)} (${Math.round(w.hours.durationMin / 60 * 10) / 10}h)${md.today.mci ? ' · MCI 2nd' : ''}` }); }
   else if (mine?.shift.kind === 'leave') out.push({ icon: '🌴', text: 'On leave today' }); else if (info.hasRota) out.push({ icon: '☕', text: md.afterNight ? 'Off after a night, rest first' : 'Day off' });
   if (md.afterNight) out.push({ icon: '🌙', text: `Your night ends at ${hm(md.overnightTail.window.end.getHours() * 60 + md.overnightTail.window.end.getMinutes())}` });
   if (info.withMe?.length) out.push({ icon: '👥', text: `With you: ${info.withMe.slice(0, 4).map(e => fn(e.person)).join(', ')}${info.withMe.length > 4 ? ` +${info.withMe.length - 4}` : ''}` });
-  if (md.today && N.nurseRotas(s).length) { const w = N.workingWithMe(s, day, mine); if (w?.hasNurses) { const names = (w.confirmed.length ? w.confirmed : [...(w.tipped || []), ...w.possible]).slice(0, 3).map(r => fn(r.person)); if (names.length) out.push({ icon: '🩺', text: `${w.confirmed.length ? 'Nurses posted with you' : 'Nurses likely with you'}: ${names.join(', ')}` }); } }
+  // During last night's tail (after midnight) the nurses with you are last night's, not tonight's (beta T04-07)
+  if (md.overnightTail && now < md.overnightTail.window.end && N.nurseRotas(s).length) { const y = addDays(day, -1), t = nurseLine(N.workingWithMe(s, y, dayInfo(s, y).mine)); if (t) out.push({ icon: '💉', text: `Now: ${t.text}` }); }
+  if (md.today && N.nurseRotas(s).length) { const t = nurseLine(N.workingWithMe(s, day, mine)); if (t) out.push({ icon: '💉', text: t.text }); if (t?.head) out.push({ icon: '🧭', text: t.head }); }
   const due = C.choreList(s).filter(c => C.dueDate(c, day) <= day).map(c => c.title); if (due.length) out.push({ icon: '🏠', text: `Due at home: ${due.slice(0, 3).join(', ')}` });
   const tasks = rec(s.tasks).filter(t => !t.done && t.due === key).map(t => t.title); if (tasks.length) out.push({ icon: '✅', text: `${tasks.length} task${tasks.length > 1 ? 's' : ''} due: ${tasks.slice(0, 2).join(', ')}` });
   const bd = [...F.birthdays(s, day, 0).map(b => b.friend.nick || b.friend.name), ...X.rotaBirthdays(s, day, 0).map(b => b.name)]; if (bd.length) out.push({ icon: '🎂', text: `Birthday today: ${bd.slice(0, 3).join(', ')}` });
@@ -32,15 +51,39 @@ export function briefing(s, now = new Date()) {
   return out;
 }
 
-/** Tonight: when to sleep for tomorrow's shift, using your sleep target and getting-ready time. */
+/** One honest nurse line from nurses.workingWithMe (D03): "likely" only with posting history behind it; otherwise its shared summary. */
+export function nurseLine(w) {
+  if (!w?.hasNurses) return null; const names = (a) => a.slice(0, 3).map(r => fn(r.person)).join(', ') + (a.length > 3 ? ` +${a.length - 3}` : '');
+  const heard = (w.tipped || []).filter(r => !r.guess), guessed = (w.tipped || []).filter(r => r.guess), likely = w.likely || [];
+  const text = w.confirmed.length ? `Nurses posted with you: ${names(w.confirmed)}`
+    : heard.length ? `Nurses heard to be with you: ${names(heard)}`
+    : likely.length ? `Nurses likely with you: ${names(likely)}`
+    : guessed.length ? `Nurses, guessed from last time: ${names(guessed)}`
+    : w.summary ? `Nurses: ${w.summary}` : '';
+  const head = w.head?.length ? `Head nurse on today: ${w.head.map(r => fn(r.person)).join(', ')}` : '';
+  return text || head ? { text: text || head, head: text ? head : '' } : null;
+}
+/** What Copy / Share sends: the date, then exactly the lines on the card (beta T01-14). */
+export function briefingText(lines, now = new Date()) {
+  const d = startOfDay(now), title = `${['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][d.getDay()]} ${d.getDate()} ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.getMonth()]}`;
+  return [title, ...lines.map(l => `${l.icon} ${l.text}`)].join('\n');
+}
+
+/** Tonight: when to sleep for the next shift, using your sleep target and getting-ready time.
+ *  "Next" is tomorrow in the evening, but today in the small hours (02:00 before an 08:00 start, beta T01-06).
+ *  Times are minutes of the shift's day; `bed` < 0 in the raw maths means the evening before. */
 export function windDown(s, now = new Date()) {
-  const cfg = daySettings(s), tmr = addDays(startOfDay(now), 1), md = myDay(s, tmr), sh = md.today?.shift;
-  if (!sh) return { work: false, label: md.info.mine?.shift.kind === 'leave' ? 'On leave tomorrow' : md.info.hasRota ? 'Day off tomorrow, no alarm needed' : '', notes: [] };
-  const start = sh.hours.start, wake = start - cfg.prepMin, night = sh.type === 'N' || start >= 17 * 60, bed = wake - cfg.sleepH * 60, tomorrowDue = C.choreList(s).filter(c => C.dueDate(c, tmr) <= tmr).map(c => c.title);
-  const nowMin = now.getHours() * 60 + now.getMinutes(), toBed = bed < 0 ? bed + 1440 - nowMin : bed + 1440 * 0 - nowMin;
-  const notes = []; if (night) notes.push('Night shift: sleep in the morning and keep the room dark; eat a proper meal before you start.'); else if (start <= 8 * 60) notes.push('Early start: get things ready tonight.');
-  if (tomorrowDue.length) notes.push(`Home: ${tomorrowDue.slice(0, 3).join(', ')} due tomorrow`);
-  return { work: true, label: `${sh.label}, ${hm(start)}–${hm(sh.hours.end)}`, night, wake, bed: ((bed % 1440) + 1440) % 1440, bedPrevDay: bed < 0, minutesToBed: Math.round(toBed), notes, sleepH: cfg.sleepH };
+  const cfg = daySettings(s), early = now.getHours() < NIGHT_ENDS, day = early ? startOfDay(now) : addDays(startOfDay(now), 1), md = myDay(s, day), sh = md.today?.shift;
+  const when = early ? 'today' : 'tomorrow', dayWord = early ? 'Today' : 'Tomorrow';
+  if (!sh) return { work: false, dayWord, label: md.info.mine?.shift.kind === 'leave' ? 'On leave, no alarm needed' : md.info.hasRota ? 'Day off, no alarm needed' : '', notes: [] };
+  const start = sh.hours.start, wake = start - cfg.prepMin, night = sh.type === 'N' || start >= 17 * 60, bed = wake - cfg.sleepH * 60, due = C.choreList(s).filter(c => C.dueDate(c, day) <= day).map(c => c.title);
+  // minutes from now until bedtime, counted on one clock: the evening before the shift's day is −1440…0 (beta T01-09)
+  const nowMin = now.getHours() * 60 + now.getMinutes() - (early ? 0 : 1440), toBed = bed - nowMin, toWake = wake - nowMin;
+  // past bedtime already (small hours, or a late evening before an early start): say how much sleep is still possible
+  const sleepNow = !night && toBed <= 0 && toWake > 0;
+  const notes = []; if (night) notes.push('Night shift: sleep in the morning and keep the room dark; eat a proper meal before you start.'); else if (start <= 8 * 60 && !sleepNow) notes.push('Early start: get things ready tonight.');
+  if (due.length) notes.push(`Home: ${due.slice(0, 3).join(', ')} due ${when}`);
+  return { work: true, dayWord, label: shiftLabel(sh), night, start, wake, bed: ((bed % 1440) + 1440) % 1440, bedPrevDay: bed < 0, minutesToBed: Math.round(toBed), sleepNow, sleepMin: sleepNow ? Math.round(toWake) : 0, notes, sleepH: cfg.sleepH };
 }
 
 // ───────── how the day felt
@@ -90,4 +133,11 @@ export function studyPlan(s, now = new Date(), { days = 7, busyOf = () => [], pl
     }
   }
   return plan;
+}
+/** The study planner's blocks for one day, shaped like planner blocks ({title,start,end,kind:'study'}), leaving out the ones the
+ *  planner already holds — so the Plan tab can show them on its day cards and there is one timeline (beta T06-22). */
+export function studyBlocksOn(s, date, opts = {}) {
+  const k = keyOf(date), from = startOfDay(new Date()) > startOfDay(date) ? startOfDay(date) : opts.now || new Date();
+  const days = Math.max(1, Math.round((startOfDay(date) - startOfDay(from)) / 864e5) + 1);
+  return studyPlan(s, from, { ...opts, days }).filter(p => p.date === k && !p.fromPlan).map(p => ({ id: `study:${k}:${p.subject}`, kind: 'study', title: `Study · ${p.name}`, subject: p.subject, app: p.app, start: p.start, end: p.end }));
 }

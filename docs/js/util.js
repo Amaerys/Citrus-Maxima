@@ -46,13 +46,17 @@ export function h(tag, attrs = {}, ...children) {
 // Only http(s) links from outside data (app status files) may become hrefs
 export function safeUrl(u) { if (u == null || String(u).trim() === '') return ''; try { const x = new URL(String(u || ''), location.href); return /^https?:$/.test(x.protocol) ? x.href : ''; } catch { return ''; } }
 
-export function toast(msg, kind = '') {
+/** A short message at the bottom. { action: { label, run } } adds one tappable button (Undo, Backup…) and keeps it up longer. */
+export function toast(msg, kind = '', { action = null, ms = action ? 6000 : 3200 } = {}) {
   let host = document.getElementById('toasts');
-  if (!host) { host = h('div', { id: 'toasts' }); document.body.append(host); }
-  const t = h('div', { class: `toast ${kind}` }, msg);
+  if (!host) { host = h('div', { id: 'toasts', role: 'status', 'aria-live': 'polite' }); document.body.append(host); }
+  const t = h('div', { class: `toast ${kind} ${action ? 'act' : ''}` }, h('span', { class: 't-msg' }, msg));
+  const drop = () => { t.classList.remove('show'); setTimeout(() => t.remove(), 300); };
+  if (action) t.append(h('button', { class: 't-btn', type: 'button', onClick: () => { drop(); action.run(); } }, action.label));
   host.append(t);
   setTimeout(() => t.classList.add('show'), 10);
-  setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 300); }, 3200);
+  setTimeout(drop, ms);
+  return t;
 }
 
 export function telLink(mobile) {

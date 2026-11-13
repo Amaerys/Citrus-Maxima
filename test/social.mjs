@@ -18,7 +18,7 @@ t('phone normaliser', () => {
 });
 t('handles: links, @names and junk', () => {
   assert.equal(S.cleanHandle('@faisal.k'), 'faisal.k'); assert.equal(S.cleanHandle('https://www.instagram.com/faisal.k/?hl=en'), 'faisal.k'); assert.equal(S.cleanHandle('https://www.snapchat.com/add/fsl_99'), 'fsl_99');
-  assert.equal(S.cleanHandle('<script>'), ''); assert.equal(S.cleanHandle('a b'), 'a'); assert.equal(S.cleanHandle(null), '');
+  assert.equal(S.cleanHandle('<script>'), ''); assert.equal(S.cleanHandle('a b'), 'b'); assert.equal(S.cleanHandle(null), '');
   const l = S.links({ phone: '0551234567', snap: '@fsl', insta: 'https://instagram.com/fsl' }); assert.equal(l.wa, 'https://wa.me/966551234567'); assert.equal(l.snap, 'https://www.snapchat.com/add/fsl'); assert.equal(l.insta, 'https://www.instagram.com/fsl/'); assert.equal(l.tel, 'tel:+966551234567');
   assert.equal(S.links({}).wa, ''); assert.equal(S.links({ whatsapp: '0509999999', phone: '0551234567' }).wa, 'https://wa.me/966509999999'); assert.match(S.waWith({ phone: '0551234567' }, 'a b&c'), /text=a%20b%26c$/); assert.equal(S.waWith({}, 'x'), '');
 });
@@ -47,7 +47,7 @@ t('free windows: off day is long, day shift leaves evening, night leaves afterno
 t('unknown days are not claimed free', () => { const s = withF(); assert.equal(S.dayState(s, s.friends.mm, D(2026, 12, 20)).free, 'unknown'); assert.deepEqual(S.freeWindows(s, s.friends.mm, D(2026, 12, 20)), []); assert.equal(S.dayState(s, s.friends.mm, D(2026, 11, 11)).free, 'all'); assert.equal(S.dayState(s, s.friends.mm, D(2026, 11, 9)).free, 'part'); });
 t('manual schedule (nurses) and weekly off', () => {
   let s = S.addFriend(base(), { name: 'Nurse Sara', id: 'ns', kind: 'nurse', weeklyOff: [5] }); s = S.setShift(s, 'ns', '2026-11-10', 'N'); s = S.setShift(s, 'ns', '2026-11-11', 'off'); s = S.setShift(s, 'ns', '2026-11-12', 'leave');
-  const f = s.friends.ns; assert.equal(S.dayState(s, f, D(2026, 11, 10)).status, 'work'); assert.equal(S.dayState(s, f, D(2026, 11, 11)).free, 'all'); assert.equal(S.dayState(s, f, D(2026, 11, 12)).free, 'all'); assert.equal(S.dayState(s, f, D(2026, 11, 13)).free, 'all'); // 13 Nov 2026 is a Friday
+  const f = s.friends.ns; assert.equal(S.dayState(s, f, D(2026, 11, 10)).status, 'work'); assert.equal(S.dayState(s, f, D(2026, 11, 11)).free, 'part', 'off after a night is never a whole day off'); assert.ok(S.dayState(s, f, D(2026, 11, 11)).afterNight); assert.equal(S.dayState(s, f, D(2026, 11, 12)).free, 'all'); assert.equal(S.dayState(s, f, D(2026, 11, 13)).free, 'all'); // 13 Nov 2026 is a Friday
   assert.equal(S.dayState(s, f, D(2026, 11, 14)).free, 'unknown'); s = S.setShift(s, 'ns', '2026-11-10', ''); assert.equal(S.dayState(s, s.friends.ns, D(2026, 11, 10)).free, 'unknown'); assert.equal(S.setShift(s, 'zz', '2026-11-10', 'D'), s);
   s = S.setShift(s, 'ns', '2026-11-20', 'N'); assert.ok(S.dayState(s, s.friends.ns, D(2026, 11, 21)).afterNight);
 });
@@ -57,10 +57,10 @@ t('my windows honour busy slots', () => {
   assert.equal(S.myWindows(s, D(2026, 11, 10), [[0, 1440]]).length, 0);
 });
 t('meetups: ranks the day both are off first, respects min length, empty when nobody known', () => {
-  const s = withF(), r = S.meetups(s, { from: D(2026, 11, 9), days: 5 }); assert.ok(r.length); assert.equal(r[0].who.length, 2); assert.ok(r[0].all); const wed = r.find(m => m.key === '2026-11-11'); assert.ok(wed && wed.dayLong && wed.all); assert.ok(r.findIndex(m => m.key === '2026-11-12') > r.findIndex(m => m.key === '2026-11-11'), 'a night-shift day with only one friend ranks lower');
-  assert.ok(r.every(m => m.window[1] - m.window[0] >= 120)); assert.equal(S.meetups(withF(), { from: D(2026, 12, 1), days: 5 }).length, 0);
-  const only = S.meetups(s, { ids: ['fa'], from: D(2026, 11, 9), days: 5 }); assert.ok(only.every(m => m.who.length === 1 && m.who[0] === 'fa'));
-  assert.deepEqual(S.meetups(base(), { days: 5 }), []);
+  const s = withF(), now = D(2026, 11, 9), r = S.meetups(s, { from: D(2026, 11, 9), days: 5, now }); assert.ok(r.length); assert.equal(r[0].who.length, 2); assert.ok(r[0].all); const wed = r.find(m => m.key === '2026-11-11'); assert.ok(wed && wed.dayLong && wed.all); assert.ok(r.findIndex(m => m.key === '2026-11-12') > r.findIndex(m => m.key === '2026-11-11'), 'a night-shift day with only one friend ranks lower');
+  assert.ok(r.every(m => m.window[1] - m.window[0] >= 120)); assert.equal(S.meetups(withF(), { from: D(2026, 12, 1), days: 5, now }).length, 0);
+  const only = S.meetups(s, { ids: ['fa'], from: D(2026, 11, 9), days: 5, now }); assert.ok(only.every(m => m.who.length === 1 && m.who[0] === 'fa'));
+  assert.deepEqual(S.meetups(base(), { days: 5, now }), []);
 });
 t('outings: log, lastSeen, overdue, stats, planned excluded, delete', () => {
   let s = withF({ every: 14 }); const now = D(2026, 11, 20);

@@ -14,7 +14,7 @@ await t('key dates: renewal-notice deadline is 90 days before the end; trial per
   const k = C.keyDates(cur, now), r = k.find(x => x.id === 'renew'); assert.equal(r.date, '2026-10-03'); assert.equal(k.find(x => x.id === 'trial').date, '2025-04-01'); assert.equal(k.find(x => x.id === 'end').days, 365);
   assert.equal(C.upcoming(cur, new Date(2026, 8, 20), 30).map(x => x.id).join(), 'renew');
 });
-await t('hourly value and overtime rate as the contract words it', () => { assert.equal(C.overtimeRate(cur), 37.5, '6000/240×1.5'); const w = 52 - 25 / 7; assert.equal(C.hourly(cur), Math.round(96000 / (48 * w) * 10) / 10); });
+await t('hourly value and overtime rate (Art. 107: hourly wage + 50 % of basic hourly)', () => { assert.equal(C.overtimeRate(cur), 45.83, '8000/240 + 6000/240×0.5'); assert.equal(C.overtime(cur).basicOnly, 37.5, '6000/240×1.5'); const w = 52 - 25 / 7; assert.equal(C.hourly(cur), Math.round(96000 / (48 * w) * 10) / 10); });
 await t('flags: low leave, long hours, rejected on Qiwa, low basic share', () => {
   const f = C.flags({ ...cur, leave: 15, hoursWeek: 60, qiwa: 'Rejected by employee', basic: 1500 }).map(x => x.msg).join('|'); assert.match(f, /below the legal minimum/); assert.match(f, /48h limit/); assert.match(f, /rejected/); assert.match(f, /Basic is only/);
 });

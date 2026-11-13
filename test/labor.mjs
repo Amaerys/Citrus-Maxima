@@ -1,7 +1,7 @@
 // Saudi labor-law checks. Run: node test/labor.mjs
 import assert from 'node:assert/strict';
 globalThis.location = { href: 'https://x/' }; globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
-import * as L from '../docs/js/labor.js';
+import * as L from '../docs/js/labor.js'; import * as P from '../docs/js/plans.js';
 let fails = 0; const t = async (n, f) => { try { await f(); console.log('  ✓', n); } catch (e) { fails++; console.log('  ✗', n, '\n    ', e.stack.split('\n').slice(0, 3).join('\n     ')); } };
 const days = {}; for (const d of [1, 2, 3, 4, 5]) days[d] = 'D'; for (const d of [8, 9, 10, 11, 12, 13, 14]) days[d] = 'D'; for (const d of [15, 16, 17, 18]) days[d] = 'D'; days[22] = 'N'; days[23] = 'N'; days[29] = 'X'; days[30] = 'VL';
 const hrs = (s, e, o = false) => ({ start: s, end: e, overnight: o, durationMin: (o ? e + 1440 - s : e - s) });
@@ -13,7 +13,7 @@ await t('weekly overtime: 5×12h is 60h, 12h over the 48h limit; counts only who
 });
 await t('seven days in a row breaks the weekly-rest rule', () => { const r = L.checkMonth(s, 2026, 11); assert.equal(r.weeks.find(w => w.start === '2026-11-08').restOk, false); assert.ok(r.findings.some(f => f.rule === 'rest' && f.date === '2026-11-08')); assert.equal(r.level, 'violation'); });
 await t('a 14h day is flagged against the 12h limit; a 12h day is only info', () => {
-  const r = L.checkMonth(s, 2026, 11); assert.ok(r.findings.some(f => f.rule === 'span' && f.date === '2026-11-29' && f.level === 'violation')); const d = r.findings.find(f => f.rule === 'daily' && f.date === '2026-11-02'); assert.equal(d.level, 'info');
+  const r = L.checkMonth(s, 2026, 11); assert.ok(r.findings.some(f => f.rule === 'span' && f.date === '2026-11-29' && f.level === 'violation')); const d = r.findings.find(f => f.rule === 'daily' && f.dates.includes('2026-11-02')); assert.equal(d.level, 'info'); assert.equal(r.findings.filter(f => f.rule === 'daily').length, 1, '12h notes folded into one');
 });
 await t('overnight shifts are split across the week boundary and never double counted', () => { const r = L.checkMonth(s, 2026, 11); assert.equal(r.weeks.find(w => w.start === '2026-11-22').hours, 24); });
 await t('totals: overtime hours, compensatory leave at 1.5h per hour, pay only with a wage', () => {
@@ -31,5 +31,10 @@ await t('public holidays: fixed dates plus the ones you add; working one is flag
 await t('annual leave: 21 days, 30 after five years; counts leave in the current leave year', () => {
   const now = new Date(2026, 10, 30); const a = L.leaveStatus(s, now, { ...L.DEFAULTS, hire: '2023-03-01' }); assert.equal(a.entitled, 21); assert.equal(a.used, 1); assert.equal(a.left, 20); assert.equal(a.next5, '2028-03-01');
   assert.equal(L.leaveStatus(s, now, { ...L.DEFAULTS, hire: '2018-01-10' }).entitled, 30); assert.equal(L.leaveStatus(s, now, { ...L.DEFAULTS }), null);
+});
+await t('holiday hours count as overtime the same way on the labor card and the month report, never twice', () => {
+  const cfg = { ...L.DEFAULTS, holidays: ['2026-11-02'] }, st = { ...s, settings: { labor: { holidays: ['2026-11-02'] } } };
+  const a = L.checkMonth(st, 2026, 11, L.settings(st)), r = P.monthReport(st, 2026, 11); assert.equal(a.totals.overtimeH, r.overtimeH, `labor ${a.totals.overtimeH} vs report ${r.overtimeH}`);
+  const plain = L.checkMonth(s, 2026, 11).totals.overtimeH; assert.ok(a.totals.overtimeH >= plain && a.totals.overtimeH <= plain + 12, 'the holiday adds at most its own hours');
 });
 console.log(fails ? `${fails} FAILED` : 'labor ok'); process.exit(fails ? 1 : 0);

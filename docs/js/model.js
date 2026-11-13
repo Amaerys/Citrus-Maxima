@@ -100,7 +100,7 @@ export function sharedShifts(state, personKey) {
     if (r.unitKind !== 'gp') continue;
     const me = r.people.find(p => isMe(state, p));
     const other = r.people.find(p => (p.id ? `id:${p.id}` : `name:${p.name.toLowerCase()}`) === personKey);
-    if (!me || !other) continue;
+    if (!me || !other || other === me || isMe(state, other)) continue;   // you never "share" a shift with yourself
     for (let d = 1; d <= r.daysInMonth; d++) {
       const a = interpretCode(me.days[d] || '', r.legend, r.unitKind);
       const b = interpretCode(other.days[d] || '', r.legend, r.unitKind);

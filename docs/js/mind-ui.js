@@ -13,11 +13,14 @@ const S = () => ctx.S();
 const up = (fn) => ctx.update(fn);
 const now = () => new Date();
 const apps = () => ctx.apps();
-const ui = { seg: 'overview', area: '', doneOpen: false, year: new Date().getFullYear(), pop: '' };
+const ui = { seg: 'overview', area: '', doneOpen: false, year: new Date().getFullYear(), pop: '', lock: 0, kit: null };
 export const mindSeg = () => ui.seg;
 export function setSeg(seg, area = '') { ui.seg = seg; ui.area = area; }
 
-const SEGS = [['overview', 'Overview', '◉'], ['tasks', 'Tasks', '✓'], ['habits', 'Habits', '🔁'], ['aims', 'Aims', '🎯'], ['reflect', 'Reflect', '✎'], ['year', 'Year', '🗓'], ['library', 'Library', '📚'], ['notes', 'Notes', '📝']];
+// one order for the launcher grid and the ‹ › steps: SEGS is read off GROUPS
+const GROUPS = [['Today', ['overview', 'tasks', 'habits']], ['Direction', ['aims', 'year', 'reflect']], ['Keep', ['library', 'notes']]];
+const SEG_META = { overview: ['Overview', '◉'], tasks: ['Tasks', '✓'], habits: ['Habits', '🔁'], aims: ['Aims', '🎯'], reflect: ['Reflect', '✎'], year: ['Year', '🗓'], library: ['Library', '📚'], notes: ['Notes', '📝'] };
+const SEGS = GROUPS.flatMap(([, ids]) => ids).map(id => [id, ...SEG_META[id]]);
 const MOODS = ['😞', '😕', '😐', '🙂', '😄'];
 const areaColor = (id) => M.areaOf(id)?.color || 'var(--muted)';
 const pctTxt = (v) => v == null ? '–' : `${Math.round(v * 100)}%`;
@@ -37,11 +40,37 @@ function aimSelect(value, onPick) {
   const sel = h('select', { onChange: () => onPick(sel.value) }, h('option', { value: '' }, 'None'), ...Object.values(S().aims || {}).filter(a => a.status !== 'done').map(a => h('option', { value: a.id }, a.title)));
   sel.value = value || ''; return sel;
 }
+const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
 const confirmBtn = (label, fn) => { const b = h('button', { class: 'btn danger', onClick: () => { if (b.dataset.sure) fn(); else { b.dataset.sure = 1; b.textContent = 'Tap again to confirm'; setTimeout(() => { delete b.dataset.sure; b.textContent = label; }, 3000); } } }, label); return b; };
+
+// ───────────────────────────────────────── undo: a complete or a delete can be taken back for 5 s
+let undoTimer = 0;
+export function undoToast(msg, onUndo) {
+  let host = document.getElementById('toasts'); if (!host) { host = h('div', { id: 'toasts' }); document.body.append(host); }
+  host.querySelector('.toast.undo')?.remove(); clearTimeout(undoTimer);
+  const close = () => { t.classList.remove('show'); setTimeout(() => t.remove(), 300); };
+  const t = h('div', { class: 'toast undo', role: 'status' }, h('span', { class: 'u-msg' }, msg),
+    h('button', { type: 'button', class: 'u-btn', onClick: () => { clearTimeout(undoTimer); close(); onUndo(); toast('Undone'); } }, 'Undo'));
+  host.append(t); setTimeout(() => t.classList.add('show'), 10); undoTimer = setTimeout(close, 5000);
+}
+// After a task is ticked the list re-renders and slides up under the finger, so a quick second tap would land on the
+// next row. Taps on task rows are ignored until the list has settled.
+const TICK_ANIM = 260, TICK_GUARD = 600;
+const locked = () => Date.now() < ui.lock;
+function tickTask(e, t) {
+  e.stopPropagation(); if (locked()) return;
+  if (t.done) { ui.lock = Date.now() + TICK_GUARD; up(st => M.setTaskDone(st, t.id, false)); return; }
+  ui.lock = Date.now() + TICK_ANIM + TICK_GUARD;
+  e.currentTarget.closest('.mrow')?.classList.add('fire');
+  setTimeout(() => {
+    ui.lock = Date.now() + TICK_GUARD; up(st => M.setTaskDone(st, t.id, true));
+    undoToast(`Done · ${t.title.length > 34 ? t.title.slice(0, 33) + '…' : t.title}`, () => up(st => M.setTaskDone(st, t.id, false)));
+  }, TICK_ANIM);
+}
 
 // ───────────────────────────────────────── capture: type a thought, it becomes a task
 export function captureBar({ compact = false } = {}) {
-  const input = h('input', { type: 'text', placeholder: 'Capture… “call bank tomorrow 20m !”', 'aria-label': 'Capture a task', enterkeyhint: 'done', autocomplete: 'off', maxlength: 200 });
+  const input = h('input', { type: 'text', placeholder: 'Capture… “call bank tomorrow 20m !”', 'aria-label': 'Capture a task', enterkeyhint: 'done', autocomplete: 'off', maxlength: 200, dataset: { cap: compact ? 'compact' : 'main' } });
   const hint = h('div', { class: 'cap-hint' });
   const paint = () => {
     const p = M.parseCapture(input.value, now()); hint.replaceChildren();
@@ -49,12 +78,17 @@ export function captureBar({ compact = false } = {}) {
     if (p.due) hint.append(h('span', { class: 'chip' }, '📅 ', dueLabel(p.due)));
     if (p.est) hint.append(h('span', { class: 'chip' }, '⏱ ', p.est >= 60 ? `${p.est / 60}h` : `${p.est}m`));
     if (p.pri) hint.append(h('span', { class: 'chip hot' }, M.PRI[p.pri]));
+    if (p.warn) hint.append(h('span', { class: 'chip warnc' }, '⚠ ', p.warn));
+    if (!p.title) hint.append(h('span', { class: 'chip warnc' }, 'Add a few words'));
   };
   const submit = () => {
     const p = M.parseCapture(input.value, now()); if (!input.value.trim()) return;
-    const id = 't' + Math.random().toString(36).slice(2, 9);
-    up(s => M.addTask(s, { ...p, id })); ui.pop = id; input.value = ''; if (p.est && p.due) ctx.regenerate?.();
-    toast('Captured'); input.focus();
+    if (!p.title) { toast('Add a few words — what needs doing?'); input.focus(); return; }
+    const id = 't' + Math.random().toString(36).slice(2, 9), view = input.closest('section.view')?.id, key = input.dataset.cap;
+    input.value = ''; ui.pop = id; up(s => M.addTask(s, { ...p, id })); if (p.est && p.due) ctx.regenerate?.();
+    toast(p.warn ? `Captured · ${p.warn}, so no due date` : 'Captured');
+    // the render replaced this input: focus the new one (still inside the tap/Enter) so the phone keyboard stays up
+    (document.querySelector(`${view ? '#' + view + ' ' : ''}.capture input[data-cap="${key}"]`) || input).focus();
   };
   input.addEventListener('input', paint); input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
   return h('div', { class: `capture ${compact ? 'compact' : ''}` }, h('div', { class: 'cap-row' }, h('span', { class: 'cap-dot', 'aria-hidden': 'true' }), input, h('button', { class: 'btn sm primary', onClick: submit }, 'Add')), hint);
@@ -64,8 +98,8 @@ export function captureBar({ compact = false } = {}) {
 function taskRow(t, { showArea = true } = {}) {
   const s = S(), area = M.taskArea(s, t), aim = s.aims?.[t.aimId], late = !t.done && t.due && t.due < keyOf(now());
   const blk = !t.done && M.taskBlock(s, t);
-  const check = h('button', { class: `tick ${t.done ? 'on' : ''} ${ui.pop === t.id ? 'enter' : ''}`, 'aria-label': t.done ? 'Mark not done' : 'Mark done', style: { '--c': areaColor(area) }, onClick: (e) => { e.stopPropagation(); const row = e.currentTarget.closest('.mrow'); row?.classList.add('fire'); setTimeout(() => up(st => M.setTaskDone(st, t.id, !t.done)), t.done ? 0 : 260); } }, h('i'));
-  return h('div', { class: `mrow task ${t.done ? 'done' : ''} ${t.pri ? 'pri' + t.pri : ''}`, onClick: () => taskSheet(t.id) },
+  const check = h('button', { class: `tick ${t.done ? 'on' : ''} ${ui.pop === t.id ? 'enter' : ''}`, 'aria-label': t.done ? `Mark ${t.title} not done` : `Mark ${t.title} done`, style: { '--c': areaColor(area) }, onClick: (e) => tickTask(e, t) }, h('i'));
+  return h('div', { class: `mrow task ${t.done ? 'done' : ''} ${t.pri ? 'pri' + t.pri : ''}`, onClick: () => { if (!locked()) taskSheet(t.id); } },
     check,
     h('div', { class: 'grow' }, h('div', { class: 'mtitle' }, t.title),
       h('div', { class: 'msub' },
@@ -86,7 +120,7 @@ function habitDots(hb, days = 7) {
   for (let i = days - 1; i >= 0; i--) {
     const d = addDays(startOfDay(n), -i), k = keyOf(d), due = M.habitDue(hb, d), done = M.habitDone(s, hb, k, apps(), tk);
     wrap.append(h('button', { class: `hd ${done ? 'on' : ''} ${due ? '' : 'off'} ${k === tk ? 'today' : ''}`, title: `${DAY_SHORT[d.getDay()]} ${fmtDate(d)}`, 'aria-label': `${DAY_SHORT[d.getDay()]} ${done ? 'done' : 'not done'}`, style: { '--c': areaColor(M.habitArea(s, hb)) },
-      onClick: (e) => { e.stopPropagation(); up(st => M.logHabit(st, hb.id, k, !M.habitDone(st, hb, k, apps(), tk))); } }, h('span', {}, DAY_SHORT[d.getDay()][0])));
+      onClick: (e) => { e.stopPropagation(); up(st => M.logHabit(st, hb.id, k, !M.habitDone(st, hb, k, apps(), tk))); } }, h('span', {}, DAY_SHORT[d.getDay()].slice(0, 2))));
   }
   return wrap;
 }
@@ -117,15 +151,9 @@ function brainHero() {
     h('div', { class: 'space-top' }, h('div', {}, h('div', { class: 'eyebrow' }, 'Your mind'), h('h2', {}, `${greet}${name ? ', ' + name : ''}`)),
       h('button', { class: 'btn sm ghost breathe-btn', onClick: breatheSheet, 'aria-label': 'Breathing exercise' }, h('span', { class: 'bdot' }), 'Breathe')),
     t,
-    h('div', { class: 'score-parts' }, bs.parts.map(p => h('div', { class: 'sp' }, h('span', {}, p.label), h('div', { class: 'bar' }, h('i', { style: { width: `${p.value == null ? 0 : Math.round(p.value * 100)}%` } })), h('b', {}, pctTxt(p.value))))),
+    bs.score == null ? h('div', { class: 'dim tiny center no-score' }, 'Your score appears once you tick a habit, finish a task or check in.')
+      : h('div', { class: 'score-parts' }, bs.parts.filter(p => p.value != null).map(p => h('div', { class: 'sp' }, h('span', {}, p.label), h('div', { class: 'bar' }, h('i', { style: { width: `${Math.round(p.value * 100)}%` } })), h('b', {}, pctTxt(p.value))))),
     ins.length ? h('div', { class: 'insights' }, ins.map(i => h('div', { class: 'insight' }, h('span', { class: 'ping' }), i.text))) : null);
-}
-function focusCard() {
-  const s = S(), n = now(), tk = keyOf(n), focus = M.focusTasks(s, n, 4), habits = M.activeHabits(s).filter(x => M.habitDue(x, n));
-  const pending = habits.filter(x => !M.habitDone(s, x, tk, apps(), tk));
-  return h('div', { class: 'card' }, h('div', { class: 'row' }, h('div', { class: 'title grow' }, 'Today'), h('span', { class: 'dim tiny' }, `${habits.length - pending.length}/${habits.length} habits`)),
-    focus.length ? h('div', { class: 'mlist' }, focus.map(t => taskRow(t))) : h('div', { class: 'empty small' }, 'No tasks due. Capture one above or enjoy the space.'),
-    habits.length ? h('div', { class: 'mlist' }, habits.map(x => habitRow(x, { dots: false }))) : null);
 }
 function inboxCard(limit = 4) {
   const p = M.inboxPending(S(), apps(), now()); if (!p.length) return null;
@@ -140,13 +168,13 @@ export function inboxRow(p) {
     h('button', { class: 'btn sm primary', onClick: () => acceptProposal(p) }, it.type === 'event' ? 'Add event' : 'Take'), h('button', { class: 'btn sm ghost', 'aria-label': 'Dismiss', onClick: () => up(s => M.dismissInbox(s, p.ref)) }, '✕'));
 }
 async function acceptProposal(p) {
-  if (p.item.type === 'event' && p.item.start != null) { try { await ctx.addEvent?.(p.item); } catch (e) { toast(e.message || 'Could not add the event', 'err'); return; } }
+  let cal = null; if (p.item.type === 'event' && p.item.start != null) { try { cal = await ctx.addEvent?.(p.item, { quiet: true }); } catch (e) { toast(e.message || 'Could not add the event', 'err'); return; } }
   let tid = ''; up(s => { const r = M.acceptInbox(s, p); tid = r.taskId; return r.state; });
-  toast(p.item.type === 'note' ? 'Added to notes' : 'Taken in'); if (p.item.minutes && p.item.date) ctx.regenerate?.();
+  toast(p.item.type === 'note' ? 'Added to notes' : cal?.how === 'queued' ? 'Taken in: the event goes to your calendar when you are online' : cal ? 'Taken in and added to your calendar' : 'Taken in');   // one toast: addEvent was quiet if (p.item.minutes && p.item.date) ctx.regenerate?.();
 }
 function trendCard() {
   const s = S(), n = now(), a = apps(), tr = M.trend(s, 8, n, a);
-  if (!M.activeHabits(s).length && !Object.keys(s.tasks || {}).length) return null;
+  if (tr.every(w => w.habitRate == null && !w.tasksDone)) return null;   // eight empty weeks are not an insight
   return h('div', { class: 'card' }, h('div', { class: 'title' }, 'Last 8 weeks'),
     h('div', { class: 'dim tiny' }, 'Habit completion per week'),
     bars(tr.map((w, i) => ({ v: w.habitRate, label: i === 7 ? 'now' : `${w.ws.getDate()}/${w.ws.getMonth() + 1}`, now: i === 7, title: pctTxt(w.habitRate) })), { h: 56 }),
@@ -160,12 +188,72 @@ function balanceCard() {
     radar(M.AREAS.map(x => ({ id: x.id, label: x.name, color: x.color })), M.AREAS.map(x => M.areaStats(s, x.id, n, a).score ?? 0), { ghost: w[0]?.scores ? M.AREAS.map(x => (w[0].scores[x.id] || 0) / 10) : null }),
     h('div', { class: 'dim tiny' }, w[0] ? 'Solid = this week’s activity · dashed = your last wheel check' : 'Based on habits, tasks and objectives this week'));
 }
-function starterCard() {
-  const s = S(); if (Object.keys(s.habits || {}).length || Object.keys(s.aims || {}).length || Object.keys(s.tasks || {}).length) return null;
-  const kit = M.starterKit(s);
-  return h('div', { class: 'card hello' }, h('div', { class: 'title' }, 'Wake up your mind'), h('p', { class: 'dim' }, 'Start with a small kit — habits that count themselves from your other apps, and two objectives. Edit or remove anything later.'),
-    h('div', { class: 'kit' }, kit.map(k => h('span', { class: 'chip' }, k.emoji || '◆', ' ', k.name || k.title))),
-    h('div', { class: 'row' }, h('button', { class: 'btn primary', onClick: () => { up(st => { let x = st; for (const k of kit) x = k.kind === 'habit' ? M.addHabit(x, k) : M.addAim(x, { ...k, milestones: k.milestones.map(t => ({ title: t })) }); return x; }); toast('Kit added'); } }, 'Add the kit'), h('span', { class: 'dim tiny' }, 'or just capture a first task above')));
+// ───────────────────────────────────────── first run: a guided start that stays until it is done or hidden
+const guideHidden = () => S().settings?.mindGuide === 'hidden';
+const hideGuide = () => { up(st => ({ ...st, settings: { ...st.settings, mindGuide: 'hidden' } })); toast('Guide hidden — the starter kit is gone too'); };
+const KIT_PICKS = ['Evening check-in', 'Walk 20 minutes', 'Read'];   // a light first choice; the rest are one tap away
+/** Add kit items with known ids, so one Undo can take the whole batch back. */
+function addKit(items) {
+  if (!items.length) return;
+  const ids = items.map(k => ({ kind: k.kind, id: 'k' + Math.random().toString(36).slice(2, 9) }));
+  up(st => items.reduce((x, k, i) => k.kind === 'habit' ? M.addHabit(x, { ...k, id: ids[i].id }) : M.addAim(x, { ...k, id: ids[i].id, milestones: k.milestones.map(t => ({ title: t })) }), st));
+  const habits = items.filter(k => k.kind === 'habit').length, aims = items.length - habits;
+  undoToast(`Added ${[habits ? plural(habits, 'habit') : '', aims ? plural(aims, 'objective') : ''].filter(Boolean).join(' and ')}`,
+    () => up(st => ids.reduce((x, o) => o.kind === 'habit' ? M.deleteHabit(x, o.id) : M.deleteAim(x, o.id), st)));
+}
+/** Kit habits as toggle chips: choose a few, add them in one go. */
+function habitPicker() {
+  const kit = M.starterKit(S()).filter(k => k.kind === 'habit'); if (!kit.length) return null;
+  if (!ui.kit) ui.kit = new Set(KIT_PICKS);
+  const chosen = () => kit.filter(k => ui.kit.has(k.name));
+  const add = h('button', { type: 'button', class: 'btn sm primary', onClick: () => addKit(chosen()) });
+  const paint = () => { const n = chosen().length; add.textContent = n ? `Add ${plural(n, 'habit')}` : 'Tap to choose'; add.disabled = !n; };
+  const chips = kit.map(k => { const on = () => ui.kit.has(k.name); const c = h('button', { type: 'button', class: `kchip ${on() ? 'on' : ''}`, 'aria-pressed': on() ? 'true' : 'false', title: k.why,
+    onClick: () => { on() ? ui.kit.delete(k.name) : ui.kit.add(k.name); c.classList.toggle('on', on()); c.setAttribute('aria-pressed', on() ? 'true' : 'false'); paint(); } },
+    h('span', { class: 'k-e', 'aria-hidden': 'true' }, k.emoji || '●'), h('span', {}, k.name), k.link ? h('small', { class: 'k-auto' }, 'auto') : null); return c; });
+  paint();
+  return h('div', { class: 'kit-pick' }, h('div', { class: 'kit' }, chips), h('div', { class: 'row' }, add, h('button', { type: 'button', class: 'btn sm ghost', onClick: () => habitSheet(null) }, 'My own…')));
+}
+/** Kit objectives: one tap adds one (with its milestones); or write your own. */
+function aimPicker() {
+  const kit = M.starterKit(S()).filter(k => k.kind === 'aim');
+  return h('div', { class: 'kit' }, kit.map(k => h('button', { type: 'button', class: 'kchip', title: k.milestones.join(' · '), onClick: () => addKit([k]) }, h('span', { class: 'k-e', 'aria-hidden': 'true' }, '◆'), h('span', {}, k.title))),
+    h('button', { type: 'button', class: 'kchip ghost', onClick: () => aimSheet(null) }, h('span', { class: 'k-e', 'aria-hidden': 'true' }, '✎'), h('span', {}, 'My own…')));
+}
+/** The guided start: what Mind is for, then three small steps. Stays (ticking off) until all three are done or you hide it. */
+function guideCard() {
+  const s = S(); if (guideHidden()) return null;
+  const has = [Object.keys(s.tasks || {}).length > 0, M.activeHabits(s).length > 0, Object.keys(s.aims || {}).length > 0], done = has.filter(Boolean).length;
+  if (done === 3) return null;
+  const fresh = M.mindEmpty(s), next = has.indexOf(false);
+  const focusCapture = () => { const i = document.querySelector('#view-mind .capture input'); i?.scrollIntoView({ block: 'center', behavior: 'smooth' }); i?.focus(); };
+  const step = (i, title, sub, okText, body) => h('li', { class: `g-step ${has[i] ? 'done' : ''} ${i === next ? 'next' : ''}` },
+    h('span', { class: 'g-n', 'aria-hidden': 'true' }, has[i] ? '✓' : String(i + 1)),
+    h('div', { class: 'g-b' }, h('b', {}, title), h('div', { class: 'dim tiny' }, has[i] ? okText : sub), has[i] ? null : body));
+  return h('div', { class: `card guide hello ${fresh ? 'fresh' : ''}`, 'aria-label': 'Set up Mind' },
+    h('div', { class: 'row' }, h('div', { class: 'eyebrow grow' }, fresh ? 'Start here · 3 small steps' : `Setting up Mind · ${done} of 3 done`), h('button', { class: 'btn sm ghost', onClick: hideGuide }, 'Hide guide')),
+    h('h2', {}, fresh ? 'Mind keeps what your head shouldn’t have to.' : 'Two minutes to finish'),
+    fresh ? h('p', { class: 'g-lead' }, 'Tasks, habits and long-term objectives in one place — Citrus fits them around your shifts and shows how you are doing.') : null,
+    h('div', { class: 'g-bar', role: 'progressbar', 'aria-valuemin': 0, 'aria-valuemax': 3, 'aria-valuenow': done }, h('i', { style: { width: `${Math.round(done / 3 * 100)}%` } })),
+    h('ol', { class: 'g-steps' },
+      step(0, 'Capture a task', 'Type it the way you would say it: “call bank tomorrow 20m”.', 'Captured. Tick it off when it is done.', fresh ? captureBar() : h('button', { type: 'button', class: 'btn sm', onClick: focusCapture }, 'Type in the capture bar ▾')),
+      step(1, 'Pick a habit or two', 'Tap to choose. “auto” ones tick themselves from your apps.', 'Tick it each day on Overview.', habitPicker()),
+      step(2, 'Set one objective', 'A long-term outcome. Its milestones roll up into progress.', 'Find it under Aims.', aimPicker())));
+}
+/** Habits / Aims: the rest of the kit stays on offer until you hide it (only while you have few of your own). */
+function kitCard(kind) {
+  const s = S(); if (guideHidden()) return null;
+  if (kind === 'habit' ? M.activeHabits(s).length >= 3 : Object.keys(s.aims || {}).length >= 2) return null;
+  const body = kind === 'habit' ? habitPicker() : M.starterKit(s).some(k => k.kind === 'aim') ? aimPicker() : null; if (!body) return null;
+  return h('div', { class: 'card hello kit-card' }, h('div', { class: 'row' }, h('div', { class: 'title grow' }, kind === 'habit' ? 'Starter habits' : 'Starter objectives'), h('button', { class: 'btn sm ghost', onClick: hideGuide }, 'Hide')),
+    h('div', { class: 'dim tiny' }, kind === 'habit' ? 'Choose a few. Edit or remove anything later.' : 'One tap adds it with its milestones.'), body);
+}
+/** First run: what else lives in Mind, without a wall of zeros. */
+function alsoCard() {
+  return h('div', { class: 'card also' }, h('div', { class: 'title' }, 'Also in Mind'),
+    h('div', { class: 'also-row' }, [['reflect', '✎', 'Reflect', 'Two-minute evening check-in'], ['year', '🗓', 'Year', 'Resolutions, quarterly check-ins'], ['library', '📚', 'Library', 'Books, films, anime, games'], ['notes', '📝', 'Notes', 'Quick notes and ideas']]
+      .map(([seg, i, t, d]) => h('button', { type: 'button', class: 'also-b', onClick: () => go(seg) }, h('span', { class: 'a-i', 'aria-hidden': 'true' }, i), h('b', {}, t), h('small', {}, d))),
+      h('button', { type: 'button', class: 'also-b', onClick: breatheSheet }, h('span', { class: 'a-i', 'aria-hidden': 'true' }, h('span', { class: 'bdot' })), h('b', {}, 'Breathe'), h('small', {}, 'One calm minute'))));
 }
 function nowCard() {
   const s = S(), list = L.nowPlaying(s).slice(0, 3);
@@ -177,19 +265,25 @@ const go = (seg) => { ui.seg = seg; ctx.render(); window.scrollTo(0, 0); };
 function habitOrbs() {
   const s = S(), n = now(), tk = keyOf(n), a = apps(), due = M.activeHabits(s).filter(x => M.habitDue(x, n)); if (!due.length) return null;
   return h('div', { class: 'orbs', role: 'group', 'aria-label': 'Today’s habits' }, due.map(hb => {
-    const done = M.habitDone(s, hb, tk, a, tk), st = M.habitStreak(s, hb, n, a), color = areaColor(M.habitArea(s, hb));
-    return h('button', { class: `orb-h ${done ? 'on' : ''} ${ui.pop === 'h' + hb.id ? 'enter' : ''}`, style: { '--c': color }, 'aria-pressed': done ? 'true' : 'false', 'aria-label': `${hb.name}${st.current ? `, ${st.current} day streak` : ''}`,
+    const done = M.habitDone(s, hb, tk, a, tk), st = M.habitStreak(s, hb, n, a), color = areaColor(M.habitArea(s, hb)), unit = st.unit === 'wk' ? 'week' : 'day';
+    return h('button', { class: `orb-h ${done ? 'on' : ''} ${ui.pop === 'h' + hb.id ? 'enter' : ''}`, style: { '--c': color }, 'aria-pressed': done ? 'true' : 'false', 'aria-label': `${hb.name}${st.cur ? `, ${st.cur} ${unit} streak` : ''}`, title: st.cur ? `${st.cur} ${unit} streak` : hb.name,
       onClick: () => { ui.pop = done ? '' : 'h' + hb.id; up(x => M.logHabit(x, hb.id, tk, !done)); },
       onContextmenu: (e) => { e.preventDefault(); habitSheet(hb.id); } },
-      h('span', { class: 'o-i' }, hb.emoji || hb.name.slice(0, 1).toUpperCase()), h('span', { class: 'o-n' }, hb.name.length > 11 ? hb.name.slice(0, 10) + '…' : hb.name), st.current > 1 ? h('span', { class: 'o-s' }, `🔥${st.current}`) : null);
+      h('span', { class: 'o-i' }, hb.emoji || hb.name.slice(0, 1).toUpperCase()), h('span', { class: 'o-n' }, hb.name.length > 11 ? hb.name.slice(0, 10) + '…' : hb.name), st.cur > 1 ? h('span', { class: 'o-s' }, `🔥${st.cur}${st.unit === 'wk' ? 'w' : ''}`) : null);
   }));
+}
+/** Tasks for a "Today" card: what is for today first, then — clearly labelled — what is only coming up this week. */
+function focusList(fg, opts = {}) {
+  return [fg.today.length ? h('div', { class: 'mlist' }, fg.today.map(t => taskRow(t, opts))) : null,
+    fg.soon.length ? h('div', { class: 'sub-h' }, fg.today.length ? 'Coming up this week' : 'Nothing due today · coming up this week') : null,
+    fg.soon.length ? h('div', { class: 'mlist soon' }, fg.soon.map(t => taskRow(t, opts))) : null];
 }
 /** One card for the day: habit orbs, then the few tasks that matter. */
 function dayCard() {
-  const s = S(), n = now(), tk = keyOf(n), focus = M.focusTasks(s, n, 4), habits = M.activeHabits(s).filter(x => M.habitDue(x, n)), left = habits.filter(x => !M.habitDone(s, x, tk, apps(), tk)).length;
+  const s = S(), n = now(), tk = keyOf(n), fg = M.focusGroups(s, n, 5), habits = M.activeHabits(s).filter(x => M.habitDue(x, n)), left = habits.filter(x => !M.habitDone(s, x, tk, apps(), tk)).length;
   return h('div', { class: 'card day' }, h('div', { class: 'row' }, h('div', { class: 'title grow' }, 'Today'), habits.length ? h('span', { class: `dim tiny ${left ? '' : 'ok'}` }, left ? `${habits.length - left}/${habits.length} habits` : 'All habits done ✓') : null,
     h('button', { class: 'btn sm ghost', onClick: () => go('habits') }, 'Habits')),
-    habitOrbs(), focus.length ? h('div', { class: 'mlist' }, focus.map(t => taskRow(t))) : h('div', { class: 'empty small' }, 'No tasks due. Capture one above or enjoy the space.'),
+    habitOrbs(), fg.today.length || fg.soon.length ? focusList(fg) : h('div', { class: 'empty small' }, 'No tasks due. Capture one or enjoy the space.'),
     h('div', { class: 'row' }, h('button', { class: 'btn sm ghost', onClick: () => go('tasks') }, 'All tasks ▸')));
 }
 /** Dashboard tiles: each space at a glance, tap to enter. */
@@ -197,10 +291,10 @@ function tiles() {
   const s = S(), n = now(), a = apps(), tk = keyOf(n), b = M.taskBuckets(s, n), open = ['overdue', 'today', 'soon', 'later', 'someday'].reduce((t, k) => t + (b[k]?.length || 0), 0);
   const w7 = M.habitWindow(s, addDays(startOfDay(n), -6), n, a), habits = M.activeHabits(s), aims = Object.values(s.aims || {}).filter(x => x.status !== 'done' && !x.archived), aimAvg = aims.length ? aims.reduce((t, x) => t + M.aimProgress(s, x), 0) / aims.length : null;
   const reflected = M.reflectedOn(s, tk), ls = L.libraryStats(s, n), reading = L.nowPlaying(s), notes = Object.keys(s.memos || {}).length, best = Math.max(0, ...habits.map(x => M.habitStreak(s, x, n, a).best || 0));
-  const T = (seg, icon, big, label, sub, viz, warn) => h('button', { class: `tile ${warn ? 'warn' : ''}`, onClick: () => go(seg) }, h('div', { class: 't-top' }, h('span', { class: 't-i' }, icon), viz || null), h('b', {}, big), h('span', { class: 't-l' }, label), sub ? h('small', {}, sub) : null);
+  const T = (seg, icon, big, label, sub, viz, warn) => h('button', { class: `tile ${warn ? 'warn' : ''} ${big === 0 || big === '–' ? 'idle' : ''}`, onClick: () => go(seg) }, h('div', { class: 't-top' }, h('span', { class: 't-i' }, icon), viz || null), h('b', {}, big), h('span', { class: 't-l' }, label), sub ? h('small', {}, sub) : null);
   return h('div', { class: 'tiles' },
     T('tasks', '✓', open, open === 1 ? 'open task' : 'open tasks', b.overdue.length ? `${b.overdue.length} overdue` : b.today.length ? `${b.today.length} due today` : 'nothing pressing', null, b.overdue.length > 0),
-    T('habits', '🔁', pctTxt(w7.rate), 'habits this week', best ? `best streak ${best}` : 'start a streak', ring(w7.rate || 0, { size: 34, stroke: 4, color: 'var(--orange)' })),
+    T('habits', '🔁', pctTxt(w7.rate), 'habits, last 7 days', w7.rate == null ? (habits.length ? 'counts from tomorrow' : 'add one') : best ? `best streak ${best}` : 'start a streak', ring(w7.rate || 0, { size: 34, stroke: 4, color: 'var(--orange)' })),
     T('aims', '🎯', aims.length, aims.length === 1 ? 'objective' : 'objectives', aimAvg == null ? 'set one' : `${pctTxt(aimAvg)} average`, ring(aimAvg || 0, { size: 34, stroke: 4, color: 'var(--cyan)' })),
     T('reflect', '✎', reflected ? 'Done' : 'Open', reflected ? 'checked in today' : 'daily check-in', reflected ? 'nice' : 'two minutes', null, false),
     T('library', '📚', reading.length || ls.doneYear, reading.length ? 'in progress' : 'finished this year', reading[0] ? reading[0].title.slice(0, 22) : `${ls.total} in library`),
@@ -215,7 +309,13 @@ function insightsCard() {
 }
 function nowOrNothing() { return L.nowPlaying(S()).length ? nowCard() : null; }
 function overview() {
-  return [brainHero(), captureBar(), inboxCard(), dayCard(), tiles(), starterCard(), nowOrNothing(), insightsCard()];
+  // first run: the guide (with its own capture bar) instead of a hero, tiles and insights that would all read 0
+  if (M.mindEmpty(S())) return [guideCard() || captureBar(), inboxCard(), nowOrNothing(), alsoCard()];
+  // phone: one column in this order; from 1100 px three columns — hero + capture | the day | tiles + insights
+  return [guideCard(), h('div', { class: 'ov-grid' },
+    h('div', { class: 'ov-col ov-a' }, brainHero(), captureBar()),
+    h('div', { class: 'ov-col ov-b' }, inboxCard(), dayCard()),
+    h('div', { class: 'ov-col ov-c' }, tiles(), nowOrNothing(), insightsCard()))];
 }
 
 // ───────────────────────────────────────── Tasks
@@ -242,7 +342,7 @@ function taskSheet(id, preset = {}) {
     field('Area', areaPick(f.area, v => { f.area = v; })), field('Objective', aimSelect(f.aimId, v => { f.aimId = v; })), field('Notes', notes),
     f.srcApp ? h('div', { class: 'dim tiny' }, `Sent by ${f.srcApp}`) : null,
     blk ? h('div', { class: 'banner ok' }, `Scheduled ${fmtDate(fromKey(blk.date))} at ${fmtMinStr(blk.start)}`) : (est.value || f.est) ? h('div', { class: 'dim tiny' }, 'With a due date and a time estimate, Citrus finds a slot for this around your shifts.') : null,
-    h('div', { class: 'row end' }, cur ? confirmBtn('Delete', () => { up(st => M.deleteTask(st, id)); sh.close(); }) : null, h('span', { class: 'grow' }),
+    h('div', { class: 'row end' }, cur ? confirmBtn('Delete', () => { up(st => M.deleteTask(st, id)); sh.close(); undoToast('Task deleted', () => up(st => M.restore(st, { tasks: { [id]: cur } }))); }) : null, h('span', { class: 'grow' }),
       h('button', { class: 'btn', onClick: () => sh.close() }, 'Cancel'),
       h('button', { class: 'btn primary', onClick: () => {
         if (!title.value.trim()) return toast('Give it a title');
@@ -262,19 +362,19 @@ function habitsView() {
   const cells = []; const start = weekStartOf(addDays(n, -7 * 15));
   for (let i = 0; i < 16 * 7; i++) { const d = addDays(start, i), k = keyOf(d); cells.push(d > n ? { key: k, blank: true } : { key: k, v: M.habitWindow(s, d, d, a).rate, title: `${fmtDate(d)} · ${pctTxt(M.habitWindow(s, d, d, a).rate)}`, today: k === tk }); }
   return [
-    h('div', { class: 'card space slim' }, h('div', { class: 'habit-hero' }, ring(due.length ? done / due.length : 0, { size: 84, stroke: 7, label: `${done}/${due.length}`, sub: 'today', cls: 'breathing' }),
-      h('div', { class: 'grow' }, h('div', { class: 'big' }, pctTxt(w7.rate), h('small', {}, ' this week')), h('div', { class: 'dim' }, `${pctTxt(w30.rate)} over 30 days`), h('div', { class: 'dim tiny' }, `Best streak ${Math.max(0, ...list.map(x => M.habitStreak(s, x, n, a).best))}`))),
+    !list.length ? null : h('div', { class: 'card space slim' }, h('div', { class: 'habit-hero' }, ring(due.length ? done / due.length : 0, { size: 84, stroke: 7, label: `${done}/${due.length}`, sub: 'today', cls: 'breathing' }),
+      h('div', { class: 'grow' }, h('div', { class: 'big' }, pctTxt(w7.rate), h('small', {}, ' this week')), h('div', { class: 'dim' }, w7.rate == null ? 'Rates start counting tomorrow' : `${pctTxt(w30.rate)} over 30 days`), h('div', { class: 'dim tiny' }, `Best streak ${Math.max(0, ...list.map(x => M.habitStreak(s, x, n, a).best))}`))),
       list.length ? [h('div', { class: 'dim tiny' }, 'Last 16 weeks'), heat(cells)] : null),
     list.length ? h('div', { class: 'card' }, h('div', { class: 'row' }, h('div', { class: 'title grow' }, 'Habits'), h('button', { class: 'btn sm', onClick: () => habitSheet(null) }, '+ Habit')), h('div', { class: 'mlist' }, list.map(x => habitRow(x))))
       : h('div', { class: 'card empty' }, h('p', {}, 'Habits that run themselves: tick them, or link one to an app so it counts when the app says you did it.'), h('button', { class: 'btn primary', onClick: () => habitSheet(null) }, 'Add a habit')),
-    starterCard(),
+    kitCard('habit'),
     archived.length ? h('div', { class: 'card' }, h('div', { class: 'title' }, 'Paused'), archived.map(x => h('div', { class: 'row' }, h('span', { class: 'grow' }, `${x.emoji || ''} ${x.name}`), h('button', { class: 'btn sm', onClick: () => up(st => M.updateHabit(st, x.id, { archived: false })) }, 'Resume')))) : null];
 }
 function habitSheet(id) {
   const s = S(), cur = s.habits?.[id], f = { name: '', emoji: '', freq: { type: 'daily' }, area: '', aimId: '', link: '', threshold: 0, minutes: 0, ...(cur || {}) };
   f.freq = { ...f.freq };
   const sh = ctx.sheet([]), n = now(), a = apps();
-  const name = h('input', { type: 'text', value: f.name, placeholder: 'e.g. Read 20 pages', maxlength: 60 }), emoji = h('input', { type: 'text', value: f.emoji, maxlength: 2, class: 'emoji-in', placeholder: '🙂' });
+  const name = h('input', { type: 'text', value: f.name, placeholder: 'e.g. Read 20 pages', maxlength: 60 }), emoji = h('input', { type: 'text', value: f.emoji, class: 'emoji-in', placeholder: '🙂', 'aria-label': 'Emoji', onInput: () => { const g = M.firstGrapheme(emoji.value); if (g !== emoji.value) emoji.value = g; } });   // one emoji, whole (flags, 🧑‍⚕️)
   const mins = h('input', { type: 'number', min: 0, max: 180, step: 5, value: f.minutes || '', placeholder: '0 = no slot' }), thr = h('input', { type: 'number', min: 0, step: 1, value: f.threshold || '', placeholder: 'metric goal' });
   const freqBox = h('div', {}), paintFreq = () => {
     freqBox.replaceChildren(pick([['daily', 'Every day'], ['days', 'Certain days'], ['weekly', 'X per week']], f.freq.type, v => { f.freq = v === 'days' ? { type: 'days', days: [1, 2, 3, 4, 5] } : v === 'weekly' ? { type: 'weekly', n: 3 } : { type: 'daily' }; paintFreq(); }),
@@ -291,10 +391,11 @@ function habitSheet(id) {
     field('Counts automatically from', linkSel), h('div', { class: 'grid2' }, field('Goal for metric', thr), field('Time to set aside (min)', mins)),
     h('div', { class: 'dim tiny' }, 'If you give it minutes, Citrus finds a slot around your shifts each day.'),
     field('Alarm at (on its days)', remindT, h('div', { class: 'dim tiny' }, 'Rings on your phone through Google Calendar; leave empty for none.')),
-    h('div', { class: 'row end' }, cur ? [confirmBtn('Delete', () => { up(st => M.deleteHabit(st, id)); sh.close(); }), h('button', { class: 'btn', onClick: () => { up(st => M.updateHabit(st, id, { archived: true })); sh.close(); } }, 'Pause')] : null, h('span', { class: 'grow' }),
+    h('div', { class: 'row end' }, cur ? [confirmBtn('Delete', () => { const log = s.habitLog?.[id]; up(st => M.deleteHabit(st, id)); sh.close(); undoToast(`Habit deleted · ${cur.name}`, () => up(st => M.restore(st, { habits: { [id]: cur }, ...(log ? { habitLog: { [id]: log } } : {}) }))); }), h('button', { class: 'btn', onClick: () => { up(st => M.updateHabit(st, id, { archived: true })); sh.close(); } }, 'Pause')] : null, h('span', { class: 'grow' }),
       h('button', { class: 'btn', onClick: () => sh.close() }, 'Cancel'), h('button', { class: 'btn primary', onClick: () => {
         if (!name.value.trim()) return toast('Name the habit');
-        const v = { name: name.value.trim(), emoji: emoji.value.trim(), freq: f.freq, area: f.area, aimId: f.aimId, link: linkSel.value, threshold: +thr.value || 0, minutes: +mins.value || 0, remindTime: remindT.value || '' };
+        if (f.freq.type === 'days' && !f.freq.days.length) return toast('Pick at least one day, or choose Every day');
+        const v = { name: name.value.trim(), emoji: M.firstGrapheme(emoji.value), freq: f.freq, area: f.area, aimId: f.aimId, link: linkSel.value, threshold: +thr.value || 0, minutes: +mins.value || 0, remindTime: remindT.value || '' };
         up(st => cur ? M.updateHabit(st, id, v) : M.addHabit(st, v)); sh.close(); if (v.minutes) ctx.regenerate?.();
       } }, 'Save')));
   setTimeout(() => !cur && name.focus(), 60);
@@ -313,7 +414,7 @@ function aimCard(a) {
 function aimsView() {
   const s = S(), list = Object.values(s.aims || {}).sort((a, b) => (a.status === 'done') - (b.status === 'done') || (a.deadline || '9').localeCompare(b.deadline || '9') || a.createdAt - b.createdAt);
   return [h('div', { class: 'row' }, h('div', { class: 'title grow' }, 'Objectives'), h('button', { class: 'btn sm primary', onClick: () => aimSheet(null) }, '+ Objective')),
-    ...list.map(aimCard), starterCard(),
+    ...list.map(aimCard), kitCard('aim'),
     !list.length ? h('div', { class: 'card empty' }, h('p', {}, 'An objective is a long-term outcome — “Pass Step 1”, “Run 10K”. Break it into milestones; tasks and habits can serve it, and its progress rolls up automatically.')) : null];
 }
 function aimSheet(id) {
@@ -321,18 +422,24 @@ function aimSheet(id) {
   const sh = ctx.sheet([]);
   const title = h('input', { type: 'text', value: f.title, placeholder: 'e.g. Pass USMLE Step 1', maxlength: 100 }), why = h('textarea', { rows: 2, placeholder: 'Why does it matter to you?' }, f.why), dl = h('input', { type: 'date', value: f.deadline });
   const ms = h('textarea', { rows: 4, placeholder: 'One milestone per line' }, (cur?.milestones || []).map(m => m.title).join('\n'));
-  const pctIn = h('input', { type: 'range', min: 0, max: 100, step: 5, value: f.pct });
+  const pctLab = h('span', {}, `Manual progress ${f.pct || 0}% (used when nothing else applies)`);
+  const pctIn = h('input', { type: 'range', min: 0, max: 100, step: 5, value: f.pct, onInput: () => { pctLab.textContent = `Manual progress ${pctIn.value}% (used when nothing else applies)`; } });
   const lk = h('select', {}, h('option', { value: '' }, 'No — milestones / tasks / manual'), ...M.metricSeries(s).filter(m => m.kind === 'progress').map(m => h('option', { value: m.key }, `${m.label} (${m.app}) — live %`))); lk.value = f.link || '';
   const live = cur ? M.aimProgress(s, cur) : 0;
   sh.box.append(h('h3', {}, cur ? 'Objective' : 'New objective'), field('', title), field('Why', why), field('Area', areaPick(f.area, v => { f.area = v; })), field('Deadline', dl),
-    field('Milestones', ms), field('Progress is read from', lk), field(`Manual progress ${pctIn.value}% (used when nothing else applies)`, pctIn),
+    field('Milestones', ms), field('Progress is read from', lk), field(pctLab, pctIn),
     cur ? h('div', { class: 'dim tiny' }, `Right now: ${pctTxt(live)}`) : null,
     cur ? h('div', { class: 'row' }, h('button', { class: 'btn sm', onClick: () => { sh.close(); reflectSheet('premortem', { aimId: id }); } }, 'Pre-mortem'), h('button', { class: 'btn sm', onClick: () => { sh.close(); taskSheet(null, { aimId: id, area: f.area }); } }, '+ Task for this'), h('button', { class: 'btn sm', onClick: () => { sh.close(); habitSheet(null); } }, '+ Habit')) : null,
-    h('div', { class: 'row end' }, cur ? [confirmBtn('Delete', () => { up(st => M.deleteAim(st, id)); sh.close(); }), h('button', { class: 'btn', onClick: () => { up(st => M.updateAim(st, id, { status: f.status === 'done' ? 'active' : 'done' })); sh.close(); toast(f.status === 'done' ? 'Reopened' : 'Achieved 🎉'); } }, f.status === 'done' ? 'Reopen' : 'Mark achieved')] : null, h('span', { class: 'grow' }),
+    h('div', { class: 'row end' }, cur ? [confirmBtn('Delete', () => {
+        // deleting unlinks its tasks and habits; Undo links them back
+        const tasks = Object.fromEntries(Object.values(s.tasks || {}).filter(t => t.aimId === id).map(t => [t.id, t])), habits = Object.fromEntries(Object.values(s.habits || {}).filter(x => x.aimId === id).map(x => [x.id, x]));
+        up(st => M.deleteAim(st, id)); sh.close(); undoToast('Objective deleted', () => up(st => M.restore(st, { aims: { [id]: cur }, tasks, habits })));
+      }), h('button', { class: 'btn', onClick: () => { up(st => M.updateAim(st, id, { status: f.status === 'done' ? 'active' : 'done' })); sh.close(); toast(f.status === 'done' ? 'Reopened' : 'Achieved 🎉'); } }, f.status === 'done' ? 'Reopen' : 'Mark achieved')] : null, h('span', { class: 'grow' }),
       h('button', { class: 'btn', onClick: () => sh.close() }, 'Cancel'), h('button', { class: 'btn primary', onClick: () => {
         if (!title.value.trim()) return toast('Name the objective');
-        const old = new Map((cur?.milestones || []).map(m => [m.title, m])), lines = ms.value.split('\n').map(x => x.trim()).filter(Boolean);
-        const milestones = lines.map(t => ({ id: old.get(t)?.id, title: t, done: !!old.get(t)?.done }));
+        // keep each milestone's id: same text first (survives reordering, and duplicates stay apart), else the same line (an edit)
+        const old = cur?.milestones || [], used = new Set(), lines = ms.value.split('\n').map(x => x.trim()).filter(Boolean);
+        const milestones = lines.map((t, i) => { let m = old.find((x, j) => !used.has(j) && x.title === t); if (!m && old[i] && !used.has(i) && !lines.includes(old[i].title)) m = old[i]; if (m) used.add(old.indexOf(m)); return { id: m?.id, title: t, done: !!m?.done }; });
         const v = { title: title.value.trim(), why: why.value.trim(), area: f.area, deadline: dl.value, milestones, pct: +pctIn.value, link: lk.value };
         up(st => cur ? M.updateAim(st, id, { ...v, milestones: milestones.map(m => ({ ...m, id: m.id || Math.random().toString(36).slice(2, 8) })) }) : M.addAim(st, v)); sh.close();
       } }, 'Save')));
@@ -355,11 +462,16 @@ const previewOf = (r) => { const v = Object.values(r.answers || {}).flat().filte
 
 export function reflectSheet(methodId, opts = {}) {
   const s = S(), m = M.methodOf(methodId); if (!m) return;
-  if (m.wheel) return wheelSheet(opts.entry);
-  const n = now(), date = opts.entry?.date || keyOf(n), e = opts.entry || {}, aimId = opts.aimId || e.aimId || '';
+  const n = now(), aimId0 = opts.aimId || opts.entry?.aimId || '';
+  // reopening a method you already used today opens that entry — saving a blank sheet over it would lose the first text
+  const found = !opts.entry && !opts.fresh ? M.findReflection(s, m.id, keyOf(n), aimId0) : null;
+  if (m.wheel) return wheelSheet(opts.entry || found);
+  const e = opts.entry || found || {}, date = e.date || keyOf(n), aimId = aimId0;
   const answers = JSON.parse(JSON.stringify(e.answers || {})), f = { mood: e.mood || 0, energy: e.energy || 0, rating: e.rating || 0, push: {} };
   const sh = ctx.sheet([]); const aim = s.aims?.[aimId];
-  sh.box.append(h('h3', {}, m.name), h('div', { class: 'dim tiny' }, `${m.blurb}${aim ? ` · ${aim.title}` : ''} · ${fmtDate(fromKey(date))}`));
+  sh.box.append(h('h3', {}, m.name), h('div', { class: 'dim tiny' }, `${m.blurb}${aim ? ` · ${aim.title}` : ''} · ${fmtDate(fromKey(date))}`),
+    e.id ? h('div', { class: 'banner refl-edit' }, h('span', { class: 'grow' }, `${date === keyOf(n) ? 'Today’s' : m.id === 'weekly' ? 'This week’s' : 'Your'} entry${e.at ? ` · saved ${new Date(e.at).toTimeString().slice(0, 5)}` : ''} — edit it here.`),
+      h('button', { type: 'button', class: 'btn sm ghost', onClick: () => { sh.close(); reflectSheet(m.id, { aimId, fresh: true }); } }, 'New entry')) : null);
   if (m.stats) { const w = M.weekStats(s, weekStartOf(n), n, apps()); sh.box.append(h('div', { class: 'kv weekstats' }, h('span', {}, `Habits ${pctTxt(w.habitRate)}`), h('span', {}, `${w.tasksDone} tasks done`), h('span', {}, `${w.reflect} reflections`), h('span', {}, `${Math.round(w.studyMin / 60 * 10) / 10}h focus time`))); }
   if (m.mood) { sh.box.append(field('Mood', pick(MOODS.map((x, i) => [i + 1, x]), f.mood, v => { f.mood = +v; }, 'emoji')), field('Energy', pick([1, 2, 3, 4, 5].map(x => [x, '⚡'.repeat(x)]), f.energy, v => { f.energy = +v; }))); }
   const inputs = {};
@@ -368,12 +480,12 @@ export function reflectSheet(methodId, opts = {}) {
     else { inputs[fd.k] = h('textarea', { rows: fd.type === 'long' ? 9 : 3, placeholder: fd.type === 'long' ? 'Write whatever is on your mind…' : '' }, answers[fd.k] || ''); sh.box.append(field(fd.label, inputs[fd.k])); }
   }
   if (m.rating) sh.box.append(field('Rate it 1–5', pick([1, 2, 3, 4, 5].map(x => [x, String(x)]), f.rating, v => { f.rating = +v; })));
-  sh.box.append(h('div', { class: 'row end' }, e.id ? confirmBtn('Delete', () => { up(st => M.deleteReflection(st, e.id)); sh.close(); }) : null, h('span', { class: 'grow' }), h('button', { class: 'btn', onClick: () => sh.close() }, 'Cancel'), h('button', { class: 'btn primary', onClick: () => {
+  sh.box.append(h('div', { class: 'row end' }, e.id ? confirmBtn('Delete', () => { up(st => M.deleteReflection(st, e.id)); sh.close(); undoToast('Entry deleted', () => up(st => M.restore(st, { reflections: { [e.id]: e } }))); }) : null, h('span', { class: 'grow' }), h('button', { class: 'btn', onClick: () => sh.close() }, 'Cancel'), h('button', { class: 'btn primary', onClick: () => {
     const out = {}; for (const fd of m.fields) out[fd.k] = fd.type === 'lines' ? inputs[fd.k].map(i => i.value.trim()).filter(Boolean) : inputs[fd.k].value.trim();
     if (!Object.values(out).flat().some(Boolean)) return toast('Write something first');
     up(st => {
       let x = M.saveReflection(st, { ...(e.id ? { id: e.id } : {}), method: m.id, date, aimId, mood: f.mood, energy: f.energy, rating: f.rating, answers: out, createdAt: e.createdAt || Date.now() });
-      for (const fd of m.fields) if (fd.toTasks && f.push[fd.k] && !e.id) for (const t of out[fd.k]) x = M.addTask(x, { title: t, due: keyOf(addDays(n, m.id === 'weekly' ? 7 - n.getDay() + 1 : 1)), src: `reflect:${m.id}` });
+      for (const fd of m.fields) if (fd.toTasks && f.push[fd.k] && !e.id) for (const t of out[fd.k]) x = M.addTask(x, { title: t, due: keyOf(m.id === 'weekly' ? addDays(weekStartOf(n), 7) : addDays(n, 1)), src: `reflect:${m.id}` });   // next week starts on Sunday
       return x;
     });
     sh.close(); toast('Saved');
@@ -385,7 +497,7 @@ function wheelSheet(entry) {
   paint(); const note = h('textarea', { rows: 2, placeholder: 'What stands out?' }, entry?.answers?.note || '');
   sh.box.append(h('h3', {}, 'Wheel of life'), h('div', { class: 'dim tiny' }, 'How satisfied are you with each area right now? 1 = starved, 10 = thriving.'), rad,
     ...M.AREAS.map(a => { const out = h('b', {}, scores[a.id]); const r = h('input', { type: 'range', min: 1, max: 10, step: 1, value: scores[a.id], style: { '--c': a.color }, onInput: () => { scores[a.id] = +r.value; out.textContent = r.value; paint(); } }); return h('div', { class: 'wheel-row' }, h('span', {}, `${a.emoji} ${a.name}`), r, out); }),
-    field('', note), h('div', { class: 'row end' }, h('span', { class: 'grow' }), h('button', { class: 'btn', onClick: () => sh.close() }, 'Cancel'), h('button', { class: 'btn primary', onClick: () => { up(st => M.saveReflection(st, { id: entry?.id, method: 'wheel', date: entry?.date || keyOf(now()), scores, answers: { note: note.value.trim() } })); sh.close(); toast('Saved'); } }, 'Save')));
+    field('', note), h('div', { class: 'row end' }, h('span', { class: 'grow' }), h('button', { class: 'btn', onClick: () => sh.close() }, 'Cancel'), h('button', { class: 'btn primary', onClick: () => { up(st => M.saveReflection(st, { ...(entry?.id ? { id: entry.id } : {}), method: 'wheel', date: entry?.date || keyOf(now()), scores, answers: { note: note.value.trim() } })); sh.close(); toast('Saved'); } }, 'Save')));
 }
 
 // breathing: a 4-in / 6-out pace (longer exhale calms), animated with one transform
@@ -423,18 +535,18 @@ function resolutionRow(r, q) {
 function resolutionSheet(id, year) {
   const s = S(), cur = s.resolutions?.[id], f = { title: '', area: '', why: '', target: '', progress: 0, aimId: '', ...(cur || {}) };
   const sh = ctx.sheet([]);
-  const title = h('input', { type: 'text', value: f.title, placeholder: 'e.g. Read 24 books', maxlength: 100 }), target = h('input', { type: 'text', value: f.target, placeholder: 'How will you know? e.g. 24 books', maxlength: 120 }), why = h('textarea', { rows: 2, placeholder: 'Why this one?' }, f.why), pr = h('input', { type: 'range', min: 0, max: 100, step: 5, value: f.progress });
+  const title = h('input', { type: 'text', value: f.title, placeholder: 'e.g. Read 24 books', maxlength: 100 }), target = h('input', { type: 'text', value: f.target, placeholder: 'How will you know? e.g. 24 books', maxlength: 120 }), why = h('textarea', { rows: 2, placeholder: 'Why this one?' }, f.why), prLab = h('span', {}, `Manual progress ${f.progress || 0}%`), pr = h('input', { type: 'range', min: 0, max: 100, step: 5, value: f.progress, onInput: () => { prLab.textContent = `Manual progress ${pr.value}%`; } });
   sh.box.append(h('h3', {}, cur ? 'Resolution' : `New ${year} resolution`), field('', title), field('Target', target), field('Why', why), field('Area', areaPick(f.area, v => { f.area = v; })),
-    field('Driven by objective (progress follows it)', aimSelect(f.aimId, v => { f.aimId = v; })), field('Manual progress', pr),
-    h('div', { class: 'row end' }, cur ? confirmBtn('Delete', () => { up(st => M.deleteResolution(st, id)); sh.close(); }) : null, h('span', { class: 'grow' }), h('button', { class: 'btn', onClick: () => sh.close() }, 'Cancel'),
+    field('Driven by objective (progress follows it)', aimSelect(f.aimId, v => { f.aimId = v; })), field(prLab, pr),
+    h('div', { class: 'row end' }, cur ? confirmBtn('Delete', () => { up(st => M.deleteResolution(st, id)); sh.close(); undoToast('Resolution deleted', () => up(st => M.restore(st, { resolutions: { [id]: cur } }))); }) : null, h('span', { class: 'grow' }), h('button', { class: 'btn', onClick: () => sh.close() }, 'Cancel'),
       h('button', { class: 'btn primary', onClick: () => { if (!title.value.trim()) return toast('Name the resolution'); const v = { title: title.value.trim(), target: target.value.trim(), why: why.value.trim(), area: f.area, aimId: f.aimId, progress: +pr.value }; up(st => cur ? M.updateResolution(st, id, v) : M.addResolution(st, { ...v, year })); sh.close(); } }, 'Save')));
   setTimeout(() => !cur && title.focus(), 60);
 }
 function checkinSheet(id, q) {
   const s = S(), r = s.resolutions?.[id]; if (!r) return; const c = r.checkins?.[q] || {};
-  const sh = ctx.sheet([]), note = h('textarea', { rows: 3, placeholder: 'How is it going? What is in the way?' }, c.note || ''), pr = h('input', { type: 'range', min: 0, max: 100, step: 5, value: c.progress ?? r.progress });
+  const sh = ctx.sheet([]), note = h('textarea', { rows: 3, placeholder: 'How is it going? What is in the way?' }, c.note || ''), prLab = h('span', {}, `Progress so far ${c.progress ?? r.progress ?? 0}%`), pr = h('input', { type: 'range', min: 0, max: 100, step: 5, value: c.progress ?? r.progress, onInput: () => { prLab.textContent = `Progress so far ${pr.value}%`; } });
   let feel = c.feel || 0;
-  sh.box.append(h('h3', {}, `${q.toUpperCase()} check-in`), h('div', { class: 'dim tiny' }, r.title), field('How on track?', pick([[1, '🌧 Off'], [2, '⛅ Mixed'], [3, '☀ On track']], feel, v => { feel = +v; })), field('Progress so far', pr), field('', note),
+  sh.box.append(h('h3', {}, `${q.toUpperCase()} check-in`), h('div', { class: 'dim tiny' }, r.title), field('How on track?', pick([[1, '🌧 Off'], [2, '⛅ Mixed'], [3, '☀ On track']], feel, v => { feel = +v; })), field(prLab, pr), field('', note),
     h('div', { class: 'row end' }, h('span', { class: 'grow' }), h('button', { class: 'btn', onClick: () => sh.close() }, 'Cancel'), h('button', { class: 'btn primary', onClick: () => { up(st => M.updateResolution(M.setCheckin(st, id, q, { feel, note: note.value.trim(), progress: +pr.value }), id, { progress: +pr.value })); sh.close(); toast('Checked in'); } }, 'Save')));
 }
 
@@ -477,32 +589,31 @@ export function captureSheet({ title = '', text = '', url = '', source = '' } = 
 
 // ───────────────────────────────────────── Today card
 export function mindCard() {
-  const s = S(), n = now(), a = apps(), tk = keyOf(n), bs = M.brainScore(s, n, a), habits = M.activeHabits(s).filter(x => M.habitDue(x, n)), focus = M.focusTasks(s, n, 3);
-  const pend = M.inboxPending(s, a, n), sug = M.suggestMethod(s, n);
-  const empty = !habits.length && !focus.length && !pend.length && !Object.keys(s.aims || {}).length;
+  const s = S(), n = now(), a = apps(), tk = keyOf(n), bs = M.brainScore(s, n, a), habits = M.activeHabits(s).filter(x => M.habitDue(x, n)), fg = M.focusGroups(s, n, 3);
+  const pend = M.inboxPending(s, a, n), sug = M.suggestMethod(s, n), fresh = M.mindEmpty(s), todayN = fg.today.length;
+  const sub = habits.length ? `${habits.filter(x => M.habitDone(s, x, tk, a, tk)).length}/${habits.length} habits · ${todayN ? `${todayN} to do today` : 'nothing due today'}` : fresh ? 'Tasks, habits and objectives in one place' : todayN ? `${todayN} to do today` : 'Nothing due today';
   return h('div', { class: 'card space mind-card' },
     h('div', { class: 'row' }, ring(bs.score == null ? null : bs.score / 100, { size: 46, stroke: 5, label: bs.score == null ? '·' : String(bs.score), cls: 'breathing' }),
-      h('div', { class: 'grow' }, h('div', { class: 'title' }, 'Mind'), h('div', { class: 'dim tiny' }, habits.length ? `${habits.filter(x => M.habitDone(s, x, tk, a, tk)).length}/${habits.length} habits · ${focus.length ? `${focus.length} to do` : 'no tasks due'}` : 'Tasks, habits, objectives')),
-      h('button', { class: 'btn sm ghost', onClick: () => ctx.go('mind') }, 'Open')),
+      h('div', { class: 'grow' }, h('div', { class: 'title' }, 'Mind'), h('div', { class: 'dim tiny' }, sub)),
+      h('button', { class: `btn sm ${fresh ? 'primary' : 'ghost'}`, onClick: () => { ui.seg = 'overview'; ctx.go('mind'); } }, fresh ? 'Set up' : 'Open')),
     habits.length ? h('div', { class: 'hchips' }, habits.map(x => { const done = M.habitDone(s, x, tk, a, tk); return h('button', { class: `hchip ${done ? 'on' : ''}`, style: { '--c': areaColor(M.habitArea(s, x)) }, 'aria-pressed': done, onClick: () => { ui.pop = done ? '' : 'h' + x.id; up(st => M.logHabit(st, x.id, tk, !done)); } }, x.emoji || '●', ' ', x.name); })) : null,
-    focus.length ? h('div', { class: 'mlist' }, focus.map(t => taskRow(t, { showArea: false }))) : null,
+    focusList(fg, { showArea: false }),
     pend.length ? h('button', { class: 'linkish inbox-pill', onClick: () => ctx.go('mind') }, h('span', { class: 'ping' }), `${pend.length} from your apps waiting`) : null,
     !M.reflectedOn(s, tk) && n.getHours() >= 17 ? h('button', { class: 'linkish reflect-nudge', onClick: () => reflectSheet(sug.method) }, '🌙 ', sug.why) : null,
-    empty ? h('div', { class: 'dim tiny' }, 'Add your first habit, objective or task in Mind.') : null,
+    fresh ? h('div', { class: 'dim tiny' }, 'New here? “Set up” takes a minute: one task, a habit or two, one objective.') : null,
     captureBar({ compact: true }));
 }
 
 // ───────────────────────────────────────── the view
-const GROUPS = [['Today', ['overview', 'tasks', 'habits']], ['Direction', ['aims', 'year', 'reflect']], ['Keep', ['library', 'notes']]];
 const segSub = (id) => { const s = S(); try { switch (id) {
   case 'overview': { const n = M.inboxPending(s, apps(), now()).length; return n ? `${n} from your apps` : 'The day at a glance'; }
   case 'tasks': { const n = Object.values(s.tasks || {}).filter(t => !t.done).length; return n ? `${n} open` : 'Nothing open'; }
   case 'habits': { const hs = M.activeHabits(s); return hs.length ? `${hs.length} active` : 'None yet'; }
   case 'aims': { const n = Object.keys(s.aims || {}).length; return n ? `${n} objective${n === 1 ? '' : 's'}` : 'None yet'; }
-  case 'reflect': { const n = M.reflectionsList(s).length; return n ? `${n} entries` : 'Start one'; }
+  case 'reflect': { const n = M.reflectionsList(s).length; return n ? plural(n, 'entry', 'entries') : 'Start one'; }
   case 'year': return String(new Date().getFullYear());
-  case 'library': { const n = Object.keys(s.media || {}).length; return n ? `${n} items` : 'Books, films, games'; }
-  case 'notes': { const n = Object.keys(s.memos || {}).length; return n ? `${n} notes` : 'Quick notes'; }
+  case 'library': { const n = Object.keys(s.media || {}).length; return n ? plural(n, 'item') : 'Books, films, games'; }
+  case 'notes': { const n = Object.keys(s.memos || {}).length; return n ? plural(n, 'note') : 'Quick notes'; }
 } } catch {} return ''; };
 function launcher() {
   const by = Object.fromEntries(SEGS.map(x => [x[0], x])), box = ctx.sheet([]);

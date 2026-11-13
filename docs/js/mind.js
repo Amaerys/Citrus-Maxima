@@ -26,11 +26,11 @@ export const PRI = ['', 'High', 'Urgent'];
 // ════════════════════════════════════════ capture: "Call bank tomorrow 20m !" → a task
 export function parseCapture(raw, now = new Date()) {
   let t = ` ${String(raw || '').trim()} `;
-  let due = '', est = 0, pri = 0;
-  const take = (re, fn) => { const m = t.match(re); if (m) { fn(m); t = t.replace(m[0], ' '); } };
+  let due = '', est = 0, pri = 0, warn = '';
+  // fn may return false to leave the words where they were (e.g. "31/02" is not a date, so it stays in the title)
+  const take = (re, fn) => { const m = t.match(re); if (m && fn(m) !== false) t = t.replace(m[0], ' '); };
   const DAYS = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
   take(/\s(!{1,2})(?=\s)/, m => { pri = m[1].length; });
-  take(/\s~?(\d+(?:\.\d+)?)\s?(h|hr|hrs|hours?|m|min|mins|minutes?)(?=\s)/i, m => { est = Math.round(parseFloat(m[1]) * (/^h/i.test(m[2]) ? 60 : 1)); });
   take(/\s(?:due |by |on )?(today|tod)(?=\s)/i, () => { due = keyOf(now); });
   take(/\s(?:due |by |on )?(tomorrow|tmrw)(?=\s)/i, () => { due = keyOf(addDays(now, 1)); });
   take(/\snext week(?=\s)/i, () => { due = keyOf(addDays(now, 7)); });
@@ -39,15 +39,39 @@ export function parseCapture(raw, now = new Date()) {
     const idx = DAYS[m[1].slice(0, 3).toLowerCase()]; due = keyOf(addDays(now, (idx - now.getDay() + 7) % 7 || 7));
   });
   take(/\s(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?(?=\s)/, m => {   // dd/mm[/yyyy], the way you write dates
-    const d = +m[1], mo = +m[2]; if (mo < 1 || mo > 12 || d < 1 || d > 31) { t = t.replace(/^/, ' ' + m[0]); return; }
-    let y = m[3] ? (m[3].length === 2 ? 2000 + +m[3] : +m[3]) : now.getFullYear();
-    let c = new Date(y, mo - 1, d); if (!m[3] && c < startOfDay(now)) c = new Date(y + 1, mo - 1, d);
-    if (c.getMonth() === mo - 1) due = keyOf(c);
+    const d = +m[1], mo = +m[2], y0 = m[3] ? (m[3].length === 2 ? 2000 + +m[3] : +m[3]) : now.getFullYear();
+    let c = new Date(y0, mo - 1, d);
+    if (mo < 1 || mo > 12 || d < 1 || c.getMonth() !== mo - 1) { warn = `${m[0].trim()} is not a date`; return false; }
+    if (!m[3] && c < startOfDay(now)) c = new Date(y0 + 1, mo - 1, d);
+    due = keyOf(c);
   });
+  // an estimate only at the very end ("… 20m") or marked with ~ ("~5 min"), so "about 5 min talk" keeps its words
+  const UNIT = '(h|hr|hrs|hours?|m|min|mins|minutes?)';
+  const setEst = (m) => { est = Math.round(parseFloat(m[1]) * (/^h/i.test(m[2]) ? 60 : 1)); };
+  if (/\s~\d/.test(t)) take(new RegExp(`\\s~(\\d+(?:\\.\\d+)?)\\s?${UNIT}(?=\\s)`, 'i'), setEst);
+  else take(new RegExp(`\\s(\\d+(?:\\.\\d+)?)\\s?${UNIT}\\s*$`, 'i'), setEst);
   let title = t.replace(/\s+/g, ' ').trim();
   if (!title) title = String(raw || '').trim();
+  if (!/[\p{L}\p{N}]/u.test(title)) title = '';   // "!" or "..." alone is not a task
   title = title.charAt(0).toUpperCase() + title.slice(1);
-  return { title, due, est, pri };
+  return { title, due, est, pri, warn };
+}
+/** First user-perceived character: keeps 🇸🇦 and 🧑‍⚕️ whole (a code-unit slice cuts them in half). */
+export function firstGrapheme(v) {
+  const str = String(v || '').trim(); if (!str) return '';
+  try { if (typeof Intl !== 'undefined' && Intl.Segmenter) { for (const g of new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(str)) return g.segment; } } catch {}
+  return Array.from(str)[0] || '';
+}
+/** Nothing of your own in Mind yet: the screens show a guided start instead of zeros. */
+export const mindEmpty = (s) => !rec(s.tasks).length && !rec(s.habits).length && !rec(s.aims).length && !rec(s.reflections).length && !rec(s.resolutions).length;
+/** Put records back (undo of a delete/complete). Fresh `at` so the restore also wins a merge against the tombstone. */
+export function restore(s, patch) {
+  const now = Date.now(), out = { ...s };
+  for (const [coll, recs] of Object.entries(patch || {})) {
+    if (coll === 'habitLog') { out.habitLog = { ...s.habitLog, ...recs }; continue; }
+    out[coll] = { ...(s[coll] || {}) }; for (const [id, r] of Object.entries(recs || {})) if (r) out[coll][id] = { ...r, at: now };
+  }
+  return out;
 }
 
 // ════════════════════════════════════════ tasks
@@ -80,6 +104,11 @@ export function focusTasks(s, now = new Date(), n = 3) {
   const b = taskBuckets(s, now);
   return [...b.overdue, ...b.today, ...b.someday.filter(t => t.pri > 0), ...b.soon].slice(0, n);
 }
+/** focusTasks split for display: what is for today (overdue, today, urgent undated) and what is only coming up this week. */
+export function focusGroups(s, now = new Date(), n = 4) {
+  const b = taskBuckets(s, now), today = [...b.overdue, ...b.today, ...b.someday.filter(t => t.pri > 0)].slice(0, n);
+  return { today, soon: b.soon.slice(0, Math.max(0, n - today.length)) };
+}
 /** The accepted/done planner block that schedules this task, if any. */
 export function taskBlock(s, t) {
   for (const [date, list] of Object.entries(s.plan || {})) for (const p of list || []) if (p.goalId === `app:task-${t.id}` && (p.status === 'accepted' || p.status === 'done')) return { ...p, date };
@@ -99,12 +128,17 @@ export function habitFreqLabel(h) {
 export function addHabit(s, f) {
   const name = String(f.name || '').trim().slice(0, 60); if (!name) return s;
   const id = f.id || uid(), now = Date.now();
-  const h = { id, name, emoji: String(f.emoji || '').slice(0, 4), freq: f.freq || { type: 'daily' }, aimId: f.aimId || '', area: f.area || '', link: f.link || '', threshold: +f.threshold || 0, minutes: Math.max(0, Math.min(180, +f.minutes || 0)), remindTime: /^\d\d:\d\d$/.test(f.remindTime || '') ? f.remindTime : '', archived: false, createdAt: f.createdAt || now, at: now };
+  const h = { id, name, emoji: firstGrapheme(f.emoji), freq: f.freq || { type: 'daily' }, aimId: f.aimId || '', area: f.area || '', link: f.link || '', threshold: +f.threshold || 0, minutes: Math.max(0, Math.min(180, +f.minutes || 0)), remindTime: /^\d\d:\d\d$/.test(f.remindTime || '') ? f.remindTime : '', archived: false, createdAt: f.createdAt || now, at: now };
   return { ...s, habits: { ...s.habits, [id]: h } };
 }
 export function updateHabit(s, id, patch) { const h = s.habits?.[id]; return h ? { ...s, habits: { ...s.habits, [id]: { ...h, ...patch, at: Date.now() } } } : s; }
 export function deleteHabit(s, id) { const habits = { ...s.habits }, habitLog = { ...s.habitLog }; delete habits[id]; delete habitLog[id]; return { ...s, habits, habitLog, deleted: tomb(s, `habit:${id}`) }; }
-export function logHabit(s, id, key, v) { return { ...s, habitLog: { ...s.habitLog, [id]: { ...(s.habitLog?.[id] || {}), [key]: { v: v ? 1 : 0, at: Date.now() } } } }; }
+export function logHabit(s, id, key, v) {
+  const next = { ...s, habitLog: { ...s.habitLog, [id]: { ...(s.habitLog?.[id] || {}), [key]: { v: v ? 1 : 0, at: Date.now() } } } };
+  // ticking a day before the habit existed is back-filling: the habit starts that day, so the streak and rates count it
+  const hb = s.habits?.[id], day = fromKey(key).getTime();
+  return v && hb && day < startOfDay(new Date(hb.createdAt || Date.now())).getTime() ? updateHabit(next, id, { createdAt: day }) : next;
+}
 
 export function habitDue(h, date) { const f = h.freq || {}; return f.type === 'days' ? (f.days || []).includes(date.getDay()) : true; }
 /** Latest value Citrus has for an app metric on a day (the apps report today's number; Citrus keeps the history). */
@@ -155,11 +189,13 @@ export function habitWindow(s, from, to, apps, only = null) {
   const todayKey = keyOf(to); let due = 0, done = 0;
   for (const h of only || activeHabits(s)) {
     const created = startOfDay(new Date(h.createdAt || 0)); const f = h.freq || {}; let hd = 0, dn = 0;
+    if (keyOf(created) >= todayKey) continue;   // younger than a day: no rate yet ("–"), not 0 %
     for (let d = startOfDay(from); keyOf(d) <= todayKey; d = addDays(d, 1)) {
       if (d < created) continue;
       const k = keyOf(d), did = habitDone(s, h, k, apps, todayKey);
+      if (k === todayKey && !did) continue;   // today isn't a miss yet (weekly targets too)
       if (f.type === 'weekly') { hd += (f.n || 3) / 7; if (did) dn++; }
-      else if (habitDue(h, d)) { if (k === todayKey && !did) continue; hd++; if (did) dn++; }   // today isn't a miss yet
+      else if (habitDue(h, d)) { hd++; if (did) dn++; }
     }
     due += hd; done += Math.min(dn, hd || dn);
   }
@@ -215,8 +251,16 @@ export const METHODS = [
 export const methodOf = (id) => METHODS.find(m => m.id === id);
 export function reflectionKey(method, dateKey, aimId = '') { return method === 'premortem' ? `premortem:${dateKey}:${aimId}` : `${method}:${dateKey}`; }
 export function saveReflection(s, e) {
-  const key = e.id || reflectionKey(e.method, e.date, e.aimId);
+  let key = e.id || reflectionKey(e.method, e.date, e.aimId);
+  if (!e.id && s.reflections?.[key]) key = `${key}:${uid()}`;   // a second entry the same day gets its own id — never replace the first
+
   return { ...s, reflections: { ...s.reflections, [key]: { ...e, id: key, at: Date.now() } } };
+}
+/** The entry to reopen for a method: today's (this week's for the weekly review), latest first. */
+export function findReflection(s, method, dateKey, aimId = '') {
+  const ws = method === 'weekly' ? keyOf(weekStartOf(fromKey(dateKey))) : '', we = ws ? keyOf(addDays(fromKey(ws), 6)) : '';
+  return rec(s.reflections).filter(r => r.method === method && (ws ? r.date >= ws && r.date <= we : r.date === dateKey) && (method !== 'premortem' || (r.aimId || '') === (aimId || '')))
+    .sort((a, b) => (b.at || 0) - (a.at || 0))[0] || null;
 }
 export function deleteReflection(s, id) { const reflections = { ...s.reflections }; delete reflections[id]; return { ...s, reflections, deleted: tomb(s, `refl:${id}`) }; }
 export const reflectionsList = (s) => rec(s.reflections).sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.at || 0) - (a.at || 0));
@@ -306,11 +350,14 @@ export function brainScore(s, now, apps) {
   parts.push({ id: 'tasks', label: 'Tasks', weight: 30, value: tDone + tLate ? tDone / (tDone + tLate) : null });
   const days = new Set(rec(s.reflections).filter(r => DAILY.has(r.method) && r.date >= keyOf(from) && r.date <= todayKey).map(r => r.date));
   parts.push({ id: 'reflect', label: 'Reflection', weight: 15, value: rec(s.reflections).length ? clamp01(days.size / 4) : null });
-  const prog = weekProgress(s, weekStartOf(now)); let have = 0, target = 0;
-  for (const g of s.goals || []) { const t = Math.round((g.hoursPerWeek || 0) * 60); if (t > 0) { target += t; have += Math.min(t, prog[g.id] || 0); } }
+  // planned time only counts once Plan has really put blocks in this week; the default study goals alone are not a score
+  const ws = weekStartOf(now), planned = Array.from({ length: 7 }, (_, i) => s.plan?.[keyOf(addDays(ws, i))] || []).flat().some(p => p.status === 'accepted' || p.status === 'done');
+  const prog = planned ? weekProgress(s, ws) : {}; let have = 0, target = 0;
+  if (planned) for (const g of s.goals || []) { const t = Math.round((g.hoursPerWeek || 0) * 60); if (t > 0) { target += t; have += Math.min(t, prog[g.id] || 0); } }
   const elapsed = (now.getDay() + 1) / 7;
   parts.push({ id: 'time', label: 'Planned time', weight: 15, value: target ? clamp01(have / (target * elapsed)) : null });
   const live = parts.filter(p => p.value != null), w = live.reduce((a, p) => a + p.weight, 0);
+  if (mindEmpty(s)) return { score: null, parts };   // nothing of yours in Mind yet: no score, rather than "0"
   return { score: w ? Math.round(live.reduce((a, p) => a + p.value * p.weight, 0) / w * 100) : null, parts };
 }
 export function weekStats(s, ws, now, apps) {

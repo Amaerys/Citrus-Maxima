@@ -19,11 +19,13 @@ const norm = (t) => String(t || '').toLowerCase().normalize('NFKD').replace(/[̀
 
 // ───────────────────────────── records
 const IMPORTED = new Set(['goodreads', 'imdb', 'anilist', 'steam', 'mal']);
+/** The MyAnimeList id of an anime/manga: MAL rows carry it as extId, AniList rows as idMal. It is how the two services recognise the same work (MAL has romaji titles, AniList English ones). */
+const malIdOf = (f) => (f.kind === 'anime' || f.kind === 'manga') ? String(f.malId || (f.src === 'mal' && f.extId) || '') : '';
 export function addMedia(s, f) {
   const title = String(f.title || '').trim().slice(0, 140); if (!title) return s;
   const kind = KINDS.some(k => k.id === f.kind) ? f.kind : 'book', now = Date.now(), id = f.id || uid();
   const m = { id, kind, title, status: STATUS[f.status] ? f.status : 'planned', rating: Math.max(0, Math.min(10, +f.rating || 0)), progress: Math.max(0, +f.progress || 0), total: Math.max(0, +f.total || 0),
-    year: +f.year || 0, creator: String(f.creator || '').slice(0, 80), genres: (f.genres || []).map(g => String(g).slice(0, 30)).slice(0, 6), cover: f.cover ? safeUrl(f.cover) : '', src: f.src || 'manual', extId: f.extId ? String(f.extId) : '',
+    year: +f.year || 0, creator: String(f.creator || '').slice(0, 80), genres: (f.genres || []).map(g => String(g).slice(0, 30)).slice(0, 6), cover: f.cover ? safeUrl(f.cover) : '', src: f.src || 'manual', extId: f.extId ? String(f.extId) : '', malId: malIdOf(f),
     format: ['paper', 'ebook', 'audio'].includes(f.format) ? f.format : '', log: Array.isArray(f.log) ? f.log.slice(-400) : [], quotes: Array.isArray(f.quotes) ? f.quotes.slice(-100) : [], startedAt: f.startedAt || '', finishedAt: f.finishedAt || '', minutes: Math.max(0, +f.minutes || 0), review: String(f.review || '').slice(0, 800), orig: String(f.orig || '').slice(0, 140), en: String(f.en || '').slice(0, 140), enChecked: !!f.enChecked, runtime: Math.max(0, Math.min(900, +f.runtime || 0)), pub: Math.max(0, Math.min(10, +f.pub || 0)), createdAt: f.createdAt || now, at: now };
   if (m.status === 'done' && !m.finishedAt && !IMPORTED.has(m.src)) m.finishedAt = keyOf(new Date());   // imports without a date stay undated rather than becoming "today"
   return { ...s, media: { ...s.media, [id]: m } };
@@ -44,7 +46,7 @@ function applyPatch(m, patch) {
 export function updateMedia(s, id, patch) { const m = s.media?.[id]; if (!m) return s; return { ...s, media: { ...s.media, [id]: applyPatch(m, patch) } }; }
 export function deleteMedia(s, id) { const media = { ...s.media }; delete media[id]; return { ...s, media, deleted: { ...(s.deleted || {}), [`media:${id}`]: Date.now() } }; }
 export const mediaList = (s, kind = '') => rec(s.media).filter(m => !kind || m.kind === kind);
-const sameWork = (m, { kind, title, year, src, extId }, nt) => (extId && m.src === src && m.extId === String(extId)) || (m.kind === kind && (norm(m.title) === nt || (m.orig && norm(m.orig) === nt)) && (!year || !m.year || m.year === year));
+const sameWork = (m, { kind, title, year, src, extId, malId }, nt) => (extId && m.kind === kind && m.src === src && m.extId === String(extId)) || (m.kind === kind && m.malId && m.malId === malIdOf({ kind, src, extId, malId })) || (m.kind === kind && (norm(m.title) === nt || (m.orig && norm(m.orig) === nt)) && (!year || !m.year || m.year === year));
 export function findMedia(s, f) { const nt = norm(f.title); return rec(s.media).find(m => sameWork(m, f, nt)); }
 /** "Original title (English title)" — the English part only when it differs. */
 export function composeTitle(orig, en) { const o = String(orig || '').trim(), e = String(en || '').trim(); return e && norm(e) !== norm(o) ? `${o} (${e})`.slice(0, 140) : o; }
@@ -65,6 +67,7 @@ function importPatch(cur, f, opts) {
   if (f.minutes && f.minutes > (cur.minutes || 0)) patch.minutes = f.minutes;
   if (!cur.runtime && f.runtime) patch.runtime = f.runtime; if (!cur.pub && f.pub) patch.pub = f.pub;
   if (!cur.orig && f.orig) patch.orig = f.orig;
+  const mid = malIdOf(f); if (mid && !cur.malId) patch.malId = mid;
   if (f.progress && f.progress > (cur.progress || 0)) patch.progress = f.progress;
   if (cur.status === 'planned' && f.status && f.status !== 'planned' && !patch.status) patch.status = f.status;
   for (const k of Object.keys(patch)) if (patch[k] === undefined || (k !== 'finishedAt' && patch[k] === cur[k])) delete patch[k];
@@ -74,17 +77,36 @@ function importPatch(cur, f, opts) {
 export function upsertMedia(s, f, opts = {}) { const r = upsertMany(s, [f], opts); return { state: r.state, added: r.added, updated: r.updated }; }
 /** Bulk import. One pass with an index, so thousands of rows stay fast. */
 export function upsertMany(s, list, opts = {}) {
-  const media = { ...(s.media || {}) }, byExt = new Map(), byTitle = new Map(); let added = 0, updated = 0;
-  const index = (m) => { if (m.extId) byExt.set(`${m.src}|${m.extId}`, m.id); for (const t of [m.title, m.orig]) if (t) { const k = `${m.kind}|${norm(t)}`; (byTitle.get(k) || byTitle.set(k, []).get(k)).push(m.id); } };
+  const media = { ...(s.media || {}) }, byExt = new Map(), byTitle = new Map(), byMal = new Map(); let added = 0, updated = 0, deleted = s.deleted;
+  const ek = (m) => `${m.kind}|${m.src}|${m.extId}`;   // MAL numbers anime and manga separately, so the kind is part of the key
+  const index = (m) => { if (m.extId) byExt.set(ek(m), m.id); if (m.malId && !byMal.has(`${m.kind}|${m.malId}`)) byMal.set(`${m.kind}|${m.malId}`, m.id); for (const t of [m.title, m.orig]) if (t) { const k = `${m.kind}|${norm(t)}`; (byTitle.get(k) || byTitle.set(k, []).get(k)).push(m.id); } };
   for (const m of Object.values(media)) index(m);
   for (const f of list) {
-    const nt = norm(f.title); let cur = f.extId && byExt.has(`${f.src}|${f.extId}`) ? media[byExt.get(`${f.src}|${f.extId}`)] : null;
+    const nt = norm(f.title), mk = malIdOf(f) ? `${f.kind}|${malIdOf(f)}` : '';
+    let cur = f.extId && byExt.has(ek(f)) ? media[byExt.get(ek(f))] : null;
+    if (!cur && mk && byMal.has(mk)) cur = media[byMal.get(mk)] || null;
     if (!cur) for (const id of byTitle.get(`${f.kind}|${nt}`) || []) { const m = media[id]; if (m && sameWork(m, f, nt)) { cur = m; break; } }
     if (!cur) { const n = Object.values(addMedia({ media: {} }, f).media)[0]; if (n) { media[n.id] = n; index(n); added++; } continue; }
-    const patch = importPatch(cur, f, opts); if (!Object.keys(patch).length) continue;
+    // The same work imported earlier from the other anime service (found only now that both carry the MAL id): fold it in, so it counts once.
+    const twinId = mk && byMal.get(mk), twin = twinId && twinId !== cur.id ? media[twinId] : null;
+    if (twin) { const r = foldTwin(cur, twin); delete media[twin.id]; deleted = { ...(deleted || {}), [`media:${twin.id}`]: Date.now() }; media[cur.id] = cur = r; byMal.set(mk, cur.id); if (twin.extId) byExt.set(ek(twin), cur.id); }
+    const patch = importPatch(cur, f, opts); if (!Object.keys(patch).length) { if (twin) { index(cur); updated++; } continue; }
     media[cur.id] = applyPatch(cur, patch); index(media[cur.id]); updated++;
   }
-  return { state: { ...s, media }, added, updated, skipped: list.length - added - updated };
+  return { state: { ...s, media, ...(deleted !== s.deleted ? { deleted } : {}) }, added, updated, skipped: list.length - added - updated };
+}
+/** Keep `a`, fill what it lacks from its twin `b` (your rating, dates, review, progress, log). */
+function foldTwin(a, b) {
+  const n = { ...a, at: Date.now() };
+  for (const k of ['rating', 'finishedAt', 'startedAt', 'review', 'total', 'cover', 'creator', 'year']) if (!n[k] && b[k]) n[k] = b[k];
+  if (!n.genres?.length && b.genres?.length) n.genres = b.genres;
+  if ((b.progress || 0) > (n.progress || 0)) n.progress = b.progress;
+  if (n.status === 'planned' && b.status !== 'planned') n.status = b.status;
+  if (!n.malId) n.malId = b.malId; if (!n.orig && norm(b.title) !== norm(n.title)) n.orig = b.title;
+  if (b.log?.length) n.log = [...(n.log || []), ...b.log].sort((x, y) => x.d.localeCompare(y.d)).slice(-400);
+  if (b.quotes?.length) n.quotes = [...(n.quotes || []), ...b.quotes].slice(-100);
+  n.createdAt = Math.min(a.createdAt || Infinity, b.createdAt || Infinity) || a.createdAt;
+  return n;
 }
 
 
@@ -129,8 +151,9 @@ export function removeQuote(s, id, qid) { const b = s.media?.[id]; return b ? up
 export const allQuotes = (s) => rec(s.media).flatMap(m => (m.quotes || []).map(q => ({ ...q, book: m.title, author: m.creator, bookId: m.id }))).sort((a, b) => b.d.localeCompare(a.d));
 
 // ───────────────────────────── stats
-export function libraryStats(s, now = new Date()) {
-  const y = String(now.getFullYear()), all = rec(s.media), done = all.filter(m => m.status === 'done'), thisYear = done.filter(m => (m.finishedAt || '').startsWith(y));
+/** Totals for the year card. `kinds` (optional) limits it to the kinds the shelf is filtered to. */
+export function libraryStats(s, now = new Date(), kinds = null) {
+  const y = String(now.getFullYear()), all = listOf(s, kinds), done = all.filter(m => m.status === 'done'), thisYear = done.filter(m => (m.finishedAt || '').startsWith(y));
   const rated = done.filter(m => m.rating);
   const dist = Array.from({ length: 10 }, (_, i) => rated.filter(m => m.rating === i + 1).length);
   const byKind = Object.fromEntries(KINDS.map(k => [k.id, { doing: all.filter(m => m.kind === k.id && m.status === 'doing').length, planned: all.filter(m => m.kind === k.id && m.status === 'planned').length, done: done.filter(m => m.kind === k.id).length, year: thisYear.filter(m => m.kind === k.id).length }]));
@@ -177,7 +200,7 @@ export function parseMAL(text) {
   const items = blocks.map(([, kindTag, body]) => { const manga = kindTag === 'manga', id = tag(body, manga ? 'manga_mangadb_id' : 'series_animedb_id'), title = tag(body, manga ? 'manga_title' : 'series_title'); if (!title) return null;
     const status = ST[tag(body, 'my_status').toLowerCase()] || 'planned', score = Math.min(10, +tag(body, 'my_score') || 0);
     return { kind: manga ? 'manga' : 'anime', title, total: +(manga ? tag(body, 'manga_chapters') || tag(body, 'manga_volumes') : tag(body, 'series_episodes')) || 0, progress: +(manga ? tag(body, 'my_read_chapters') : tag(body, 'my_watched_episodes')) || 0,
-      status, rating: score, finishedAt: status === 'done' ? date(tag(body, 'my_finish_date')) : '', startedAt: date(tag(body, 'my_start_date')), review: tag(body, 'my_comments').replace(/^<!\[CDATA\[|\]\]>$/g, '').slice(0, 800), genres: [], src: 'mal', extId: id }; }).filter(Boolean);
+      status, rating: score, finishedAt: status === 'done' ? date(tag(body, 'my_finish_date')) : '', startedAt: date(tag(body, 'my_start_date')), review: tag(body, 'my_comments').replace(/^<!\[CDATA\[|\]\]>$/g, '').slice(0, 800), genres: [], src: 'mal', extId: id, malId: id }; }).filter(Boolean);
   return items.length ? { source: 'MyAnimeList', items } : { error: 'No anime or manga entries found in that file.' };
 }
 export function parseExport(text, { mode = 'auto' } = {}) {
@@ -212,31 +235,31 @@ async function anilist(query, variables) {
 }
 const ST = { COMPLETED: 'done', CURRENT: 'doing', REPEATING: 'doing', PLANNING: 'planned', PAUSED: 'paused', DROPPED: 'dropped' };
 const aniEntry = (e, kind) => { const c = e.completedAt || {}, m = e.media;
-  return { kind, title: m.title.english || m.title.romaji, year: m.seasonYear || m.startDate?.year || 0, total: (kind === 'manga' ? m.chapters || m.volumes : m.episodes) || 0, progress: e.progress || 0, genres: m.genres || [], cover: m.coverImage?.medium || '',
+  return { kind, title: m.title.english || m.title.romaji, orig: m.title.english && m.title.romaji ? m.title.romaji : '', malId: m.idMal ? String(m.idMal) : '', year: m.seasonYear || m.startDate?.year || 0, total: (kind === 'manga' ? m.chapters || m.volumes : m.episodes) || 0, progress: e.progress || 0, genres: m.genres || [], cover: m.coverImage?.medium || '',
     status: ST[e.status] || 'planned', rating: e.score ? Math.round(e.score / 10) : 0, finishedAt: c.year ? `${c.year}-${String(c.month || 1).padStart(2, '0')}-${String(c.day || 1).padStart(2, '0')}` : '', src: 'anilist', extId: m.id, creator: '' }; };
 export async function fetchAniList(user) {
   const out = []; let firstErr = null;
   for (const [type, kind] of [['ANIME', 'anime'], ['MANGA', 'manga']]) {
     try {
-      const d = await anilist(`query($u:String){MediaListCollection(userName:$u,type:${type}){lists{entries{status score(format:POINT_100) progress completedAt{year month day} media{id title{romaji english} episodes chapters volumes seasonYear startDate{year} genres coverImage{medium}}}}}}`, { u: user });
+      const d = await anilist(`query($u:String){MediaListCollection(userName:$u,type:${type}){lists{entries{status score(format:POINT_100) progress completedAt{year month day} media{id idMal title{romaji english} episodes chapters volumes seasonYear startDate{year} genres coverImage{medium}}}}}}`, { u: user });
       for (const l of d.MediaListCollection?.lists || []) for (const e of l.entries || []) out.push(aniEntry(e, kind));
     } catch (e) { if (!firstErr) firstErr = e; if (type === 'ANIME') throw e; }
   }
   return out;
 }
 export async function searchAnime(q, kind = 'anime') {
-  const d = await anilist(`query($q:String){Page(perPage:8){media(search:$q,type:${kind === 'manga' ? 'MANGA' : 'ANIME'},sort:SEARCH_MATCH){id title{romaji english} episodes chapters volumes seasonYear startDate{year} genres coverImage{medium}}}}`, { q });
-  return (d.Page?.media || []).map(m => ({ kind, title: m.title.english || m.title.romaji, year: m.seasonYear || m.startDate?.year || 0, total: (kind === 'manga' ? m.chapters || m.volumes : m.episodes) || 0, genres: m.genres || [], cover: m.coverImage?.medium || '', src: 'anilist', extId: m.id }));
+  const d = await anilist(`query($q:String){Page(perPage:8){media(search:$q,type:${kind === 'manga' ? 'MANGA' : 'ANIME'},sort:SEARCH_MATCH){id idMal title{romaji english} episodes chapters volumes seasonYear startDate{year} genres coverImage{medium}}}}`, { q });
+  return (d.Page?.media || []).map(m => ({ kind, title: m.title.english || m.title.romaji, orig: m.title.english && m.title.romaji ? m.title.romaji : '', malId: m.idMal ? String(m.idMal) : '', year: m.seasonYear || m.startDate?.year || 0, total: (kind === 'manga' ? m.chapters || m.volumes : m.episodes) || 0, genres: m.genres || [], cover: m.coverImage?.medium || '', src: 'anilist', extId: m.id }));
 }
 export async function animeSuggestions(s, dismissed = [], kind = 'anime') {
   const top = rec(s.media).filter(m => m.kind === kind && (m.src === 'anilist' || m.src === 'mal') && m.extId && m.status === 'done' && m.rating >= 8).sort((a, b) => b.rating - a.rating).slice(0, 5);
-  const have = new Set(rec(s.media).filter(m => m.kind === kind).map(m => norm(m.title))), seen = new Set(), out = [];
+  const mine = rec(s.media).filter(m => m.kind === kind), have = new Set(mine.flatMap(m => [norm(m.title), norm(m.orig)]).filter(Boolean)), mals = new Set(mine.map(m => m.malId).filter(Boolean)), seen = new Set(), out = [];
   for (const m of top) {
-    let d; try { d = await anilist(`query($id:Int){Media(${m.src === 'mal' ? 'idMal' : 'id'}:$id,type:${kind === 'manga' ? 'MANGA' : 'ANIME'}){recommendations(perPage:6,sort:RATING_DESC){nodes{rating mediaRecommendation{id title{romaji english} episodes chapters volumes seasonYear startDate{year} genres coverImage{medium} averageScore}}}}}`, { id: +m.extId }); } catch { continue; }
+    let d; try { d = await anilist(`query($id:Int){Media(${m.src === 'mal' ? 'idMal' : 'id'}:$id,type:${kind === 'manga' ? 'MANGA' : 'ANIME'}){recommendations(perPage:6,sort:RATING_DESC){nodes{rating mediaRecommendation{id idMal title{romaji english} episodes chapters volumes seasonYear startDate{year} genres coverImage{medium} averageScore}}}}}`, { id: +m.extId }); } catch { continue; }
     for (const n of d.Media?.recommendations?.nodes || []) {
       const r = n.mediaRecommendation; if (!r) continue; const title = r.title.english || r.title.romaji;
-      if (have.has(norm(title)) || seen.has(r.id) || dismissed.includes(`anilist:${r.id}`)) continue; seen.add(r.id);
-      out.push({ key: `anilist:${r.id}`, item: { kind, title, year: r.seasonYear || r.startDate?.year || 0, total: (kind === 'manga' ? r.chapters || r.volumes : r.episodes) || 0, genres: r.genres || [], cover: r.coverImage?.medium || '', src: 'anilist', extId: r.id, status: 'planned' }, reason: `Because you rated ${m.title} ${m.rating}/10`, score: r.averageScore ? `${r.averageScore}%` : '' });
+      if (have.has(norm(title)) || (r.title.romaji && have.has(norm(r.title.romaji))) || (r.idMal && mals.has(String(r.idMal))) || seen.has(r.id) || dismissed.includes(`anilist:${r.id}`)) continue; seen.add(r.id);
+      out.push({ key: `anilist:${r.id}`, item: { kind, title, orig: r.title.english && r.title.romaji ? r.title.romaji : '', malId: r.idMal ? String(r.idMal) : '', year: r.seasonYear || r.startDate?.year || 0, total: (kind === 'manga' ? r.chapters || r.volumes : r.episodes) || 0, genres: r.genres || [], cover: r.coverImage?.medium || '', src: 'anilist', extId: r.id, status: 'planned' }, reason: `Because you rated ${m.title} ${m.rating}/10`, score: r.averageScore ? `${r.averageScore}%` : '' });
     }
   }
   return out.slice(0, 12);

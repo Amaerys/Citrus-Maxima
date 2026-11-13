@@ -17,7 +17,7 @@ check(await p.locator('#view-rota .lw').count() === 1, 'labor card on the calend
 await p.click('#view-rota .lw button:has-text("Details")'); await sleep(300);
 check(await p.locator('.sheet .lw-weeks tr').count() >= 5, 'weeks table'); check(/not a legal ruling/.test(await p.locator('.sheet').innerText()), 'disclaimer');
 await p.click('.sheet input[type=checkbox] >> nth=1'); await sleep(400); check(await p.locator('.sheet input[type=date]').count() >= 3, 'Ramadan dates appear when switched on');
-await p.fill('.sheet input[type=number]', '12000'); await p.locator('.sheet input[type=number]').dispatchEvent('change'); await sleep(500);
+await p.fill('.sheet input[type=number] >> nth=0', '12000'); await p.locator('.sheet input[type=number]').first().dispatchEvent('change'); await sleep(500);
 const st = await p.evaluate(() => JSON.parse(localStorage.getItem('citrus.state.v1')).settings.labor); check(st.wage === 12000 && st.muslim === true, 'settings saved: ' + JSON.stringify(st).slice(0, 80));
 await p.screenshot({ path: path.join(here, 'shots/labor.png') }); await p.keyboard.press('Escape'); await sleep(200);
 check(await p.evaluate(() => document.documentElement.scrollWidth - window.innerWidth) <= 0, 'no overflow'); check(errors.length === 0, 'no page errors: ' + errors.join('|').slice(0, 200));

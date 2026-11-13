@@ -135,11 +135,15 @@ const rawLeak = (page) => page.evaluate(() => /\b(null|undefined|NaN|\[object Ob
 {
   const { ctx, page } = await open(360, 740);
   await tab(page, 'mind'); await sleep(300);
-  check(await page.locator('#view-mind .m-tree').count() === 1, 'Mind opens with the tree');
+  check(await page.locator('#view-mind .m-tree').count() === 0 && await page.locator('#view-mind .card.guide').count() === 1, 'Mind opens with the guided start (no zero tree)');
   check(await page.locator('.starterhello, .card.hello').count() === 1, 'empty state offers the starter kit');
   await page.screenshot({ path: `${shots}/01-empty-360.png` });
-  await page.click('#view-mind .card.hello .btn.primary'); await sleep(300);
-  check(await page.locator('#view-mind .card.hello').count() === 0, 'kit added, prompt gone');
+  // the guided start: choose every kit habit, then both kit objectives
+  while (await page.locator('#view-mind .card.guide .kit-pick .kchip:not(.on)').count()) await page.locator('#view-mind .card.guide .kit-pick .kchip:not(.on)').first().click();
+  await page.click('#view-mind .card.guide .kit-pick .btn.primary'); await sleep(300);
+  await page.click('#view-mind .card.guide .kchip:has-text("Pass USMLE")'); await sleep(300);
+  await seg(page, 'Aims'); await page.click('#view-mind .kit-card .kchip:has-text("Be consistently fit")'); await sleep(300); await seg(page, 'Overview');
+  check(await page.locator('#view-mind .card.guide .g-step.done').count() === 2 && await page.locator('#view-mind .kit-card').count() === 0, 'kit added: habits and objectives ticked off, only “capture a task” left');
   await page.fill('#view-mind .capture input', 'call bank tomorrow 20m !'); await sleep(100);
   check(/20m|⏱/.test(await page.locator('#view-mind .cap-hint').innerText()), 'capture shows what it understood');
   await page.press('#view-mind .capture input', 'Enter'); await sleep(300);
@@ -209,7 +213,7 @@ const rawLeak = (page) => page.evaluate(() => /\b(null|undefined|NaN|\[object Ob
   check(await overflow(page) <= 0, 'no overflow in Movies insights @360'); await sleep(900); await page.screenshot({ path: `${shots}/12b-movies-360.png`, fullPage: true });
   await page.click('#view-mind .lib-tabs button:has-text("Discover")'); await sleep(300); check(/Next up from your list/i.test(await page.locator('#view-mind').innerText()), 'Movies Discover ranks the plan-to list');
   const sx = '<gamesList><games><game><appID>10</appID><name><![CDATA[Counter-Strike]]></name><hoursLast2Weeks>3.5</hoursLast2Weeks><hoursOnRecord>1,234.5</hoursOnRecord></game><game><appID>20</appID><name><![CDATA[Portal 2]]></name><hoursOnRecord>12.0</hoursOnRecord></game><game><appID>40</appID><name><![CDATA[Never Opened]]></name></game></games></gamesList>';
-  await page.click('#view-mind .lib-tabs button:has-text("Connect")'); await page.fill('#view-mind textarea', sx); await page.click('#view-mind button:has-text("Import games")'); await sleep(400);
+  await page.click('#view-mind .lib-tabs button:has-text("Connect")'); if (await page.locator('#view-mind .imp-row[data-imp=steam] summary').count() && !(await page.locator('#view-mind .imp-row[data-imp=steam]').getAttribute('open') !== null)) await page.click('#view-mind .imp-row[data-imp=steam] summary'); await page.fill('#view-mind .imp-row[data-imp=steam] textarea', sx); await page.click('#view-mind button:has-text("Import games")'); await sleep(400);
   check(/Steam: 3 added/.test(await page.locator('#view-mind').innerText()), 'Steam XML imported');
   await page.click('#view-mind .lib-tabs button:has-text("Shelf")'); await page.click('#view-mind .kinds button:has-text("Games")'); await sleep(400);
   check(/Your play/.test(await page.locator('#view-mind').innerText()) && /1,247/.test(await page.locator('#view-mind').innerText()), 'Games shows hours played');

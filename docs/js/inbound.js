@@ -14,6 +14,19 @@ const validDate = (v) => typeof v === 'string' && DATE.test(v) && !isNaN(new Dat
 export const slug = (v) => String(v ?? '').toLowerCase().trim().replace(SLUG, '-').replace(/^-+|-+$/g, '').slice(0, 40);
 export const refOf = (app, id) => `${app}:${id}`;
 
+// An app's icon: one emoji (flags and ZWJ sequences stay whole) or a monogram of up to 2 letters. Cut by graphemes, never by
+// UTF-16 units, so no half emoji or lone surrogate ever reaches the avatar.
+const seg = typeof Intl !== 'undefined' && Intl.Segmenter ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null;
+const graphemes = (s) => (seg ? [...seg.segment(s)].map(x => x.segment) : Array.from(s));
+export function iconOf(v) {
+  const s = (typeof v === 'string' ? v : v == null ? '' : String(v)).replace(/[\uD800-\uDFFF]/g, (c, i, all) => {   // drop lone surrogates
+    const hi = c.charCodeAt(0) < 0xDC00; return (hi ? /[\uDC00-\uDFFF]/.test(all[i + 1] || '') : /[\uD800-\uDBFF]/.test(all[i - 1] || '')) ? c : '';
+  }).trim();
+  if (!s) return '';
+  const g = graphemes(s);
+  return /^[\p{L}\p{N}]$/u.test(g[0]) ? g.slice(0, 2).filter(x => /^[\p{L}\p{N}]$/u.test(x)).join('') : g[0];
+}
+
 /** A clean copy of a status file, keyed by the lowercase app name. Returns null if it isn't an object at all.
  *  `issues` lists what was ignored, so an app's author can see exactly what Citrus did with the file. */
 export function normalizeStatus(st, fallbackName = '') {
@@ -48,7 +61,7 @@ export function normalizeStatus(st, fallbackName = '') {
   const actions = list(st.actions, 'actions').map((a, i) => {
     const id = slug(a?.id), url = safeUrl(a?.url), label = str(a?.label, 28).trim();
     if (!id || !url || !label || aseen.has(id)) { issues.push(`actions[${i}]: needs id, label and an http(s) url, ignored`); return null; }
-    aseen.add(id); return { id, label, url, icon: str(a.icon, 4), minutes: Math.max(0, Math.min(240, Math.round(+a.minutes || 0))) };
+    aseen.add(id); return { id, label, url, icon: iconOf(a.icon), minutes: Math.max(0, Math.min(240, Math.round(+a.minutes || 0))) };
   }).filter(Boolean);
 
   const seen = new Set();
@@ -67,11 +80,13 @@ export function normalizeStatus(st, fallbackName = '') {
   }).filter(Boolean);
 
   return {
-    app, title: str(st.title, 40), icon: str(st.icon, 4), color: /^#[0-9a-f]{3,8}$/i.test(st.color || '') ? st.color : '', url: safeUrl(st.url || st.extra?.url),
+    app, title: str(st.title, 40), icon: iconOf(st.icon), color: /^#[0-9a-f]{3,8}$/i.test(st.color || '') ? st.color : '', url: safeUrl(st.url || st.extra?.url),
     summary: str(st.summary), updatedAt, asks, pending, metrics, progress, inbox, actions, issues,
     next: st.next && typeof st.next === 'object' ? { title: str(st.next.title, 80), minutes: Math.max(0, +st.next.minutes || 0) } : null,
     today,
-    due: Number.isFinite(+st.due) ? +st.due : undefined, estimatedMinutes: Number.isFinite(+st.estimatedMinutes) ? +st.estimatedMinutes : undefined,
+    // counts shown in badges: whole, 0–999 (one app sending 5000 must not take over the header); minutes up to a day
+    due: st.due != null && st.due !== '' && Number.isFinite(+st.due) ? Math.max(0, Math.min(999, Math.round(+st.due))) : undefined,
+    estimatedMinutes: st.estimatedMinutes != null && st.estimatedMinutes !== '' && Number.isFinite(+st.estimatedMinutes) ? Math.max(0, Math.min(1440, Math.round(+st.estimatedMinutes))) : undefined,
     extra: st.extra && typeof st.extra === 'object' ? { streak: +st.extra.streak || undefined } : {},
   };
 }

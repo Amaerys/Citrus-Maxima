@@ -1,32 +1,85 @@
 {
+  "id": "./",
   "name": "Citrus Maxima",
   "short_name": "Citrus",
   "description": "Personal scheduler, rota viewer and mind: tasks, habits, objectives, reflection, and the hub for your apps.",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
+  "display_override": [
+    "standalone",
+    "minimal-ui"
+  ],
+  "orientation": "any",
+  "lang": "en",
+  "dir": "ltr",
+  "categories": [
+    "productivity",
+    "medical",
+    "lifestyle"
+  ],
   "background_color": "#0e0f13",
   "theme_color": "#0e0f13",
   "shortcuts": [
     {
       "name": "Today",
-      "url": "./index.html#today"
+      "short_name": "Today",
+      "url": "./index.html#today",
+      "icons": [
+        {
+          "src": "icons/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
     },
     {
-      "name": "Rota",
-      "url": "./index.html#rota"
+      "name": "Work",
+      "short_name": "Work",
+      "url": "./index.html#rota",
+      "icons": [
+        {
+          "src": "icons/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
     },
     {
       "name": "Plan",
-      "url": "./index.html#plan"
+      "short_name": "Plan",
+      "url": "./index.html#plan",
+      "icons": [
+        {
+          "src": "icons/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
     },
     {
       "name": "Mind",
-      "url": "./index.html#mind"
+      "short_name": "Mind",
+      "url": "./index.html#mind",
+      "icons": [
+        {
+          "src": "icons/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
     },
     {
       "name": "Apps",
-      "url": "./index.html#apps"
+      "short_name": "Apps",
+      "url": "./index.html#apps",
+      "icons": [
+        {
+          "src": "icons/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
     }
   ],
   "icons": [
@@ -39,13 +92,20 @@
     {
       "src": "icons/icon-192.png",
       "sizes": "192x192",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any"
     },
     {
       "src": "icons/icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ],
   "share_target": {

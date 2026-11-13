@@ -10,7 +10,7 @@ const check = (c, m) => { if (!c) { bad++; console.log('  ✗', m); } else conso
 const seedFn = () => {
   const n = new Date(), y = n.getFullYear(), mo = n.getMonth() + 1, dim = new Date(y, mo, 0).getDate();
   const legend = { D: { hours: { start: 480, end: 1020, durationMin: 540, overnight: false }, desc: 'Day' }, E: { hours: { start: 780, end: 1320, durationMin: 540, overnight: false }, desc: 'Evening' }, D1: { desc: 'Clinic A' }, E1: { desc: 'Clinic A' } };
-  const all = (c) => Object.fromEntries(Array.from({ length: dim }, (_, i) => [i + 1, c]));
+  const all = (c) => [''].concat(Array.from({ length: dim }, () => c));   // days are arrays indexed by day of month
   const people = [{ name: 'Dr Me Myself', id: '1', days: all('D1') }, { name: 'Dr Faisal Alotaibi', id: '2', mobile: '0501112222', days: all('D1') }, { name: 'Dr Meshal Qahtani', id: '3', days: all('E1') }, { name: 'Dr Mariam Zahrani', id: '4', days: all('') }, { name: 'Dr Mohammed Merri Alharbi', id: '5', days: all('D1') }, { name: 'Dr Mohammed Salem', id: '6', days: all('D1') }];
   localStorage.setItem('citrus.state.v1', JSON.stringify({ me: { name: 'Dr Me Myself', id: '1' }, rotas: { gp: { id: 'gp', unitKind: 'gp', unit: 'GP', year: y, month: mo, daysInMonth: dim, legend, legendList: [], people, importedAt: Date.now(), sourceName: 't.xlsx' } } }));
 };
@@ -23,7 +23,7 @@ const tab = async (p, v) => { await p.click(`nav.tabs button[data-view=${v}]`); 
 const p = await open(390, 844);
 console.log('Work');
 check(await p.locator('nav.tabs button[data-view=team]').count() === 0, 'no separate Team tab');
-check(await p.locator('nav.tabs button').count() === 6, 'six tabs');
+check(await p.locator('nav.tabs button:not(.rail-only)').count() === 6, 'six tabs (Settings is a rail-only item)');
 await tab(p, 'rota'); check(/Work/.test(await txt(p, '#view-rota h1')), 'Work page');
 await p.click('.work-seg button:has-text("People")'); await sleep(200); check(await p.locator('#view-rota .item').count() >= 5, 'Team list inside Work');
 await p.click('.work-seg button:has-text("Calendar")'); await sleep(200);

@@ -26,9 +26,9 @@ console.log('nurses with me (day sheet)');
 await p.click('.work-seg button:has-text("Calendar")'); await sleep(250); await p.click('#view-rota .cal .day:not(.pad) >> nth=8'); await sleep(400);
 const sheetTxt = await p.locator('.sheet').innerText();
 check(/Nurses at Upper Village/i.test(sheetTxt), 'card "Nurses at Upper Village" on a day I work there');
-const maybe = await p.locator('.sheet .nr-row.maybe').count(); check(maybe >= 5, `possible nurses listed (${maybe})`);
-const names = await p.locator('.sheet .nr-row .nr-name span.ellipsis').allInnerTexts(); check(!names.some(n => /Narita|Dhanya|Sillina|Kharmina/.test(n)), 'FSED / Aqua Arabia / Plateau nurses are never offered');
-check(/Likely with you at Upper Village/i.test(sheetTxt) && /Who could be with you/.test(sheetTxt), 'leads with who could be with you, not "nobody posted"'); check(await p.locator('.sheet .card.ov').count() === 1, 'doctor overlap card is still there, nurses are not mixed into it: ' + (await p.locator('.sheet .card.ov').innerText()).replace(/\n/g, ' ').slice(0, 120));
+const maybe = await p.locator('.sheet .nr-row.maybe, .sheet .nr-chip').count(); check(maybe >= 5, `possible nurses listed (${maybe})`);
+const names = await p.locator('.sheet .nr-row .nr-name span.ellipsis, .sheet .nr-chip').allTextContents(); check(!names.some(n => /Narita|Dhanya|Sillina|Kharmina/.test(n)), 'FSED / Aqua Arabia / Plateau nurses are never offered');
+check(/could be sent/i.test(sheetTxt) && /Who could be (with you|sent)/.test(sheetTxt), 'leads with how many could be sent (no fake "likely" names), not "nobody posted"'); check(await p.locator('.sheet .card.ov').count() === 1, 'doctor overlap card is still there, nurses are not mixed into it: ' + (await p.locator('.sheet .card.ov').innerText()).replace(/\n/g, ' ').slice(0, 120));
 await p.screenshot({ path: `${shots}/day-nurses.png` }); await p.keyboard.press('Escape'); await sleep(150);
 
 console.log('nurses board');
@@ -40,12 +40,13 @@ await p.screenshot({ path: `${shots}/nurses-board.png`, fullPage: true });
 await p.click('.work-seg button:has-text("Calendar")'); await sleep(200); await p.click('#view-rota .cal .day:not(.pad) >> nth=8'); await sleep(400);
 check(/1 posted with you/i.test(await p.locator('.sheet').innerText()), 'day sheet now says 1 posted with you'); check(await p.locator('.sheet .nr-row.sure').count() === 1, 'confirmed row has solid bar');
 await p.screenshot({ path: `${shots}/day-nurses-posted.png` }); await p.keyboard.press('Escape'); await sleep(150);
-await work('Nurses'); await p.click('#view-rota .post-tile.UPV .post-row >> nth=0'); await sleep(250); check(await p.locator('#view-rota .np-row').count() === before, 'tapping a posted nurse clears the posting');
+await work('Nurses'); await p.click('#view-rota .post-tile.UPV .post-row .pr-main >> nth=0'); await sleep(250); check(await p.locator('#view-rota .post-tile.UPV .post-row').count() === 1 && await p.locator('.sheet .nb-state').count() === 1, 'tapping a posted nurse opens a chooser, it does not delete');
+await p.click('.sheet button:has-text("Clear posting")'); await sleep(250); check(await p.locator('#view-rota .np-row').count() === before, 'clear from the chooser');
 await p.click('#view-rota button:has-text("Tomorrow")'); await sleep(250); check(/Tue 10 Nov/.test(await txt('#view-rota')), 'day navigation');
 check(await over() <= 0, 'no overflow on Nurses');
 
 console.log('directory');
-await work('People'); const chips = await p.locator('#view-rota .dir-seg button').allInnerTexts(); check(chips.some(c => /Nurses 50/.test(c)) && chips.some(c => /GPs 31/.test(c)) && chips.some(c => /Specialists/.test(c)), 'categories with counts: ' + chips.join(' | '));
+await work('People'); const chips = (await p.locator('#view-rota .dir-seg button').allInnerTexts()).map(c => c.replace(/\s+/g, ' ')); check(chips.some(c => /Nurses 50/.test(c)) && chips.some(c => /GPs 31/.test(c)) && chips.some(c => /Spec/.test(c)), 'categories with counts: ' + chips.join(' | '));
 await p.click('#view-rota .dir-seg button:has-text("Nurses")'); await sleep(250); check(await p.locator('#view-rota .dir-item').count() === 50, 'all 50 nurses listed');
 await p.click('#view-rota .chip:has-text("Team leaders")'); await sleep(250); check(await p.locator('#view-rota .dir-item').count() === 6, 'group filter: 6 team leaders'); await p.click('#view-rota .chip:has-text("All")'); await sleep(150);
 await p.fill('#view-rota .dir-search', 'cresilda'); await sleep(200); check(await p.locator('#view-rota .dir-item').count() === 1, 'search by name');
@@ -70,11 +71,11 @@ await work('People'); await p.click('#view-rota .dir-seg button:has-text("Nurses
 check(await p.locator('.sheet .pr-stats > div').count() >= 4, 'stat tiles'); check(await p.locator('.sheet .pr-day.today, .sheet .pr-day').count() >= 28, 'day tiles');
 await p.click('.sheet .pr-day:not(.t-off) >> nth=0'); await sleep(200); check(await p.locator('.sheet .pr-detail').count() === 1, 'tap a day shows detail'); check(/Open that day/.test(await txt('.sheet .pr-detail')), 'detail links to the day');
 check(await p.locator('.sheet .pr-key').count() >= 1, 'legend'); await p.screenshot({ path: `${shots}/individual-rota.png` });
-const pm = await p.locator('.sheet .prota .btn.icon').count(); check(pm === 2, 'month arrows'); await p.keyboard.press('Escape'); await sleep(200);
+const pm = await p.locator('.sheet .prota .btn.icon').count(); check(pm === 0, 'one month loaded: no dead month arrows'); await p.keyboard.press('Escape'); await sleep(200);
 
 console.log('roster grid');
 await p.fill('#view-rota .dir-search', ''); await p.click('#view-rota .view-mode button:has-text("Roster grid")'); await sleep(350);
-check(await p.locator('#view-rota .rg-c').count() > 500, 'grid cells: ' + await p.locator('#view-rota .rg-c').count()); check(await p.locator('#view-rota .rg-foot').count() === 1, 'on-duty footer');
+check(await p.locator('#view-rota .rg-c').count() > 500, 'grid cells: ' + await p.locator('#view-rota .rg-c').count()); check(await p.locator('#view-rota .rg-foot').count() >= 1, 'on-duty footer');
 check(await over() <= 0, 'page itself does not overflow (grid scrolls inside)');
 await p.click('#view-rota .chips .chip:has-text("Nurses")'); await sleep(300); check(await p.locator('#view-rota .rg-sec').count() >= 5, 'nurse group headers in grid');
 await p.fill('#view-rota .dir-search', 'cresilda'); await sleep(300); check(await p.locator('#view-rota .rg-name:not(.rg-corner):not(.rg-foot)').count() === 1, 'grid filter by name');

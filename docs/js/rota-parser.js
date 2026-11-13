@@ -228,16 +228,28 @@ export function parseRotaGrid(grid, meta = {}, outlineGrid = []) {
 // ---------- nurses' schedule ----------
 const STAFF_TITLE = /^(HN|RN|SN|PN|AN|CN|NA|PHN|NURSE)\b/i;
 const clean = (t) => str(t).replace(/\s+/g, ' ').trim();
-/** Which block of the sheet a row sits in. Section headings are merged cells, so their text repeats across the row. */
-function nurseSection(label, prev) {
-  const t = label.toLowerCase();
-  if (/team leader/.test(t)) return 'leaders';
-  if (/construction/.test(t)) return 'pool';
-  if (/free standing|fsed/.test(t)) return 'fsed';
-  if (/aqua/.test(t)) return 'aqua';
-  if (/plat/.test(t)) return 'plateau';
-  return prev;
+/** Known blocks of the nurses' sheet, most specific first ("Construction Clinics Team Leaders" is leaders, not the pool). */
+const SECTIONS = [
+  ['leaders', /team leader/], ['fa', /first\s*aid/], ['pool', /construction/], ['fsed', /free standing|\bfsed\b/], ['sixflags', /six\s*flags/],
+  ['aqua', /aqua/], ['plateau', /\bplat(eau|ue)\b/], ['nairiya', /nairiya/], ['head', /head nurse/],
+];
+export const SITE_CODES = ['UPV', 'LPV', 'UPO', 'LPO'];
+/** Which block a heading starts. A heading the app doesn't know becomes its own group named from the sheet, never part of the block above it:
+ *  folding new blocks into the previous one is how "SIX FLAGS" nurses ended up listed as Aqua Arabia. */
+export function nurseSection(heading) {
+  const t = clean(heading), low = t.toLowerCase(), known = SECTIONS.find(([, re]) => re.test(low));
+  const sites = SITE_CODES.filter(c => new RegExp(`\\b${c}\\b`).test(t.toUpperCase()));   // "(UPV-LPV)" says where that block can be posted
+  if (known) return { key: known[0], heading: t, sites, known: true };
+  let label = t.replace(/\([^)]*\)/g, ' ').replace(/[-–:]+\s*$/, '').replace(/\s+/g, ' ').trim() || t;
+  if (label === label.toUpperCase()) label = label.toLowerCase().replace(/(^|[\s/-])([a-z])/g, (m, a, b) => a + b.toUpperCase());   // "SIX FLAGS" → "Six Flags"
+  label = label.slice(0, 40);
+  const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'section';
+  return { key: `sec:${slug}`, heading: t, sites, known: false, label };
 }
+/** The heading text of a row with no person: the first cell with letters before the day columns (headings are merged cells, so it repeats). */
+const headingOf = (row, upTo) => { for (let c = 0; c < upTo; c++) { const v = clean(row[c]); if (/[a-z]{2}/i.test(v)) return v; } return ''; };
+const pullDest = (v) => clean(v.replace(/^pull\s*out\s*[-–:]?\s*/i, '').replace(/\bproject\b/i, ''));
+const titleCase = (t) => t.toLowerCase().replace(/(^|\s)([a-z])/g, (m, a, b) => a + b.toUpperCase());
 function parseNurseGrid(grid, header, meta) {
   const unit = clean(cellMeta(grid, 'unit/department')) || meta.unit || '';
   let monthVal = cellMeta(grid, 'month&year'), year = meta.year, month = meta.month;
@@ -246,23 +258,36 @@ function parseNurseGrid(grid, header, meta) {
   else if (monthVal) { const m = /([A-Za-z]{3,})\w*[\s-]*(\d{2,4})/.exec(str(monthVal)); if (m) { month = new Date(`${m[1]} 1, 2000`).getMonth() + 1; year = +m[2] < 100 ? 2000 + +m[2] : +m[2]; } }
   const dayNums = Object.keys(header.dayCols).map(Number).sort((a, b) => a - b);
   const daysInMonth = (year && month) ? new Date(year, month, 0).getDate() : dayNums[dayNums.length - 1];
-  const people = []; let section = 'head', legendRow = -1;
+  const people = [], groups = {}, pulls = {}; let section = null, banner = '', legendRow = -1;
+  const firstDayCol = Math.min(...Object.values(header.dayCols));
+  const enter = (heading) => {
+    const sec = nurseSection(heading);
+    if (!people.length && !sec.known) { banner = sec.heading; return; }   // the project banner above everyone ("Qiddiyah Project-HMC"), not a block
+    section = sec.key; const g = groups[sec.key] ||= { heading: sec.heading };
+    if (!sec.known) { g.label = sec.label; if (!sec.sites.length) g.fixed = sec.label; }
+    if (sec.sites.length) g.choices = sec.sites;
+  };
   for (let r = header.row + 2; r < grid.length; r++) {
     const row = grid[r] || [];
     if (row.some(v => /^legend$/i.test(clean(v)))) { legendRow = r; break; }
     const name = clean(row[header.nameCol]), title = header.titleCol >= 0 ? clean(row[header.titleCol]) : '', id = header.idCol >= 0 ? clean(row[header.idCol]).replace(/\.0$/, '') : '';
-    if (!name) { const label = clean(row[1]); if (label) section = nurseSection(label, section); continue; }   // a heading row: the text sits in the first column
-    if (!STAFF_TITLE.test(title) && !/^\d{3,}$/.test(id)) { section = nurseSection(clean(row[1]) || name, section); continue; }   // a section heading, not a person
+    if (!name || (!STAFF_TITLE.test(title) && !/^\d{3,}$/.test(id))) { const t = headingOf(row, firstDayCol) || name; if (t) enter(t); continue; }   // a heading row, not a person
     const clinic = header.clinicCol >= 0 ? clean(row[header.clinicCol]) : '';
-    const days = {};
+    const days = {}, dest = {};
     for (const d of dayNums) {
       if (d > daysInMonth) continue;
       let v = clean(row[header.dayCols[d]]); if (!v || v === '/') continue;   // "/" is a rest day, same as blank
-      if (/^pull out/i.test(v)) v = 'PULL OUT'; days[d] = v;
+      // "PULL OUT - NARJIS" / "PULL OUT - NAIRIYA Project": keep where they were pulled to, one code per destination
+      if (/^pull\s*out/i.test(v)) { const to = pullDest(v); v = to ? `PULL OUT - ${to.toUpperCase()}` : 'PULL OUT'; if (to) { dest[to.toUpperCase()] = (dest[to.toUpperCase()] || 0) + 1; pulls[v] = titleCase(to); } }
+      days[d] = v;
     }
-    const leader = /\(leader\)/i.test(name), fa = /\(fa\)/i.test(name), grp = /nairiya/i.test(clinic) ? 'nairiya' : fa ? 'fa' : section;
-    people.push({ sn: String(people.length + 1), id, name: name.replace(/\s*\((leader|fa)\)/ig, '').trim(), title, mobile: header.mobileCol >= 0 ? clean(row[header.mobileCol]).replace(/\.0$/, '') : '', clinic, group: grp, leader, fa, days, flags: {} });
+    const leader = /\(leader\)/i.test(name), fa = /\(fa\)/i.test(name);
+    // head nurse by title (HN, "ALL SITES"), wherever the sheet puts them; Nairiya by clinic; first aiders also by their "(FA)" tag
+    const grp = /^HN\b/i.test(title) || /all sites/i.test(clinic) ? 'head' : /nairiya/i.test(clinic) ? 'nairiya' : fa ? 'fa' : section || 'pool';
+    const pulledTo = Object.entries(dest).sort((a, b) => b[1] - a[1])[0]?.[0];
+    people.push({ sn: String(people.length + 1), id, name: name.replace(/\s*\((leader|fa)\)/ig, '').trim(), title, mobile: header.mobileCol >= 0 ? clean(row[header.mobileCol]).replace(/\.0$/, '') : '', clinic, group: grp, leader, fa, days, flags: {}, ...(pulledTo ? { pulledOut: titleCase(pulledTo) } : {}) });
   }
+  for (const k of Object.keys(groups)) if (!people.some(p => p.group === k)) delete groups[k];   // only blocks that hold someone
   // legend sits below the names: code | hours | length
   const legend = {}, entries = [];
   const add = (code, desc, hoursText) => { const hours = parseHours(hoursText); legend[code] = { code, desc, hoursText, hours, raw: `${code} ${hoursText}` }; entries.push({ code, desc, hoursText, raw: `${code} ${hoursText}` }); };
@@ -273,11 +298,38 @@ function parseNurseGrid(grid, header, meta) {
     if (parseHours(next)) add(code, `${code} shift`, next); else if (/vacation|leave/i.test(next)) { legend[code] = { code, desc: next, hoursText: '', hours: null, raw: next }; entries.push({ code, desc: next, hoursText: '', raw: next }); }
   }
   for (const [code, label] of [['ACLS', 'ACLS / BLS training'], ['BLS', 'ACLS / BLS training'], ['PULL OUT', 'Pulled out to another project'], ['END OF CONTRACT', 'Contract ended']]) legend[code] ||= { code, desc: label, hoursText: '', hours: null, raw: label };
+  for (const [code, to] of Object.entries(pulls)) legend[code] ||= { code, desc: `Pulled out → ${to}`, hoursText: '', hours: null, raw: `Pulled out → ${to}` };
   legend.VL ||= { code: 'VL', desc: 'Vacation leave', hoursText: '', hours: null, raw: 'Vacation leave' };
   const weekdayRow = grid[header.row + 1] || [], names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const w1 = str(weekdayRow[header.dayCols[1]]).slice(0, 3), weekdayOk = !(year && month) || !w1 || names[new Date(year, month - 1, 1).getDay()].toLowerCase() === w1.toLowerCase();
-  return { unit, unitKind: 'nurse', year, month, daysInMonth, people, legend, legendList: entries.map(e => ({ code: e.code, desc: e.desc, hoursText: e.hoursText, raw: e.raw })), weekdayOk,
-    id: `nurse-${year}-${String(month).padStart(2, '0')}`, importedAt: new Date().toISOString(), sourceName: meta.sourceName || '' };
+  const warnings = nurseWarnings(grid, header, legendRow, people, legend, dayNums.filter(d => d <= daysInMonth));
+  return { unit, unitKind: 'nurse', year, month, daysInMonth, people, groups, legend, legendList: entries.map(e => ({ code: e.code, desc: e.desc, hoursText: e.hoursText, raw: e.raw })), weekdayOk, warnings,
+    ...(banner ? { banner } : {}), id: `nurse-${year}-${String(month).padStart(2, '0')}`, importedAt: new Date().toISOString(), sourceName: meta.sourceName || '' };
+}
+
+/** Things in the sheet that look wrong but that the import still accepts — shown to the user, never silently "fixed". */
+function nurseWarnings(grid, header, legendRow, people, legend, days) {
+  const out = [], first = (p) => p.name.split(' ')[0];
+  // the same mobile on two people is almost always a copy-paste slip
+  const byMob = {}; for (const p of people) { const m = p.mobile.replace(/\D/g, '').replace(/^(966|0)/, ''); if (m) (byMob[m] ||= []).push(p); }
+  for (const list of Object.values(byMob)) if (list.length > 1) out.push({ kind: 'mobile-shared', text: `${list.map(first).join(' and ')} share the same mobile number`, keys: list.map(p => p.id || p.name) });
+  // Saudi mobiles are 5xxxxxxxx (9 digits, or 10 with the leading 0)
+  for (const p of people) { const m = p.mobile.replace(/\D/g, '').replace(/^966/, '').replace(/^0/, ''); if (m && !/^5\d{8}$/.test(m)) out.push({ kind: 'mobile-odd', text: `${first(p)}’s mobile (${p.mobile}) is not 9 digits starting with 5`, keys: [p.id || p.name] }); }
+  if (legendRow < 0) return out;
+  const firstDayCol = Math.min(...Object.values(header.dayCols));
+  for (let r = legendRow + 1; r < grid.length; r++) {
+    const cells = (grid[r] || []).map(clean);
+    // legend line "A2 | 14:00-02:00 | 8Hrs": the stated length must match the hours
+    const i = cells.findIndex(c => /^[A-Z][A-Z0-9+]{0,2}$/.test(c));
+    if (i >= 0 && i < firstDayCol - 1) { const h = parseHours(cells[i + 1] || ''), len = /^(\d+(?:\.\d+)?)\s*hrs?$/i.exec(cells[i + 2] || ''); if (h && len && Math.abs(h.durationMin / 60 - +len[1]) > 0.01) out.push({ kind: 'legend-hours', text: `Legend: ${cells[i]} is ${cells[i + 1]} (${+(h.durationMin / 60).toFixed(2)}h) but says ${cells[i + 2]}`, code: cells[i] }); }
+    // the sheet's own head-count table ("D | 16 | 16 | 15 …" under the day columns): check it against what was read
+    const label = cells[firstDayCol - 1] || '';
+    if (legend[label.toUpperCase()]?.hours && days.filter(d => /^\d+$/.test(cells[header.dayCols[d]] || '')).length >= days.length / 2) {
+      const bad = days.filter(d => /^\d+$/.test(cells[header.dayCols[d]] || '') && +cells[header.dayCols[d]] !== people.filter(p => (p.days[d] || '').toUpperCase() === label.toUpperCase()).length);
+      if (bad.length) out.push({ kind: 'count', text: `${label} head-count in the sheet differs from the names on ${bad.length} day${bad.length === 1 ? '' : 's'} (${bad.slice(0, 6).join(', ')}${bad.length > 6 ? '…' : ''})`, code: label, days: bad });
+    }
+  }
+  return out;
 }
 
 export async function parseRotaFile(arrayBuffer, sourceName = '') {

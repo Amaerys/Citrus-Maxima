@@ -23,6 +23,8 @@ page.on('pageerror', e => errors.push('pageerror: ' + e.message));
 page.on('console', m => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
 
 // Fake "today" = 17 Nov 2026 (a night shift day for Dr. Amro) so views are interesting
+// "me" is never guessed any more (beta T10-01): seed it, like the user picking their row once
+await page.addInitScript(() => { if (!localStorage.getItem('citrus.state.v1')) localStorage.setItem('citrus.state.v1', JSON.stringify({ me: { name: 'Dr. Reem Mahgoub', id: '437326' } })); });
 await page.addInitScript(() => {
   const fixed = new Date(2026, 10, 4, 10, 30);
   const _D = Date;
@@ -35,7 +37,7 @@ await page.screenshot({ path: `${out}/01-empty.png` });
 
 // import files
 const files = ['main.xlsx', 'uv.xlsx', 'fsed.xlsx'].map(f => path.resolve(root, '../test/data', f));
-await page.setInputFiles('#view-today input[type=file]', files);
+await page.click('nav.tabs button[data-view=rota]'); await page.setInputFiles('#view-rota input[type=file] >> nth=0', files); await page.click('nav.tabs button[data-view=today]');
 await page.waitForTimeout(800);
 await page.screenshot({ path: `${out}/02-today.png`, fullPage: true });
 
@@ -50,16 +52,16 @@ await page.click('#view-rota .cal .day:not(.pad) >> nth=20');
 await page.waitForTimeout(300);
 await page.screenshot({ path: `${out}/04-day-sheet.png` });
 console.log('DAY SHEET >>>\n' + (await page.innerText('.sheet')).slice(0, 700));
-await page.click('.sheet-bg', { position: { x: 10, y: 10 } });
+await page.evaluate(() => document.querySelectorAll('.sheet-bg').forEach(e => e.remove()));
 
-await page.click('nav.tabs button[data-view=rota]'); await page.click('.work-seg button:has-text("Team")');
+await page.click('nav.tabs button[data-view=rota]'); await page.click('.work-seg button:has-text("People")');
 await page.waitForTimeout(300);
 await page.screenshot({ path: `${out}/05-team.png`, fullPage: true });
 await page.click('#view-rota .item >> nth=1');
 await page.waitForTimeout(300);
 await page.screenshot({ path: `${out}/06-person.png` });
 console.log('PERSON >>>\n' + (await page.innerText('.sheet')).slice(0, 400));
-await page.click('.sheet-bg', { position: { x: 10, y: 10 } });
+await page.evaluate(() => document.querySelectorAll('.sheet-bg').forEach(e => e.remove()));
 
 await page.click('nav.tabs button[data-view=plan]');
 await page.waitForTimeout(400);
@@ -70,10 +72,10 @@ const acc = page.locator('#view-plan .tl-block button:has-text("Accept")').first
 if (await acc.count()) { await acc.dispatchEvent('click'); await page.waitForTimeout(300); }
 await page.click('#view-plan button:has-text("Edit goals")'); await page.waitForTimeout(200);
 await page.screenshot({ path: `${out}/08-goals.png` });
-await page.click('.sheet-bg', { position: { x: 10, y: 10 } });
+await page.evaluate(() => document.querySelectorAll('.sheet-bg').forEach(e => e.remove()));
 await page.click('#view-plan button:has-text("Rules")'); await page.waitForTimeout(200);
 await page.screenshot({ path: `${out}/09-rules.png` });
-await page.click('.sheet-bg', { position: { x: 10, y: 10 } });
+await page.evaluate(() => document.querySelectorAll('.sheet-bg').forEach(e => e.remove()));
 
 await page.click('nav.tabs button[data-view=apps]'); await page.waitForTimeout(300); await page.screenshot({ path: `${out}/09b-apps.png`, fullPage: true }); await page.click('#btnMore');
 await page.waitForTimeout(300);
@@ -82,9 +84,10 @@ await page.screenshot({ path: `${out}/10-more.png`, fullPage: true });
 // desktop pass
 const dctx = await browser.newContext({ viewport: { width: 1366, height: 860 }, deviceScaleFactor: 1 });
 const dp = await dctx.newPage(); dp.on('pageerror', e => errors.push('desktop pageerror: ' + e.message));
+await dp.addInitScript(() => { if (!localStorage.getItem('citrus.state.v1')) localStorage.setItem('citrus.state.v1', JSON.stringify({ me: { name: 'Dr. Reem Mahgoub', id: '437326' } })); });
 await dp.addInitScript(() => { const fixed = new Date(2026, 10, 4, 10, 30); const _D = Date; class D extends _D { constructor(...a) { super(...(a.length ? a : [fixed.getTime()])); } static now() { return fixed.getTime(); } } window.Date = D; });
 await dp.goto(`http://localhost:${port}/index.html`); await dp.waitForTimeout(500);
-await dp.setInputFiles('#view-today input[type=file]', files); await dp.waitForTimeout(800);
+await dp.click('nav.tabs button[data-view=rota]'); await dp.setInputFiles('#view-rota input[type=file] >> nth=0', files); await dp.click('nav.tabs button[data-view=today]'); await dp.waitForTimeout(800);
 await dp.screenshot({ path: `${out}/20-desktop-today.png` });
 await dp.click('nav.tabs button[data-view=plan]'); await dp.waitForTimeout(400); await dp.screenshot({ path: `${out}/21-desktop-plan.png` });
 await dp.click('nav.tabs button[data-view=apps]'); await dp.waitForTimeout(300); await dp.screenshot({ path: `${out}/22-desktop-apps.png` });
@@ -97,5 +100,7 @@ await page.reload(); await page.waitForTimeout(600);
 const persisted = await page.evaluate(() => Object.keys(JSON.parse(localStorage.getItem('citrus.state.v1')).rotas));
 console.log('persisted rotas:', persisted);
 
-console.log('\nERRORS:', errors.length ? errors : 'none');
-await browser.close(); server.close();
+const real = errors.filter(e => !/Failed to load resource/.test(e));   // offline fonts / Google are not app errors
+if (!persisted.length) real.push('rotas did not persist');
+console.log('\nERRORS:', real.length ? real : 'none');
+await browser.close(); server.close(); console.log(real.length ? '✗ e2e FAILED' : '✓ e2e ok'); process.exit(real.length ? 1 : 0);

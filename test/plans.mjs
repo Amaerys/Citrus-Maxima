@@ -14,8 +14,8 @@ await t('leave planner: calendar days are billed; shifts covered counted; entitl
 });
 await t('best windows: ranked by shifts replaced, non-overlapping', () => { const w = P.bestWindows(s, 3, { now: new Date(2026, 9, 31), horizon: 25, top: 3 }); assert.ok(w.length >= 2); assert.ok(w[0].covered >= w[w.length - 1].covered); for (let i = 1; i < w.length; i++) assert.ok(Math.abs(new Date(w[i].from) - new Date(w[i - 1].from)) >= 3 * 864e5); });
 await t('swap finder: only colleagues who are off that day and work on a day I am off', () => {
-  const r = P.swapOptions(s, new Date(2026, 10, 4)); assert.equal(r.options.length, 1, 'Ann is off on 4 and works on my off days; Bo works that day'); assert.equal(r.options[0].person.name, 'Dr Ann'); assert.ok(r.options[0].gives.length >= 1); assert.ok(r.options[0].gives.every(g => new Date(g.date).getDate() % 3 === 0));
-  assert.deepEqual(P.swapOptions(s, new Date(2026, 10, 3)).options, [], 'nothing to hand over on a day off');
+  const r = P.swapOptions(s, new Date(2026, 10, 4), { now: new Date(2026, 10, 1) }); assert.equal(r.options.length, 1, 'Ann is off on 4 and works on my off days; Bo works that day'); assert.equal(r.options[0].person.name, 'Dr Ann'); assert.ok(r.options[0].gives.length >= 1); assert.ok(r.options[0].gives.every(g => new Date(g.date).getDate() % 3 === 0));
+  assert.deepEqual(P.swapOptions(s, new Date(2026, 10, 3), { now: new Date(2026, 10, 1) }).options, [], 'nothing to hand over on a day off');
 });
 await t('planned leave is written as corrections, counted as leave, and can be cleared', () => {
   const r = P.applyLeave(s, new Date(2026, 10, 12), new Date(2026, 10, 14), 1); assert.equal(r.days, 3); assert.equal(r.state.swaps['2026-11-12'].code, 'VL'); assert.equal(Object.keys(s.swaps || {}).length, 0, 'original state untouched');
