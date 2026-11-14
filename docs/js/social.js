@@ -161,8 +161,8 @@ const intersect = (A, B) => A.flatMap(([a, b]) => B.map(([c, d]) => [Math.max(a,
 
 /** Ranked chances to meet. For every day in range: the windows when you and the chosen friends are all free (or most of them).
  *  Times before `now` (+ travel) are never offered. `busy` = known but not free; `unknown` = no schedule info (not the same as busy). */
-export function meetups(s, { ids = null, from = new Date(), days = 21, minMin = 120, busyOf = () => [], now = new Date() } = {}) {
-  const friends = friendList(s).filter(f => !ids || ids.includes(f.id)); const out = [], start = startOfDay(from), meKey = myKey(s);
+export function meetups(s, { ids = null, from = null, days = 21, minMin = 120, busyOf = () => [], now = new Date() } = {}) {
+  const friends = friendList(s).filter(f => !ids || ids.includes(f.id)); const out = [], start = startOfDay(from || now), meKey = myKey(s);   // no `from`: start on `now`'s day, not the machine's
   for (let i = 0; i < days; i++) {
     const date = addDays(start, i), mine = clipToNow(myWindows(s, date, busyOf(date)), date, now); if (!mine.length) continue;
     const states = friends.map(f => { const st = dayState(s, f, date); return { f, wins: st.windows, st }; });
@@ -276,8 +276,8 @@ export function personRecord(s, key, name) { const fr = friendList(s).find(f => 
 /** For each day ahead: the time everyone picked is free together (you included unless `withMe` is false).
  *  `all` = everyone free for at least `minMin`; otherwise who is missing. People with no schedule info are listed, never assumed free.
  *  Time already past (before `now` + travel) is dropped. Asking for a whole day (minMin ≥ 8h) never counts someone just off a night. */
-export function commonFree(s, people, { from = new Date(), days = 21, withMe = true, minMin = 120, busyOf = () => [], now = new Date() } = {}) {
-  const out = [], start = startOfDay(from), whole = minMin >= 8 * H, meKey = myKey(s);
+export function commonFree(s, people, { from = null, days = 21, withMe = true, minMin = 120, busyOf = () => [], now = new Date() } = {}) {
+  const out = [], start = startOfDay(from || now), whole = minMin >= 8 * H, meKey = myKey(s);
   for (let i = 0; i < days; i++) {
     const date = addDays(start, i), states = people.map(p => ({ p, st: dayState(s, p, date) })), unknown = states.filter(x => x.st.free === 'unknown');
     const meNight = withMe && meKey ? dayState(s, { rotaKey: meKey }, date).afterNight : false;

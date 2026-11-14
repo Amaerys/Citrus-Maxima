@@ -70,4 +70,15 @@ await t('leaders go to UPV/LPV only (the sheet heading); fixed groups carry thei
   });
 }
 await t('no nurse schedule loaded → quiet', () => { const s = { rotas: { gp }, me: { id: '1', name: 'Dr Me' }, posts: {} }; assert.equal(N.workingWithMe(s, D(9), dayInfo(s, D(9)).mine).hasNurses, false); assert.deepEqual(N.rowsFor(s, D(9)), []); assert.equal(N.workingWithMe(s, D(20), dayInfo(s, D(20)).mine), null); });
+await t('nights: 2 per village, no office clinics; "N candidates for 2 places" with a 2-of-N prior (owner, 14/11)', () => {
+  const N2 = { kind: 'work', type: 'N', hours: { start: 1200, end: 480, overnight: true, durationMin: 720 } }, D = { kind: 'work', type: 'D', hours: { start: 480, end: 1200, durationMin: 720 } };
+  assert.deepEqual(N.openSites({}, N2, ['UPV', 'LPV', 'UPO', 'LPO']), ['UPV', 'LPV']); assert.deepEqual(N.openSites({}, D, ['UPV', 'LPV', 'UPO', 'LPO']), ['UPV', 'LPV', 'UPO', 'LPO'], 'days: all open until known');
+  assert.equal(N.seatsFor({}, N2).LPV, 2); assert.equal(N.seatsFor({ settings: { nurseStaffing: { night: { LPV: 3 } } } }, N2).LPV, 3, 'owner can override');
+  const legend = { N: { desc: 'Night', hours: N2.hours } }, mk = (id, g) => ({ name: `Nurse ${id}`, id, group: g, days: { 5: 'N' } });
+  const rota = { id: 'nurse-2026-12', unitKind: 'nurse', year: 2026, month: 12, daysInMonth: 31, legend, people: [mk('1', 'pool'), mk('2', 'pool'), mk('3', 'leaders'), mk('4', 'leaders'), mk('5', 'fsed'), mk('6', 'fsed')] };
+  const st = { rotas: { rota } }, d = new Date(2026, 11, 5), mine = { shift: { kind: 'work', type: 'N', site: 'Lower Village', hours: N2.hours } };
+  assert.ok(N.rowsFor(st, d).filter(r => !r.fixed).every(r => !r.choices.includes('UPO') && !r.choices.includes('LPO')), 'nobody is offered an office clinic at night');
+  const w = N.workingWithMe(st, d, mine); assert.equal(w.possible.length, 4, 'the two FSED nurses are never candidates'); assert.equal(w.summary, '4 candidates for 2 places at Lower Village · not posted yet');
+  assert.ok(w.possible.every(p => Math.abs(p.chance - 0.5) < 1e-9), '2 places out of 4 = 50% each with no history');
+});
 console.log(fails ? `${fails} FAILED` : 'nurses ok'); process.exit(fails ? 1 : 0);

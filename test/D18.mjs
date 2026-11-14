@@ -163,7 +163,7 @@ console.log('day sheet (Mon 16 Nov, Upper Village, no postings)');
   await p.click('#view-rota .cal .day:not(.pad) >> nth=15'); await sleep(400);
   const nr = p.locator('.sheet .card.nr');
   const txt = await nr.innerText({ timeout: 3000 }).catch(() => '');
-  check(/Nurses at Upper Village/.test(txt) && /could be sent/.test(txt), 'card leads with "N could be sent", no fake "likely" names');
+  check(/Nurses at Upper Village/.test(txt) && /candidates? for/.test(txt), 'card leads with "N candidates for …", no fake "likely" names');
   check(await p.locator('.sheet .card.nr > .nr-row.maybe:visible').count() <= 6, `no wall of bars: at most 6 shown, the rest folded (${await p.locator('.sheet .card.nr > .nr-row.maybe').count()} shown)`);
   const go = p.locator('.sheet .card.nr button:has-text("Set postings for Mon 16 Nov")'); check(await go.count() === 1, 'button names the day: "Set postings for Mon 16 Nov"');
   await go.click(); await sleep(400);

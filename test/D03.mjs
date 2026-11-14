@@ -110,7 +110,7 @@ await t('no history: nobody is "likely", ties broken by friends then overlap, on
   const w = N.workingWithMe(s, D(10), mineAt('Upper Village'));
   assert.equal(w.likely.length, 0); assert.ok(w.possible.every(p => !p.known));
   assert.equal(w.possible[0].person.name, 'Pool Charlie', 'the favourite comes first, not the alphabet');
-  assert.equal(w.summary, `${w.possible.length} could be sent, not posted yet`); assert.doesNotMatch(w.summary, /%|likely/i);
+  assert.match(w.summary, new RegExp(`^${w.possible.length} candidates? for (your site|\\d+ places? at .+) · not posted yet$`)); assert.doesNotMatch(w.summary, /%|likely/i);
 });
 await t('head nurse is listed apart, never as a candidate; fixed and unknown fixed blocks are left out', () => {
   const w = N.workingWithMe(base(), D(10), mineAt('Upper Village'));

@@ -28,7 +28,7 @@ const sheetTxt = await p.locator('.sheet').innerText();
 check(/Nurses at Upper Village/i.test(sheetTxt), 'card "Nurses at Upper Village" on a day I work there');
 const maybe = await p.locator('.sheet .nr-row.maybe, .sheet .nr-chip').count(); check(maybe >= 5, `possible nurses listed (${maybe})`);
 const names = await p.locator('.sheet .nr-row .nr-name span.ellipsis, .sheet .nr-chip').allTextContents(); check(!names.some(n => /Narita|Dhanya|Sillina|Kharmina/.test(n)), 'FSED / Aqua Arabia / Plateau nurses are never offered');
-check(/could be sent/i.test(sheetTxt) && /Who could be (with you|sent)/.test(sheetTxt), 'leads with how many could be sent (no fake "likely" names), not "nobody posted"'); check(await p.locator('.sheet .card.ov').count() === 1, 'doctor overlap card is still there, nurses are not mixed into it: ' + (await p.locator('.sheet .card.ov').innerText()).replace(/\n/g, ' ').slice(0, 120));
+check(/candidates? for/i.test(sheetTxt) && /Who could be (with you|sent)/.test(sheetTxt), 'leads with how many could be sent (no fake "likely" names), not "nobody posted"'); check(await p.locator('.sheet .card.ov').count() === 1, 'doctor overlap card is still there, nurses are not mixed into it: ' + (await p.locator('.sheet .card.ov').innerText()).replace(/\n/g, ' ').slice(0, 120));
 await p.screenshot({ path: `${shots}/day-nurses.png` }); await p.keyboard.press('Escape'); await sleep(150);
 
 console.log('nurses board');

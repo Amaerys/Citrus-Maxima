@@ -14,6 +14,13 @@ export const SITES = [
 export const siteId = (text) => SITES.find(x => x.re.test(String(text || '')))?.id || '';
 export const siteLabel = (id) => SITES.find(x => x.id === id)?.label || id;
 const ALL = SITES.map(x => x.id);
+/** How many floating nurses each site usually gets, per shift kind (owner, 14/11/2026): nights = 2 Lower Village + 2 Upper Village, no office
+ *  clinics at night (FSED's 2 are a fixed group). Days are not known yet, so every site stays open by day. Override in settings.nurseStaffing. */
+export const TYPICAL = { night: { UPV: 2, LPV: 2, UPO: 0, LPO: 0 } };
+export const shiftKind = (sh) => sh && (sh.type === 'N' || sh.hours?.overnight || (sh.hours && sh.hours.start >= 18 * 60)) ? 'night' : 'day';
+export function seatsFor(s, sh) { const t = { ...(TYPICAL[shiftKind(sh)] || {}), ...((s?.settings?.nurseStaffing || {})[shiftKind(sh)] || {}) }; return Object.keys(t).length ? t : null; }
+/** Sites that are actually open on that shift (a 0 in the usual staffing closes it). */
+export const openSites = (s, sh, choices) => { const t = seatsFor(s, sh); return t ? choices.filter(id => (t[id] ?? 1) > 0) : choices; };
 /** group → who they are and where they can be posted. `fixed` groups work at one place and never float. */
 export const GROUPS = {
   head: { label: 'Head nurse', choices: ALL, supervises: true },   // ALL SITES: oversees, is not posted, so never a "could be with you" candidate
@@ -70,7 +77,7 @@ export function rowsFor(s, date) {
   const d = date.getDate(), out = [];
   for (const p of r.people) {
     const code = p.days[d] || '', shift = interpretCode(code, r.legend, 'nurse'); if (shift.kind !== 'work') continue;
-    const g = groupDef(p.group || 'pool', r), key = keyOfPerson(p), fixed = g.fixed || '', choices = g.choices || [], tip = fixed ? null : tipOf(s, date, key);
+    const g = groupDef(p.group || 'pool', r), key = keyOfPerson(p), fixed = g.fixed || '', choices = g.supervises ? (g.choices || []) : openSites(s, shift, g.choices || []), tip = fixed ? null : tipOf(s, date, key);
     // no suggestion once there is a tip: the tip already says where they probably go
     out.push({ person: p, key, code, shift, group: p.group, fixed, choices, post: fixed || postOf(s, date, key), tip, suggest: fixed || tip ? '' : suggestPost(s, key, date, choices) });
   }
@@ -123,6 +130,7 @@ export function workingWithMe(s, date, mine) {
       // only postings before this day count (a posting entered for the 25th says nothing about the 16th)
       const hist = history(s, r.key, date), n = hist.length, wt = (h) => Math.pow(0.5, age(h.date) / HALF_LIFE);
       const tot = hist.reduce((a, h) => a + wt(h), 0), at = site ? hist.filter(h => h.site === site).reduce((a, h) => a + wt(h), 0) : 0, k = Math.max(1, r.choices.length);
+      // prior: an even split over the open sites (1/k); history moves it (Laplace, k pseudo-postings). `seats` refines it once the group is known below.
       const chance = site ? (at + 1) / (tot + k) : 0;
       possible.push({ ...x, chance, base: 1 / k, seen: n, known: n > 0 });
     }
@@ -135,11 +143,14 @@ export function workingWithMe(s, date, mine) {
   // "likely" needs evidence: a confirmed posting history that favours your site over an even split
   const likely = possible.filter(p => p.known && p.chance > p.base + 1e-9);
   const n = possible.length, fn = (r) => r.person.name.split(' ')[0];
+  // usual seats at your site on your shift (nights: 2 per village) — "4 candidates, 2 will be with you" instead of a bare count
+  const seat = site ? seatsFor(s, mine.shift)?.[site] : null, seats = Number.isFinite(seat) ? Math.max(0, seat - confirmed.length - tipped.length) : null;
+  if (seats != null && n) for (const p of possible) if (!p.known) { p.chance = Math.min(1, seats / n); p.base = p.chance; }
   const summary = confirmed.length ? `${confirmed.length} posted with you${n ? ` · ${n} more could be sent` : ''}`
     : tipped.length ? `${tipped.length} heard${n ? ` · ${n} more could be sent` : ''}`
     : likely.length ? `Likely with you: ${likely.slice(0, 3).map(fn).join(', ')}${n > likely.length ? ` · ${n} could be sent` : ''}`
-    : n ? `${n} could be sent, not posted yet` : '';
-  return { site, confirmed, tipped, possible, likely, head, elsewhere, tippedElsewhere, unposted, hasNurses: true, summary };
+    : n ? `${n} candidate${n > 1 ? 's' : ''} for ${seats != null && seats < n ? `${seats} place${seats > 1 ? 's' : ''} at ${siteLabel(site)}` : 'your site'} · not posted yet` : '';
+  return { site, confirmed, tipped, possible, likely, head, elsewhere, tippedElsewhere, unposted, hasNurses: true, summary, seats };
 }
 /** Evening nudge: tomorrow's floaters not yet posted. */
 export const unpostedFor = (s, date) => staffing(s, date).unposted;
