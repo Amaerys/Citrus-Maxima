@@ -2,7 +2,7 @@
 // Pure: defaults, sanitising and small getters. The Customise sheet in Settings edits it.
 export const TABS = [['today', 'Today'], ['rota', 'Work'], ['plan', 'Plan'], ['mind', 'Mind'], ['social', 'Social'], ['apps', 'Apps']];
 export const WORK_SEGS = [['calendar', 'Calendar'], ['team', 'People'], ['nurses', 'Nurses'], ['home', 'Home'], ['career', 'Career']];
-export const TODAY_CARDS = ['Schedule update', 'Briefing', 'Tonight', 'Shift board', 'Nurses', 'Contract dates', 'Plan', 'Home', 'Study', 'Mind', 'On call'];
+export const TODAY_CARDS = ['Schedule update', 'From your apps', 'Briefing', 'Tonight', 'Shift board', 'Nurses', 'Contract dates', 'Plan', 'Home', 'Study', 'Mind', 'On call'];
 export const BRIEF_LINES = [['shift', 'Your shift'], ['team', 'Who you work with'], ['nurses', 'Nurses with you'], ['home', 'Chores due'], ['tasks', 'Tasks due'], ['birthdays', 'Birthdays'], ['hours', 'Week hours vs 48h'], ['contract', 'Contract dates']];
 export const DEFAULTS = {
   start: 'today',                 // tab Citrus opens on

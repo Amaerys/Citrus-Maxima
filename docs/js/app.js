@@ -81,7 +81,7 @@ async function boot() {
     addEvent: addEventFn,
   });
   const sub = { S, update: (fn) => store.update(fn), sheet, render: () => render(), go: (v, sub) => { if (v === 'rota' && sub) rt.workSeg = sub; show(v); }, busyOf: busyOfDay, addEvent: addEventFn };
-  SU.initSocial({ ...sub, allPeople: () => allPeople(S()), isMeKey: (k) => { const m = S().me; return !!m && (k === `id:${m.id}` || k === `name:${String(m.name || '').toLowerCase()}`); } }); CU.initChores(sub); LU.initLabor(sub); RU.initCareer(sub); XU.initPlans(sub); CHU.initChanges(sub); DU.initDaily({ ...sub, planned: plannedOn, hasApp: (n) => !!mergedApps()[n], launchApp: (n) => launch(n, null) }); EU.initExtras({ ...sub, invite: (ids, what, slot = null) => SU.inviteSheet(ids, slot, what) /* the picked slot travels with it */ }); PU.initPeople({ ...sub, openDay: (d) => daySheet(d), personSheet, personKeyOf, shiftChip, importButton });
+  SU.initSocial({ ...sub, allPeople: () => allPeople(S()), isMeKey: (k) => { const m = S().me; return !!m && (k === `id:${m.id}` || k === `name:${String(m.name || '').toLowerCase()}`); } }); CU.initChores(sub); LU.initLabor(sub); RU.initCareer(sub); XU.initPlans(sub); CHU.initChanges(sub); DU.initDaily({ ...sub, planned: plannedOn, hasApp: (n) => !!mergedApps()[n], launchApp: (n) => launch(n, null) }); EU.initExtras({ ...sub, invite: (ids, what, slot = null) => SU.inviteSheet(ids, slot, what) /* the picked slot travels with it */ }); PU.initPeople({ ...sub, apps: mergedApps, openDay: (d) => daySheet(d), personSheet, personKeyOf, shiftChip, importButton });
   store.subscribe(() => { render(); remindSoon(); });
   store.onRemoteSync(scheduleRemoteSave);
   loadCachedEvents();
@@ -843,6 +843,7 @@ function renderToday() {
   for (const c of DU.todayCards(now)) add(c.el, c.score, c.label);
   // people-ui scores its own card: the evening "tomorrow's postings not set" nudge stays above the fold (beta T04-05)
   add(PU.todayCard(), PU.todayScore(working), 'Nurses');
+  add(MU.inboxPanel(3), 96, 'From your apps');   // things sent in (postings, swaps, tasks) wait on Today too, not only in Mind
   add(RU.todayCard(), 80, 'Contract dates');
   if (!wide) add(planCard(now), 70, 'Plan');   // the wide cockpit has its own Plan column
   add(CU.todayCard(), CU.todayScore(), 'Home');   // an overdue chore moves above Plan (beta T05-29)

@@ -9,7 +9,8 @@ import * as N from './nurses.js';
 import * as PL from './people-logic.js';
 import * as NB from './nurse-board.js';
 import { contractEnds } from './extras.js';
-import { undoToast } from './mind-ui.js';
+import { undoToast, acceptProposal } from './mind-ui.js';
+import { inboxPending, dismissInbox } from './mind.js';
 
 let mode = 'confirm', heardFrom = null, dirMode = 'list', rMonth = null, rUnit = '', rQuery = '', rZoom = false, pMonth = {};
 // onShift: '' (everyone) | 'today' (rostered today) | 'now' (on shift this minute, last night's tail included)
@@ -228,6 +229,12 @@ export function renderNurses() {
   if (fixed.length) { const by = {}; fixed.forEach(r => (by[r.fixed] ||= []).push(r)); fx = h('details', { class: 'card nb-o5' }, h('summary', {}, `Fixed posts (${fixed.length}): ${Object.entries(by).map(([k, v]) => `${k} ${v.length}`).join(' · ')}`), Object.entries(by).map(([k, v]) => h('div', { style: { marginTop: '8px' } }, h('div', { class: 'tiny dim' }, k, N.placeNote(k) ? h('span', { class: 'place-note' }, ` · ${N.placeNote(k)}`) : null), h('div', { class: 'chips' }, v.map(r => h('button', { class: 'chip', onClick: () => ctx.personSheet(r.person) }, `${nm(r)} ${r.shift.type}`)))))); }
   const note = h('div', { class: 'tiny dim nb-o6', style: { margin: '6px 2px' } }, 'The schedule only says who works which shift. Where the construction-clinic nurses go (Upper/Lower Village, Upper/Lower office clinic) is decided the night before, so you enter it here and the app learns from confirmed postings only. Swipe the board to change day.');
   // wide: what you act on (with you, not confirmed) on the left, the sites and the day's facts on the right; phone: one column in order
+  // postings sent in (e.g. by Claude from Griselda's screenshot) wait right here on their day, not only in the Mind inbox
+  const sent = inboxPending(s, ctx.apps?.() || {}, new Date()).filter(x => x.item.type === 'posting' && x.item.date === keyOf(date));
+  const inbox = sent.length ? h('div', { class: 'card nb-inbox' }, ...sent.map(x => h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } },
+    h('div', { class: 'grow', style: { minWidth: 0 } }, h('div', { class: 'small' }, h('b', {}, x.item.from ? `${x.item.from} sent ${x.item.postings.length} posting${x.item.postings.length === 1 ? '' : 's'}` : x.item.title), ' · not on the board yet'), h('div', { class: 'tiny dim' }, x.item.postings.map(q => q.nurse).join(', '))),
+    h('button', { class: 'btn sm primary', onClick: async () => { await acceptProposal(x); ctx.render(); } }, 'Add as heard'), h('button', { class: 'btn sm ghost', 'aria-label': 'Dismiss', onClick: () => { ctx.update(z => dismissInbox(z, x.ref)); ctx.render(); } }, '✕')))) : null;
+  if (inbox) board.append(inbox);
   board.append(h('div', { class: 'nb' }, h('div', { class: 'nb-l' }, wc, np), h('div', { class: 'nb-r' }, staff, posts, fx, note)));
   return board;
 }
