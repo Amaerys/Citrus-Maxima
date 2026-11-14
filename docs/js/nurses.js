@@ -16,8 +16,8 @@ export const siteLabel = (id) => SITES.find(x => x.id === id)?.label || id;
 const ALL = SITES.map(x => x.id);
 /** How many floating nurses each site usually gets (owner, 14/11/2026). Nights: 2 Lower Village + 2 Upper Village, no office clinics
  *  (FSED's 2 are a fixed group). Days: about 5 per village (4 on some days, 6 rarely); lately Lower Village has 3 on Fridays. Office clinics
- *  by day: not known yet, so they stay open with no seat count. Override in settings.nurseStaffing ({night:{…}, day:{…}, fri:{…}}). */
-export const TYPICAL = { night: { UPV: 2, LPV: 2, UPO: 0, LPO: 0 }, day: { UPV: 5, LPV: 5 }, fri: { LPV: 3 } };
+ *  by day: 1 nurse each (with one doctor and paramedics). Override in settings.nurseStaffing ({night:{…}, day:{…}, fri:{…}}). */
+export const TYPICAL = { night: { UPV: 2, LPV: 2, UPO: 0, LPO: 0 }, day: { UPV: 5, LPV: 5, UPO: 1, LPO: 1 }, fri: { LPV: 3 } };
 export const shiftKind = (sh) => sh && (sh.type === 'N' || sh.hours?.overnight || (sh.hours && sh.hours.start >= 18 * 60)) ? 'night' : 'day';
 export function seatsFor(s, sh, date = null) {
   const k = shiftKind(sh), o = s?.settings?.nurseStaffing || {}, fri = k === 'day' && date && date.getDay() === 5;
