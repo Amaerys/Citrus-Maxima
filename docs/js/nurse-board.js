@@ -44,7 +44,7 @@ export function lastSource(s) {
 export function dayMarks(s, dates) {
   return dates.map(date => {
     if (!N.nurseRotaFor(s, date)) return { date, key: keyOf(date), hasRota: false, posted: 0, heard: 0, guessed: 0, open: 0 };
-    const rows = N.rowsFor(s, date).filter(r => N.isFloater(r.group) && r.group !== 'head');
+    const rows = N.rowsFor(s, date).filter(r => (N.isFloater(r.group) || r.pulledFrom) && r.group !== 'head');
     const posted = rows.filter(r => r.post).length, heard = rows.filter(r => !r.post && r.tip && !r.tip.guess).length, guessed = rows.filter(r => !r.post && r.tip?.guess).length;
     return { date, key: keyOf(date), hasRota: true, posted, heard, guessed, open: rows.length - posted };
   });
@@ -63,6 +63,8 @@ const NOISE = new Set(['day', 'night', 'shift', 'am', 'pm', 'and', 'sn', 'rn', '
  */
 export function parsePostingList(text, rows) {
   const cand = rows.filter(r => r.choices?.length).map(r => ({ r, t: toks(clean(r.person.name)) }));
+  // nurses on a fixed post that day (FSED, Aqua…): matched only when no floater fits; the list wins — she is "pulled out" to that site
+  const fixedCand = rows.filter(r => r.fixed && !r.choices?.length).map(r => ({ r, t: toks(clean(r.person.name)) }));
   const hits = new Map(), unknown = [], offsite = []; let cur = '';
   for (const raw of String(text || '').split(/\r?\n/)) {
     const line = raw.replace(/^\s*[\d]+[.)]\s*|^\s*[-•*]\s*/, '').trim(); if (!line) continue;
@@ -71,7 +73,9 @@ export function parsePostingList(text, rows) {
     if (site && !parts.length) { cur = site; continue; }
     const at = site || cur;
     for (const p of parts) {
-      const m = cand.filter(c => p.every(w => w.length >= 3 ? c.t.some(t => t.startsWith(w)) : c.t.includes(w)) && p.some(w => w.length >= 3));
+      const fits = (c) => p.every(w => w.length >= 3 ? c.t.some(t => t.startsWith(w)) : c.t.includes(w)) && p.some(w => w.length >= 3);
+      let m = cand.filter(fits);
+      if (!m.length && at) { const f = fixedCand.filter(fits); if (f.length === 1) { const r = f[0].r; hits.set(r.key, { key: r.key, name: r.person.name, site: at, row: r, pulled: r.fixed }); continue; } }
       const label = p.join(' ');
       if (m.length !== 1) { unknown.push({ text: label, why: m.length ? `${m.length} nurses match` : 'no nurse on shift by that name' }); continue; }
       if (!at) { unknown.push({ text: label, why: 'no site before it' }); continue; }

@@ -73,6 +73,16 @@ await t('"Use last posts" makes guesses, which never count as confirmed or histo
   assert.equal(N.postOf(s, D(3), key(base, 'Bea')), ''); assert.equal(N.tipOf(s, D(3), key(base, 'Bea')).guess, true); assert.equal(N.history(s, key(base, 'Bea')).length, 1);
 });
 
+await t('a list can pull a fixed-post nurse out (Aqua → Upper Village): she floats that day, keeps her hours, and stays pulled when confirmed', () => {
+  const rows = N.rowsFor(base, D(10)), res = NB.parsePostingList('UPV: Aqua Tess, Fatima Kayla', rows);
+  const aq = res.hits.find(x => x.name.startsWith('Aqua Tess')); assert.ok(aq && aq.pulled === 'Aqua Arabia' && aq.site === 'UPV', JSON.stringify(res));
+  let s2 = res.hits.reduce((a, m) => N.setPost(a, D(10), m.key, m.site, { tip: true, from: 'TL', pulled: m.pulled }), base);
+  let r = N.rowsFor(s2, D(10)).find(x => x.key === aq.key); assert.equal(r.fixed, ''); assert.equal(r.pulledFrom, 'Aqua Arabia'); assert.equal(r.tip.site, 'UPV');
+  s2 = N.setPost(s2, D(10), aq.key, 'UPV'); r = N.rowsFor(s2, D(10)).find(x => x.key === aq.key); assert.equal(r.post, 'UPV'); assert.equal(r.pulledFrom, 'Aqua Arabia');
+  s2 = N.setPost(s2, D(10), aq.key, ''); r = N.rowsFor(s2, D(10)).find(x => x.key === aq.key); assert.equal(r.fixed, 'Aqua Arabia');
+  assert.equal(N.rowsFor(base, D(11)).find(x => x.key === aq.key).fixed, 'Aqua Arabia', 'only that day');
+});
+
 // ───────── part 2: the app with the real files
 const here = path.dirname(new URL(import.meta.url).pathname), root = process.env.DOCS_ROOT || path.resolve(here, '../docs'), shots = path.resolve(here, 'shots/D18'), data = (f) => path.join(here, 'data', f);
 if (!fs.existsSync(data('nurses.xlsx'))) { console.log('no nurses.xlsx — UI part skipped'); process.exit(bad ? 1 : 0); }

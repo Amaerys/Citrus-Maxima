@@ -144,7 +144,7 @@ let names = new Map();
 const nm = (r) => names.get(r.key) || r.person.name.split(' ').slice(0, 2).join(' ');
 const dayWord = (date) => { const d = Math.round((startOfDay(date) - startOfDay(new Date())) / 864e5); return d === 0 ? 'today' : d === 1 ? 'tomorrow' : dayLabel(date); };
 /** Keep a posting record so a clear can be undone exactly (confirmed stays confirmed, a tip keeps its source). */
-const recOf = (s, date, key) => { const x = s.posts?.[`${keyOf(date)}:${key}`]; return x ? { site: x.site, opt: x.tip ? { tip: true, from: x.from || '', guess: !!x.guess } : {} } : null; };
+const recOf = (s, date, key) => { const x = s.posts?.[`${keyOf(date)}:${key}`]; return x ? { site: x.site, opt: { ...(x.tip ? { tip: true, from: x.from || '', guess: !!x.guess } : {}), ...(x.pulled ? { pulled: x.pulled } : {}) } } : null; };
 function clearPost(r, date) {
   const prev = recOf(S(), date, r.key); ctx.update(s => N.setPost(s, date, r.key, ''));
   if (prev) undoToast(`${nm(r)} cleared from ${N.siteLabel(prev.site)}`, () => ctx.update(s => N.setPost(s, date, r.key, prev.site, prev.opt)));
@@ -177,11 +177,11 @@ function dayStrip(s, date) {
 }
 /** Paste the leader's message ("UPV: Cresilda, Editha …"): names are matched to today's floating nurses and saved as heard (or confirmed). */
 function pasteSheet(date) {
-  const s = S(), rows = N.rowsFor(s, date).filter(r => N.isFloater(r.group) && r.group !== 'head');
+  const s = S(), rows = N.rowsFor(s, date).filter(r => (N.isFloater(r.group) || r.fixed || r.pulledFrom) && r.group !== 'head');   // fixed-post nurses too: a list can pull one out
   const ta = h('textarea', { rows: 7, placeholder: 'Upper Village: Name, Name\nLPV\n1. Name\n2. Name', 'aria-label': 'Posting list', 'data-nodirty': '' }), out = h('div', { class: 'nb-paste-out', 'aria-live': 'polite' });
   const src = h('input', { value: heardFrom || NB.lastSource(s) || '', placeholder: 'Who sent it (e.g. the team leader)', 'aria-label': 'From' });
   let res = { hits: [], unknown: [], offsite: [] };
-  const save = (tip) => { if (!res.hits.length) return; heardFrom = src.value.trim(); ctx.update(x => res.hits.reduce((a, m) => N.setPost(a, date, m.key, m.site, tip ? { tip: true, from: heardFrom } : {}), x)); closeSheets(); toast(`${plural(res.hits.length, 'nurse')} saved as ${tip ? 'heard' : 'confirmed'}`); };
+  const save = (tip) => { if (!res.hits.length) return; heardFrom = src.value.trim(); ctx.update(x => res.hits.reduce((a, m) => N.setPost(a, date, m.key, m.site, { ...(tip ? { tip: true, from: heardFrom } : {}), ...(m.pulled ? { pulled: m.pulled } : {}) }), x)); closeSheets(); toast(`${plural(res.hits.length, 'nurse')} saved as ${tip ? 'heard' : 'confirmed'}`); };
   const b1 = h('button', { class: 'btn primary grow', onClick: () => save(true) }, 'Save as heard'), b2 = h('button', { class: 'btn grow', onClick: () => save(false) }, 'Save as confirmed');
   const paint = () => { res = NB.parsePostingList(ta.value, rows); const by = {}; res.hits.forEach(m => (by[m.site] ||= []).push(m));
     out.replaceChildren(...Object.entries(by).map(([site, l]) => h('div', { class: 'small' }, h('b', {}, `${N.siteLabel(site)} (${l.length}) `), l.map(m => names.get(m.key) || m.name).join(', '))),
@@ -198,7 +198,7 @@ export function renderNurses() {
   const today = startOfDay(new Date()), quick = h('div', { class: 'chips nb-quick' }, h('button', { class: `chip ${+date === +today ? 'sel' : ''}`, onClick: () => to(today) }, 'Today'), h('button', { class: `chip ${+date === +addDays(today, 1) ? 'sel' : ''}`, onClick: () => to(addDays(today, 1)) }, 'Tomorrow'), rota ? h('button', { class: 'chip', onClick: () => pasteSheet(date) }, '📋 Paste list') : null);
   const board = h('div', { class: 'nb-board', onTouchstart: (e) => { const t = e.touches[0]; swipeX = e.target.closest('input, textarea, .nb-strip') ? null : [t.clientX, t.clientY]; }, onTouchend: (e) => { if (!swipeX) return; const t = e.changedTouches[0], dx = t.clientX - swipeX[0], dy = t.clientY - swipeX[1]; swipeX = null; if (Math.abs(dx) > 70 && Math.abs(dy) < 45) to(addDays(nDate, dx < 0 ? 1 : -1)); } }, nav, dayStrip(s, date), quick);
   if (!rota) { board.append(h('div', { class: 'card' }, h('div', { class: 'empty' }, h('div', { class: 'big' }, '🩺'), `No nurse schedule for ${MONTHS[date.getMonth()]} ${date.getFullYear()}`), h('div', { class: 'row', style: { justifyContent: 'center' } }, ctx.importButton('Import nurse schedule')))); return board; }
-  const st = N.staffing(s, date), floaters = st.rows.filter(r => N.isFloater(r.group) && r.group !== 'head'), unposted = floaters.filter(r => !r.post), sug = unposted.filter(r => r.suggest);
+  const st = N.staffing(s, date), floaters = st.rows.filter(r => (N.isFloater(r.group) || r.pulledFrom) && r.group !== 'head'), unposted = floaters.filter(r => !r.post), sug = unposted.filter(r => r.suggest);
   const heardN = unposted.filter(r => r.tip && !r.tip.guess).length, guessN = unposted.filter(r => r.tip?.guess).length, openN = unposted.length - heardN - guessN, head = st.rows.filter(r => r.group === 'head');
   const ends = contractEnds(s, date, 21).filter(e => e.inDays >= 0);
   const staff = h('div', { class: 'card nb-o1 nb-staff' }, h('div', { class: 'row wrap nb-staff-h' }, h('div', { class: 'title' }, `${st.total} nurses on shift`), h('div', { class: 'chips' }, Object.entries(st.byShift).sort().map(([t, n]) => h('span', { class: 'chip' }, `${t} ${n}`)))),
@@ -223,7 +223,7 @@ export function renderNurses() {
   const put = (r, id) => ctx.update(x => N.setPost(x, date, r.key, id, mode === 'heard' ? { tip: true, from: heardFrom } : {}));
   const np = unposted.length ? h('div', { class: 'card nb-o4' }, h('div', { class: 'title' }, `Not confirmed yet (${unposted.length})`), modeBar, h('div', { class: 'tiny dim', style: { margin: '10px 0 6px' } }, 'Tap where each one goes. Amber = heard, dotted = guess, dashed orange = where they went last time.'),
     unposted.sort((a, b) => (!!a.tip - !!b.tip) || a.shift.type.localeCompare(b.shift.type) || nm(a).localeCompare(nm(b))).map(r => { const k = kindOf(r);
-      return h('div', { class: `row np-row ${k}` }, h('div', { class: 'grow', onClick: () => ctx.personSheet(r.person), style: { minWidth: 0 } }, h('div', { class: 'name ellipsis' }, r.person.name, r.person.leader ? ' ★' : N.canLead(s, r.key) ? ' ☆' : ''), h('div', { class: 'tiny dim' }, `${r.shift.label.replace(/ ·.*/, '')} ${hrs(r.shift)} · ${N.GROUPS[r.group]?.label || ''}`), r.tip ? h('div', { class: `tiny tip-line ${k}` }, tipText(r.tip)) : null),
+      return h('div', { class: `row np-row ${k}` }, h('div', { class: 'grow', onClick: () => ctx.personSheet(r.person), style: { minWidth: 0 } }, h('div', { class: 'name ellipsis' }, r.person.name, r.person.leader ? ' ★' : N.canLead(s, r.key) ? ' ☆' : ''), h('div', { class: 'tiny dim' }, `${r.shift.label.replace(/ ·.*/, '')} ${hrs(r.shift)} · ${r.pulledFrom ? `pulled out of ${r.pulledFrom}` : N.GROUPS[r.group]?.label || ''}`), r.tip ? h('div', { class: `tiny tip-line ${k}` }, tipText(r.tip)) : null),
         h('div', { class: 'np-btns' }, r.choices.map(id => h('button', { class: `btn sm ${r.tip?.site === id ? k === 'guess' ? 'guess' : 'tip' : r.suggest === id ? 'sug' : 'ghost'}`, title: r.tip?.site === id ? tipText(r.tip) : r.suggest === id ? 'where she went last time' : N.siteLabel(id), onClick: () => put(r, id) }, id)))); })) : null;
   const fixed = st.rows.filter(r => r.fixed); let fx = null;
   if (fixed.length) { const by = {}; fixed.forEach(r => (by[r.fixed] ||= []).push(r)); fx = h('details', { class: 'card nb-o5' }, h('summary', {}, `Fixed posts (${fixed.length}): ${Object.entries(by).map(([k, v]) => `${k} ${v.length}`).join(' · ')}`), Object.entries(by).map(([k, v]) => h('div', { style: { marginTop: '8px' } }, h('div', { class: 'tiny dim' }, k, N.placeNote(k) ? h('span', { class: 'place-note' }, ` · ${N.placeNote(k)}`) : null), h('div', { class: 'chips' }, v.map(r => h('button', { class: 'chip', onClick: () => ctx.personSheet(r.person) }, `${nm(r)} ${r.shift.type}`)))))); }

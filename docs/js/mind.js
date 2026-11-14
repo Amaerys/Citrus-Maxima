@@ -455,7 +455,7 @@ export function acceptInbox(s, p) {
     // names → that day's floating nurses with the same matcher as "Paste list"; "mine" = your own GP site that day
     const date = fromKey(item.date), mySite = N.siteId(dayInfo(s, date).mine?.shift?.site || ''), rows = N.rowsFor(s, date);
     const text = item.postings.map(p => `${/^mine$/i.test(p.site) ? (N.siteLabel(mySite) || '') : p.site}: ${p.nurse}`).join('\n');
-    const res = parsePostingList(text, rows); for (const hit of res.hits) next = N.setPost(next, date, hit.key, hit.site, { tip: true, from: item.from || app });
+    const res = parsePostingList(text, rows); for (const hit of res.hits) next = N.setPost(next, date, hit.key, hit.site, { tip: true, from: item.from || app, pulled: hit.pulled });
     return { state: { ...next, inboxLog: { ...next.inboxLog, [ref]: { status: 'accepted', at: now, type: item.type, placed: res.hits.length, missed: res.unknown.length + res.offsite.length } } }, taskId: '', placed: res.hits.length, missed: [...res.unknown.map(u => u.text), ...res.offsite.map(o => o.name)] };
   }
   if (item.type === 'nurse') {   // "Radz can lead": find her on the nurse sheets and mark her

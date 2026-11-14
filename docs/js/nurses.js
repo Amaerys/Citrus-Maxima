@@ -83,7 +83,7 @@ export const postOf = (s, date, key) => { const x = s.posts?.[pk(date, key)]; re
 export const tipOf = (s, date, key) => { const x = s.posts?.[pk(date, key)]; return x && x.tip ? { site: x.site, from: x.from || '', ...(x.guess ? { guess: true } : {}) } : null; };
 export function setPost(s, date, key, site, opt = {}) {
   const id = pk(date, key), posts = { ...(s.posts || {}) }, deleted = { ...(s.deleted || {}) };
-  if (!site) { delete posts[id]; deleted[`post:${id}`] = Date.now(); } else { posts[id] = { id, date: keyOf(date), key, site, ...(opt.tip ? { tip: true, from: String(opt.from || '').slice(0, 40), ...(opt.guess ? { guess: true } : {}) } : {}), at: Date.now() }; delete deleted[`post:${id}`]; }
+  if (!site) { delete posts[id]; deleted[`post:${id}`] = Date.now(); } else { posts[id] = { id, date: keyOf(date), key, site, ...(opt.tip ? { tip: true, from: String(opt.from || '').slice(0, 40), ...(opt.guess ? { guess: true } : {}) } : {}), ...((opt.pulled ?? posts[id]?.pulled) ? { pulled: String(opt.pulled ?? posts[id].pulled).slice(0, 40) } : {}), at: Date.now() }; delete deleted[`post:${id}`]; }
   return { ...s, posts, deleted };
 }
 /** Everything a nurse has been posted to, newest first (before `before`, if given). */
@@ -100,9 +100,11 @@ export function rowsFor(s, date) {
   const d = date.getDate(), out = [];
   for (const p of r.people) {
     const code = p.days[d] || '', shift = interpretCode(code, r.legend, 'nurse'); if (shift.kind !== 'work') continue;
-    const g = groupDef(p.group || 'pool', r), key = keyOfPerson(p), fixed = g.fixed || '', choices = g.supervises ? (g.choices || []) : openSites(s, shift, g.choices || [], date), tip = fixed ? null : tipOf(s, date, key);
+    const g0 = groupDef(p.group || 'pool', r), key = keyOfPerson(p), pulled = g0.fixed && s.posts?.[pk(date, key)]?.pulled ? g0.fixed : '';
+    // pulled out: a fixed-post nurse (e.g. FSED) that day's list put somewhere else floats like the pool for that day (owner trusts the list over the sheet)
+    const g = pulled ? { ...g0, fixed: '', choices: ALL } : g0, fixed = g.fixed || '', choices = g.supervises ? (g.choices || []) : openSites(s, shift, g.choices || [], date), tip = fixed ? null : tipOf(s, date, key);
     // no suggestion once there is a tip: the tip already says where they probably go
-    out.push({ person: p, key, code, shift, group: p.group, fixed, choices, post: fixed || postOf(s, date, key), tip, suggest: fixed || tip ? '' : suggestPost(s, key, date, choices) });
+    out.push({ person: p, key, code, shift, group: p.group, fixed, choices, ...(pulled ? { pulledFrom: pulled } : {}), post: fixed || postOf(s, date, key), tip, suggest: fixed || tip ? '' : suggestPost(s, key, date, choices) });
   }
   return out;
 }
@@ -135,7 +137,7 @@ export function workingWithMe(s, date, mine) {
   const site = siteId(mine.shift.site), rows = rowsFor(s, date);
   if (!rows.length) return { site, confirmed: [], tipped: [], possible: [], likely: [], head: [], elsewhere: 0, tippedElsewhere: 0, unposted: 0, hasNurses: false, summary: '' };
   const sup = (r) => !!groupDef(r.group).supervises;
-  const cand = rows.filter(r => r.shift.hours && (sup(r) || (isFloater(r.group) && (!site || r.choices.includes(site) || r.post === site))));
+  const cand = rows.filter(r => r.shift.hours && (sup(r) || ((isFloater(r.group) || r.pulledFrom) && (!site || r.choices.includes(site) || r.post === site))));
   const om = overlapModel(mine, cand.map(r => ({ ...r, shift: r.shift })));
   const by = new Map(om?.rows.map(o => [o.entry.key, o]) || []);
   const confirmed = [], tipped = [], possible = [], head = []; let elsewhere = 0, unposted = 0, tippedElsewhere = 0;
