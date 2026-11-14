@@ -108,8 +108,11 @@ export function shiftHours(s, f, code) {
 export function scheduleEnd(s) { let end = null; for (const r of rec(s.rotas)) { const d = new Date(r.year, r.month - 1, r.daysInMonth || new Date(r.year, r.month, 0).getDate()); if (!end || d > end) end = d; } return end; }
 
 // ───────────────────────────── when is someone free?
-const H = 60, MIN_WINDOW = 90, AFTER = 45, BEFORE = 90;
-const WAKE = 8 * H, LATE = 24 * H;
+const H = 60, AFTER = 45, BEFORE = 90;
+let MIN_WINDOW = 90, WAKE = 8 * H, LATE = 24 * H;
+/** Your own day: when you're up, when you call it a night, and the shortest meet-up worth suggesting (Settings › Customise › Social). */
+export function setTiming({ wake = 8 * H, late = 24 * H, minMeet = 90 } = {}) { WAKE = wake; LATE = late; MIN_WINDOW = minMeet; }
+export const timing = () => ({ wake: WAKE, late: LATE, minMeet: MIN_WINDOW });
 /** The shift (or lack of one) of a person on a date: { status: 'off'|'work'|'leave'|'unknown', start, end, type } with minutes from that day's midnight (end may pass 1440). */
 function personShift(s, f, date) {
   const key = keyOf(date);

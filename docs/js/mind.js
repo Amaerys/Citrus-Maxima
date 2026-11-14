@@ -442,7 +442,7 @@ export function inboxPending(s, apps, now = new Date()) {
     const ref = refOf(st.app || name, it.id);
     if (s.inboxLog?.[ref]) continue;
     if (it.expires && it.expires < todayKey) continue;
-    if ((it.type === 'event' || it.type === 'posting') && it.date < todayKey) continue;
+    if ((it.type === 'event' || it.type === 'posting' || it.type === 'swap') && it.date < todayKey) continue;
     out.push({ ref, app: st.app || name, item: it, at: st.updatedAt || '' });
   }
   return out.sort((a, b) => b.at.localeCompare(a.at));
@@ -457,6 +457,10 @@ export function acceptInbox(s, p) {
     const text = item.postings.map(p => `${/^mine$/i.test(p.site) ? (N.siteLabel(mySite) || '') : p.site}: ${p.nurse}`).join('\n');
     const res = parsePostingList(text, rows); for (const hit of res.hits) next = N.setPost(next, date, hit.key, hit.site, { tip: true, from: item.from || app });
     return { state: { ...next, inboxLog: { ...next.inboxLog, [ref]: { status: 'accepted', at: now, type: item.type, placed: res.hits.length, missed: res.unknown.length + res.offsite.length } } }, taskId: '', placed: res.hits.length, missed: [...res.unknown.map(u => u.text), ...res.offsite.map(o => o.name)] };
+  }
+  if (item.type === 'swap') {   // same record as Correct-this-day; imports never overwrite it
+    const swaps = { ...(s.swaps || {}), [item.date]: { code: item.code, with: item.with, note: item.note || item.title, at: now } }, deleted = { ...(s.deleted || {}) }; delete deleted[`swap:${item.date}`];
+    return { state: { ...s, swaps, deleted, inboxLog: { ...s.inboxLog, [ref]: { status: 'accepted', at: now, type: item.type } } }, taskId: '' };
   }
   if (item.type === 'note') {
     const date = item.date || keyOf(new Date()), cur = s.notes?.[date];

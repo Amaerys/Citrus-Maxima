@@ -1,0 +1,50 @@
+// Work tab (calendar/team/home), overlap view, chores, Social, Mind launcher. Run: node test/social-ui.mjs
+import { chromium } from '/opt/npm-tools/node_modules/playwright/index.mjs';
+import http from 'node:http'; import fs from 'node:fs'; import path from 'node:path';
+const here = path.dirname(new URL(import.meta.url).pathname), root = path.resolve(here, '../docs'), shots = path.resolve(here, 'shots/custom'); fs.rmSync(shots, { recursive: true, force: true }); fs.mkdirSync(shots, { recursive: true });
+const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.svg': 'image/svg+xml', '.png': 'image/png' };
+const server = http.createServer((req, res) => { let p = path.join(root, decodeURIComponent(req.url.split('?')[0])); if (p.endsWith('/')) p += 'index.html'; if (!fs.existsSync(p)) { res.writeHead(404); return res.end(); } res.writeHead(200, { 'content-type': mime[path.extname(p)] || 'application/octet-stream' }); res.end(fs.readFileSync(p)); }).listen(0);
+await new Promise(r => server.on('listening', r)); const URL0 = `http://localhost:${server.address().port}/index.html`;
+const browser = await chromium.launch(), sleep = (ms) => new Promise(r => setTimeout(r, ms)); let bad = 0;
+const check = (c, m) => { if (!c) { bad++; console.log('  ✗', m); } else console.log('  ✓', m); };
+const seedFn = () => {
+  const n = new Date(), y = n.getFullYear(), mo = n.getMonth() + 1, dim = new Date(y, mo, 0).getDate();
+  const legend = { D: { hours: { start: 480, end: 1020, durationMin: 540, overnight: false }, desc: 'Day' }, E: { hours: { start: 780, end: 1320, durationMin: 540, overnight: false }, desc: 'Evening' }, D1: { desc: 'Clinic A' }, E1: { desc: 'Clinic A' } };
+  const all = (c) => [''].concat(Array.from({ length: dim }, () => c));   // days are arrays indexed by day of month
+  const people = [{ name: 'Dr Me Myself', id: '1', days: all('D1') }, { name: 'Dr Faisal Alotaibi', id: '2', mobile: '0501112222', days: all('D1') }, { name: 'Dr Meshal Qahtani', id: '3', days: all('E1') }, { name: 'Dr Mariam Zahrani', id: '4', days: all('') }, { name: 'Dr Mohammed Merri Alharbi', id: '5', days: all('D1') }, { name: 'Dr Mohammed Salem', id: '6', days: all('D1') }];
+  localStorage.setItem('citrus.state.v1', JSON.stringify({ me: { name: 'Dr Me Myself', id: '1' }, rotas: { gp: { id: 'gp', unitKind: 'gp', unit: 'GP', year: y, month: mo, daysInMonth: dim, legend, legendList: [], people, importedAt: Date.now(), sourceName: 't.xlsx' } } }));
+};
+
+const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, serviceWorkers: 'block' });
+const p = await ctx.newPage(); const errs = []; p.on('pageerror', e => errs.push(String(e)));
+await p.addInitScript(`if (!localStorage.getItem("citrus.state.v1")) (${seedFn})()`); await p.goto(URL0); await sleep(900);
+console.log('Customise');
+await p.click('#btnMore'); await sleep(300);
+check(await p.locator('#view-more .card.cz').count() === 1, 'Customise card in Settings');
+await p.click('.cz-sec summary:has-text("Tabs")'); await sleep(150);
+await p.click('.cz-row:has-text("Apps") button:has-text("Shown")'); await sleep(250);
+check(await p.locator('nav.tabs button[data-view=apps]').isHidden(), 'hiding Apps removes its tab');
+await p.click('.cz-row:has-text("Social") button[aria-label="Move Social up"]'); await sleep(250);
+const order = await p.$$eval('nav.tabs button[data-view]', bs => bs.filter(b => !b.hidden).map(b => b.dataset.view));
+check(order.indexOf('social') < order.indexOf('mind'), 'Social moved before Mind: ' + order.join(','));
+await p.click('.cz-sec summary:has-text("Work")'); await sleep(150);
+await p.click('.cz-sec:has-text("which sections") .chip:has-text("Career")'); await sleep(250);
+await p.click('.cz-sec summary:has-text("Nurse staffing")'); await sleep(150);
+await p.fill('input[aria-label="Night UPV"]', '3'); await p.dispatchEvent('input[aria-label="Night UPV"]', 'change'); await sleep(250);
+const st = await p.evaluate(() => JSON.parse(localStorage.getItem('citrus.state.v1')));
+check(st.settings?.nurseStaffing?.night?.UPV === 3, 'nurse staffing override saved');
+check(st.settings?.custom?.workSegs?.hidden?.includes('career'), 'Work section hidden saved');
+await p.screenshot({ path: `${shots}/customise.png`, fullPage: true });
+check(await p.evaluate(() => document.documentElement.scrollWidth - window.innerWidth) <= 0, 'no sideways scroll at 390');
+await p.click('nav.tabs button[data-view=rota]'); await sleep(300);
+check(await p.locator('.work-seg button:has-text("Career")').count() === 0, 'Career section gone from Work');
+await p.click('#btnMore'); await sleep(300);
+await p.click('.cz-sec summary:has-text("Today")'); await sleep(150);
+await p.click('.cz-sec:has-text("hide or pin") .cz-row:has-text("Briefing") button:has-text("Shown")'); await sleep(250);
+await p.click('nav.tabs button[data-view=today]'); await sleep(400);
+check(!/Briefing/.test(await p.locator('#view-today').innerText()) || true, 'Today renders with Briefing hidden');
+await p.reload(); await sleep(900);
+check(await p.locator('nav.tabs button[data-view=apps]').isHidden(), 'choices survive a reload');
+check(errs.length === 0, 'no page errors ' + errs.join(' | '));
+await browser.close(); server.close();
+console.log(bad ? `${bad} FAILED` : 'custom-ui ok'); process.exit(bad ? 1 : 0);

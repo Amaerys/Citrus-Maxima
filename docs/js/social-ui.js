@@ -1,6 +1,7 @@
 // Social: friends, their handles, free days, best times to meet, invitations, outings. A view of its own.
 import { h, toast, keyOf, fromKey, addDays, startOfDay, relDay, fmtMin, DAY_SHORT, MONTHS } from './util.js';
 import * as F from './social.js';
+import * as CZ from './custom.js';
 import * as XU from './extras-ui.js';
 import * as L from './media.js';
 
@@ -155,7 +156,7 @@ const outingOn = (s, f, d) => F.outingList(s).some(o => o.date === keyOf(d) && (
 const mark = (x) => x.status === 'work' ? String(x.type || 'W')[0].toUpperCase() : x.status === 'leave' ? 'L' : x.afterNight && x.status !== 'unknown' ? 'z' : '';
 const stateText = (x, wins) => { const free = wins.map(win).join(', '), tm = (m) => F.hhmm(m > 1440 ? m - 1440 : m); if (x.status === 'work') return `working${x.start != null ? ` ${tm(x.start)}–${tm(x.end)}` : ''}${x.type === 'N' || x.end > 1440 ? ' (night)' : ''}${free ? `, free ${free}` : ', no free time'}`; if (x.status === 'leave') return `on leave${free ? `, free ${free}` : ''}`; if (x.status === 'off') return `${x.afterNight ? 'off after a night (sleeping first)' : 'day off'}${free ? `, free ${free}` : ''}`; return free || (x.status === 'unknown' ? (x.why ? `${x.why}: no shift info` : 'no shift info') : 'busy'); };
 const freeOf = (x, wins) => wins.length ? (!x.afterNight && wins.some(w => w[1] - w[0] >= 480) ? 'all' : 'part') : x.status === 'unknown' ? 'unknown' : 'busy';
-const gridDays = () => { const w = window.innerWidth; return w < 360 ? 7 : w < 520 ? 10 : w < 1000 ? 14 : 21; };
+const gridDays = () => { const d = CZ.custom(S()).social.days; if (d) return d; const w = window.innerWidth; return w < 360 ? 7 : w < 520 ? 10 : w < 1000 ? 14 : 21; };   // Settings › Customise › Social can fix it
 const GRID_MAX = 25;
 
 function gridCard() {

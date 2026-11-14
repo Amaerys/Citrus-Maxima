@@ -164,13 +164,14 @@ export const inboxPanel = inboxCard;
 export function inboxRow(p) {
   const it = p.item, meta = ctx.appMeta?.(p.app) || {};
   return h('div', { class: 'ibx' }, h('span', { class: 'ibx-ic', style: { '--c': meta.color || 'var(--orange)' } }, meta.icon || '⚡'),
-    h('div', { class: 'grow' }, h('div', { class: 'mtitle' }, it.title), it.type === 'posting' ? h('div', { class: 'tiny dim' }, `${it.postings.map(x => x.nurse).join(', ')}${it.from ? ` · from ${it.from}` : ''}`) : null, h('div', { class: 'msub' }, h('span', {}, meta.title || p.app), it.date ? h('span', {}, dueLabel(it.date)) : null, it.minutes ? h('span', {}, `${it.minutes}m`) : null, h('span', {}, it.type))),
-    h('button', { class: 'btn sm primary', onClick: () => acceptProposal(p) }, it.type === 'event' ? 'Add event' : it.type === 'posting' ? 'Add as heard' : 'Take'), h('button', { class: 'btn sm ghost', 'aria-label': 'Dismiss', onClick: () => up(s => M.dismissInbox(s, p.ref)) }, '✕'));
+    h('div', { class: 'grow' }, h('div', { class: 'mtitle' }, it.title), it.type === 'posting' ? h('div', { class: 'tiny dim' }, `${it.postings.map(x => x.nurse).join(', ')}${it.from ? ` · from ${it.from}` : ''}`) : it.type === 'swap' ? h('div', { class: 'tiny dim' }, `${it.date}: you work ${it.code || 'nothing (off)'}${it.with ? ` · swapped with ${it.with}` : ''}`) : null, h('div', { class: 'msub' }, h('span', {}, meta.title || p.app), it.date ? h('span', {}, dueLabel(it.date)) : null, it.minutes ? h('span', {}, `${it.minutes}m`) : null, h('span', {}, it.type))),
+    h('button', { class: 'btn sm primary', onClick: () => acceptProposal(p) }, it.type === 'event' ? 'Add event' : it.type === 'posting' ? 'Add as heard' : it.type === 'swap' ? 'Apply swap' : 'Take'), h('button', { class: 'btn sm ghost', 'aria-label': 'Dismiss', onClick: () => up(s => M.dismissInbox(s, p.ref)) }, '✕'));
 }
 async function acceptProposal(p) {
   let cal = null; if (p.item.type === 'event' && p.item.start != null) { try { cal = await ctx.addEvent?.(p.item, { quiet: true }); } catch (e) { toast(e.message || 'Could not add the event', 'err'); return; } }
   let tid = '', res = null; up(s => { const r = M.acceptInbox(s, p); tid = r.taskId; res = r; return r.state; });
   if (p.item.type === 'posting') { toast(`${res.placed} posting${res.placed === 1 ? '' : 's'} saved as heard${p.item.from ? ` from ${p.item.from}` : ''}${res.missed.length ? ` · not matched: ${res.missed.join(', ')}` : ''}`, res.missed.length ? 'err' : 'ok'); return; }
+  if (p.item.type === 'swap') { ctx.regenerate?.(); toast(`Swap saved for ${p.item.date}${p.item.with ? ` with ${p.item.with}` : ''}`, 'ok'); return; }
   toast(p.item.type === 'note' ? 'Added to notes' : cal?.how === 'queued' ? 'Taken in: the event goes to your calendar when you are online' : cal ? 'Taken in and added to your calendar' : 'Taken in');   // one toast: addEvent was quiet if (p.item.minutes && p.item.date) ctx.regenerate?.();
 }
 function trendCard() {

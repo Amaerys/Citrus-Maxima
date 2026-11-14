@@ -26,7 +26,8 @@ import * as N from './nurses.js';
 import * as L from './labor.js';
 import * as TM from './today-model.js';
 import { checkBackup, describeCounts } from './backup-check.js';
-import { contactOf } from './social.js';
+import { contactOf, setTiming } from './social.js';
+import * as CZ from './custom.js';
 import { h, toast, safeUrl, keyOf, fromKey, addDays, startOfDay, sameDay, fmtDate, fmtDateShort, fmtTime, fmtMin, fmtDur, relDay, pad2, DAY_SHORT, DAY_NAMES, MONTHS, telLink, firstName, atMin, minsOf, uid } from './util.js';
 
 // ---------------- runtime state (not persisted) ----------------
@@ -86,7 +87,7 @@ async function boot() {
   loadCachedEvents();
   if (S().me && Object.keys(S().rotas).length) regenerate();
   const hashView = location.hash.replace('#', '');
-  show(hashView.startsWith('capture=') ? 'today' : hashView || 'today');
+  show(hashView.startsWith('capture=') ? 'today' : hashView || CZ.custom(S()).start);   // opens on the tab you chose
   handleIncoming();
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
   const cid = S().settings.clientId;
@@ -138,6 +139,13 @@ function authBanner() {
 
 const VIEWS = ['today', 'rota', 'plan', 'mind', 'social', 'apps', 'more'];
 const VIEW_NAMES = { today: 'Today', rota: 'Work', plan: 'Plan', mind: 'Mind', social: 'Social', apps: 'Apps', more: 'Settings' };
+/** Bottom tabs / rail in your order; hidden ones disappear (Settings › Customise › Tabs). Today and Settings always stay. */
+function applyTabs(c) {
+  const nav = document.querySelector('nav.tabs'); if (!nav) return;
+  for (const id of c.tabs.order) { const b = nav.querySelector(`button[data-view="${id}"]`); if (b) nav.insertBefore(b, nav.querySelector('button[data-view="more"]')); }
+  for (const b of nav.querySelectorAll('button[data-view]')) b.hidden = c.tabs.hidden.includes(b.dataset.view);
+  nav.style.setProperty('--tabs', String(CZ.TABS.length - c.tabs.hidden.length));
+}
 function show(view) {
   if (view === 'team') { rt.workSeg = 'team'; view = 'rota'; }   // the old Team tab lives inside Work now
   if (!VIEWS.includes(view)) view = 'today';
@@ -151,6 +159,7 @@ function show(view) {
 }
 
 function render() {
+  { const c = CZ.custom(S()); setTiming(c.social); applyTabs(c); }   // your Customise choices first: tabs, free-time hours
   ingestApps();   // numbers the apps report become history before anything is drawn
   const fn = { today: renderToday, rota: renderWork, plan: renderPlan, mind: MU.renderMind, social: SU.renderSocial, apps: renderApps, more: renderMore }[rt.view] || renderToday;
   const el = $(`#view-${rt.view}`);
@@ -827,7 +836,8 @@ function renderToday() {
   // Everything below the hero is ranked by what matters right now; the top few stay open, the rest fold into "More for today".
   const tailLive = md.overnightTail && now < md.overnightTail.window.end;
   const working = (!!today && now >= today.window.start && now < today.window.end) || !!tailLive, soon = !!today && now < today.window.end, ranked = [];
-  const add = (el, score, label) => { if (el) ranked.push({ el, score, label }); };
+  const cz = CZ.custom(S());   // Customise › Today: hidden cards never show; pinned ones always lead, open
+  const add = (el, score, label) => { if (el && !cz.today.hidden.includes(label)) ranked.push({ el, score: score + (cz.today.pinned.includes(label) ? 1000 : 0), label }); };
   add(shiftBoard(info, md), working ? 92 : soon ? 60 : 30, 'Shift board');
   add(CHU.updatesCard({ today: true }), 100, 'Schedule update');
   for (const c of DU.todayCards(now)) add(c.el, c.score, c.label);
@@ -839,7 +849,7 @@ function renderToday() {
   add(MU.mindCard(), 58, 'Mind');
   if (info.hasRota) add(onCallCard(info), working ? 40 : 22, 'On call');
   ranked.sort((x, y) => y.score - x.score);
-  const TOP = 5, top = ranked.slice(0, TOP), rest = ranked.slice(TOP);
+  const TOP = cz.today.top + ranked.filter(r => cz.today.pinned.includes(r.label)).length, top = ranked.slice(0, TOP), rest = ranked.slice(TOP);
   main.push(...top.map(r => r.el));
   if (rest.length) main.push(h('details', { class: 'more-today', open: getUi()[UI_MORE] ? '' : null, onToggle: (e) => { try { localStorage.setItem(UI_KEY, JSON.stringify({ ...getUi(), [UI_MORE]: e.currentTarget.open })); } catch {} } }, h('summary', {}, h('span', { class: 'title' }, 'More for today'), h('span', { class: 'chips' }, rest.map(r => h('span', { class: 'chip' }, r.label)))), ...rest.map(r => r.el)));
   side.push(eventsCard(now));
@@ -902,6 +912,33 @@ function heroCard(now, md = myDay(S(), now)) {
   if (!missing && f.kind !== 'done' && f.kind !== 'none') { const tm = heroTeam(f); if (tm) hero.append(tm); }
   if (s.me) hero.append(weekStrip(now));
   return hero;
+}
+// ───────── Customise: what shows, in which order, and how Citrus judges your day (synced; the interface above is per device)
+const czOpen = new Set();   // open sections stay open when a tap re-renders Settings
+function customiseCard() {
+  const c = CZ.custom(S()), set = (part, patch) => store.update(s => CZ.setCustom(s, part, patch));
+  const sec = (title, sub, ...kids) => h('details', { class: 'cz-sec', open: czOpen.has(title), onToggle: (e) => { e.currentTarget.open ? czOpen.add(title) : czOpen.delete(title); } }, h('summary', {}, h('b', {}, title), h('small', {}, sub)), ...kids);
+  const chip = (on, label, onClick, extra = {}) => h('button', { class: `chip ${on ? 'sel' : ''}`, 'aria-pressed': on ? 'true' : 'false', onClick, ...extra }, label);
+  const tabRow = ([id, label]) => { const hidden = c.tabs.hidden.includes(id), i = c.tabs.order.indexOf(id);
+    return h('div', { class: 'cz-row' }, h('span', { class: 'grow' }, label), h('button', { class: 'btn sm ghost', 'aria-label': `Move ${label} up`, disabled: i === 0, onClick: () => set('tabs', { order: CZ.move(c.tabs.order, id, -1) }) }, '↑'), h('button', { class: 'btn sm ghost', 'aria-label': `Move ${label} down`, disabled: i === c.tabs.order.length - 1, onClick: () => set('tabs', { order: CZ.move(c.tabs.order, id, 1) }) }, '↓'),
+      id === 'today' ? h('span', { class: 'tiny dim cz-fixed' }, 'always') : chip(!hidden, hidden ? 'Hidden' : 'Shown', () => set('tabs', { hidden: CZ.toggleIn(c.tabs.hidden, id) }))); };
+  const hm = (m) => `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`, toMin = (v) => { const [x, y] = String(v).split(':').map(Number); return x * 60 + (y || 0); };
+  const ns = S().settings?.nurseStaffing || {}, seat = (k, id) => (ns[k] || {})[id] ?? (N.TYPICAL[k] || {})[id] ?? '';
+  return h('div', { class: 'card cz' }, h('div', { class: 'title' }, 'Customise'), h('div', { class: 'tiny dim' }, 'Synced to all your devices.'),
+    sec('Tabs', 'order, hide, start tab', ...[...c.tabs.order].map(id => tabRow(CZ.TABS.find(t => t[0] === id))), h('div', { class: 'cz-row' }, h('span', { class: 'grow small' }, 'Open on'), h('select', { 'aria-label': 'Open on', onChange: (e) => set('start', e.target.value) }, CZ.TABS.filter(([id]) => !c.tabs.hidden.includes(id)).map(([id, l]) => h('option', { value: id, selected: c.start === id }, l))))),
+    sec('Work', 'which sections show', h('div', { class: 'chips' }, CZ.WORK_SEGS.map(([id, l]) => chip(!c.workSegs.hidden.includes(id), l, () => set('workSegs', { hidden: CZ.toggleIn(c.workSegs.hidden, id) }))))),
+    sec('Today', 'hide or pin cards, how many stay open', h('div', { class: 'tiny dim' }, 'Tap to hide · ★ to pin to the top'), ...CZ.TODAY_CARDS.map(l => h('div', { class: 'cz-row' }, h('span', { class: 'grow' }, l), chip(c.today.pinned.includes(l), '★', () => set('today', { pinned: CZ.toggleIn(c.today.pinned, l) }), { 'aria-label': `Pin ${l}` }), chip(!c.today.hidden.includes(l), c.today.hidden.includes(l) ? 'Hidden' : 'Shown', () => set('today', { hidden: CZ.toggleIn(c.today.hidden, l) })))),
+      h('div', { class: 'cz-row' }, h('span', { class: 'grow small' }, 'Cards open before "More for today"'), h('input', { type: 'number', min: 1, max: 12, value: c.today.top, 'aria-label': 'Cards open', class: 'cz-num', onChange: (e) => set('today', { top: +e.target.value }) }))),
+    sec('Briefing', 'which lines the morning card shows', h('div', { class: 'chips' }, CZ.BRIEF_LINES.map(([id, l]) => id === 'shift' ? chip(true, `${l} (always)`, () => {}, { disabled: true }) : chip(!c.brief.off.includes(id), l, () => set('brief', { off: CZ.toggleIn(c.brief.off, id) }))))),
+    sec('Social', 'your free hours and meet-ups', h('div', { class: 'cz-row' }, h('span', { class: 'grow small' }, 'Day starts'), h('input', { type: 'time', value: hm(c.social.wake), 'aria-label': 'Day starts', onChange: (e) => set('social', { wake: toMin(e.target.value) }) })),
+      h('div', { class: 'cz-row' }, h('span', { class: 'grow small' }, 'Day ends'), h('input', { type: 'time', value: hm(c.social.late % 1440), 'aria-label': 'Day ends', onChange: (e) => { const m = toMin(e.target.value); set('social', { late: m < 6 * 60 ? m + 1440 : m }); } })),
+      h('div', { class: 'cz-row' }, h('span', { class: 'grow small' }, 'Shortest meet-up worth suggesting'), h('select', { 'aria-label': 'Shortest meet-up', onChange: (e) => set('social', { minMeet: +e.target.value }) }, [[60, '1h'], [90, '1½h'], [120, '2h'], [180, '3h']].map(([m, l]) => h('option', { value: m, selected: c.social.minMeet === m }, l)))),
+      h('div', { class: 'cz-row' }, h('span', { class: 'grow small' }, '"Who is free" shows'), h('div', { class: 'chips' }, [[0, 'Fit screen'], [7, '7 days'], [14, '14'], [21, '21']].map(([d, l]) => chip(c.social.days === d, l, () => set('social', { days: d })))))),
+    sec('Nurse staffing', 'usual nurses per site', h('div', { class: 'tiny dim' }, 'How many floating nurses each site usually gets. 0 = closed (e.g. office clinics at night, paramedic-run on Fridays).'),
+      h('table', { class: 'cz-staff' }, h('tr', {}, h('th'), ...N.SITES.map(x => h('th', {}, x.id))), ...[['day', 'Day'], ['fri', 'Friday day'], ['night', 'Night']].map(([k, l]) => h('tr', {}, h('th', {}, l), ...N.SITES.map(x => h('td', {}, h('input', { type: 'number', min: 0, max: 20, value: seat(k, x.id), placeholder: '–', 'aria-label': `${l} ${x.id}`, onChange: (e) => store.update(s => { const cur = { ...(s.settings?.nurseStaffing || {}) }, v = e.target.value === '' ? undefined : Math.max(0, Math.min(20, Math.round(+e.target.value)));
+        const row = { ...(cur[k] || {}) }; if (v === undefined || v === (N.TYPICAL[k] || {})[x.id]) delete row[x.id]; else row[x.id] = v; cur[k] = row; return { ...s, settings: { ...s.settings, nurseStaffing: cur } }; }) })))))),
+      h('button', { class: 'btn sm ghost', onClick: () => store.update(s => ({ ...s, settings: { ...s.settings, nurseStaffing: {} } })) }, 'Back to the usual numbers')),
+    h('button', { class: 'btn sm ghost', style: { marginTop: '8px' }, onClick: () => { if (confirm('Put every Customise choice back to the default?')) store.update(s => ({ ...s, settings: { ...s.settings, custom: {} } })); } }, 'Reset Customise'));
 }
 function uiPicker() {
   const u = getUi(), opt = (id, name, note) => h('button', { class: `ui-opt ${u.ui === id ? 'sel' : ''}`, 'aria-pressed': u.ui === id ? 'true' : 'false', onClick: () => setUi({ ui: id }) }, h('span', { class: `ui-thumb ui-${id}` }, h('i'), h('i'), h('b', {}, 'Aa')), h('b', {}, name), h('small', {}, note));
@@ -1054,7 +1091,7 @@ function weekStrip(from) {
 }
 
 function mciBadge() {
-  return h('span', { class: 'mci-quiet', title: 'MCI 2nd physician: if a mass-casualty incident happens near FSED (Six Flags, Aqua Arabia…) you are moved there immediately' }, 'MCI 2nd');
+  return h('span', { class: 'mci-quiet', title: 'MCI 2nd physician: if a mass-casualty incident happens near FSED (the 24-hour Free Standing Emergency Department) or the park clinics (Six Flags, Aqua Arabia: nurses and paramedics only, park hours), you are moved there immediately' }, 'MCI 2nd');
 }
 /** Shift as a progress bar: how far through, time left, when it ends. */
 function shiftProgress(w) {
@@ -1349,7 +1386,7 @@ function noteCard(date) {
 // ---------------- ROTA ----------------
 let workSegDefault = 'calendar';
 function renderWork() {
-  const seg = rt.workSeg || workSegDefault, SEG = [['calendar', 'Calendar'], ['team', 'People'], ['nurses', 'Nurses'], ['home', 'Home'], ['career', 'Career']];
+  const SEG = CZ.visibleWorkSegs(S()), want = rt.workSeg || workSegDefault, seg = SEG.some(([id]) => id === want) ? want : SEG[0][0];   // hidden segments (Customise) are skipped
   const bar = h('div', { class: 'seg work-seg', role: 'tablist' }, SEG.map(([id, l]) => h('button', { class: seg === id ? 'active' : '', role: 'tab', 'aria-selected': seg === id ? 'true' : 'false', onClick: () => { rt.workSeg = id; render(); window.scrollTo(0, 0); } }, l)));
   const body = seg === 'team' ? PU.renderDirectory() : seg === 'nurses' ? PU.renderNurses() : seg === 'home' ? CU.renderHome() : seg === 'career' ? RU.renderCareer() : renderRota();
   return [h('h1', {}, 'Work'), bar, ...[body].flat()];
@@ -1827,7 +1864,7 @@ function renderApps() {
 function renderMore() {
   const s = S();
   // the look of the app comes first: it is what people open Settings for most (beta T09-18)
-  const out = [h('h1', {}, 'Settings'), h('div', { class: 'card' }, uiPicker())];
+  const out = [h('h1', {}, 'Settings'), h('div', { class: 'card' }, uiPicker()), customiseCard()];
   // Google
   const signed = G.isSignedIn();
   const cid = h('input', { type: 'text', value: s.settings.clientId, placeholder: '1234567890-xxxx.apps.googleusercontent.com', spellcheck: false });

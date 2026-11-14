@@ -1753,3 +1753,19 @@ nav.tabs .rail-only { display: none; }
 .nowrap { white-space: nowrap; }
 /* 320px: the brand and three 44px icons must fit in one row */
 @media (max-width: 360px) { .topbar { padding-left: 12px; padding-right: 8px; gap: 4px; } .topbar .btn.icon { width: 40px; height: 40px; } .topbar .brand { font-size: 16px; gap: 7px; } }
+
+/* Customise card (Settings) */
+.cz-sec { border-top: 1px solid var(--line, rgba(127,127,127,.25)); padding: 8px 0; }
+.cz-sec > summary { cursor: pointer; display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; list-style: none; }
+.cz-sec > summary small { opacity: .65; }
+.cz-row { display: flex; align-items: center; gap: 6px; padding: 4px 0; min-width: 0; }
+.cz-row .grow { flex: 1; min-width: 0; }
+.cz-num { width: 4.5em; }
+.cz-fixed { padding: 0 6px; }
+.cz-staff { width: 100%; border-collapse: collapse; margin: 6px 0; table-layout: fixed; }
+.cz-staff th, .cz-staff td { padding: 3px; text-align: center; font-size: .85em; }
+.cz-staff th:first-child { text-align: left; width: 28%; }
+.cz-staff input { width: 100%; max-width: 4em; box-sizing: border-box; }
+.place-note { opacity: .8; }
+
+nav.tabs button[hidden] { display: none !important; }

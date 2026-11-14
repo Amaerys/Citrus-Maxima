@@ -16,8 +16,8 @@ export const siteLabel = (id) => SITES.find(x => x.id === id)?.label || id;
 const ALL = SITES.map(x => x.id);
 /** How many floating nurses each site usually gets (owner, 14/11/2026). Nights: 2 Lower Village + 2 Upper Village, no office clinics
  *  (FSED's 2 are a fixed group). Days: about 5 per village (4 on some days, 6 rarely); lately Lower Village has 3 on Fridays. Office clinics
- *  by day: 1 nurse each (with one doctor and paramedics). Override in settings.nurseStaffing ({night:{…}, day:{…}, fri:{…}}). */
-export const TYPICAL = { night: { UPV: 2, LPV: 2, UPO: 0, LPO: 0 }, day: { UPV: 5, LPV: 5, UPO: 1, LPO: 1 }, fri: { LPV: 3 } };
+ *  by day: 1 nurse each (with one doctor and paramedics); on Fridays they are paramedic-run, so no nurse is posted there. Override in settings.nurseStaffing ({night:{…}, day:{…}, fri:{…}}). */
+export const TYPICAL = { night: { UPV: 2, LPV: 2, UPO: 0, LPO: 0 }, day: { UPV: 5, LPV: 5, UPO: 1, LPO: 1 }, fri: { LPV: 3, UPO: 0, LPO: 0 } };
 export const shiftKind = (sh) => sh && (sh.type === 'N' || sh.hours?.overnight || (sh.hours && sh.hours.start >= 18 * 60)) ? 'night' : 'day';
 export function seatsFor(s, sh, date = null) {
   const k = shiftKind(sh), o = s?.settings?.nurseStaffing || {}, fri = k === 'day' && date && date.getDay() === 5;
@@ -25,7 +25,15 @@ export function seatsFor(s, sh, date = null) {
   return Object.keys(t).length ? t : null;
 }
 /** Sites that are actually open on that shift (a 0 in the usual staffing closes it). */
-export const openSites = (s, sh, choices) => { const t = seatsFor(s, sh); return t ? choices.filter(id => (t[id] ?? 1) > 0) : choices; };
+export const openSites = (s, sh, choices, date = null) => { const t = seatsFor(s, sh, date); return t ? choices.filter(id => (t[id] ?? 1) > 0) : choices; };
+/** The fixed places (owner, 14/11/2026): FSED (Free Standing Emergency Department) runs 24 hours; the Aqua Arabia and Six Flags clinics
+ *  are run by nurses and paramedics only (no doctor for now) and open around park hours, not 24 hours. */
+export const PLACE_INFO = {
+  FSED: { full: 'Free Standing Emergency Department', hours: '24 hours', staff: 'doctors, nurses and paramedics' },
+  'Aqua Arabia': { hours: 'park hours only', staff: 'nurses and paramedics, no doctor' },
+  'Six Flags': { hours: 'park hours only', staff: 'nurses and paramedics, no doctor' },
+};
+export const placeNote = (name) => { const x = PLACE_INFO[name]; return x ? `${x.full ? x.full + ' · ' : ''}${x.hours} · ${x.staff}` : ''; };
 /** group → who they are and where they can be posted. `fixed` groups work at one place and never float. */
 export const GROUPS = {
   head: { label: 'Head nurse', choices: ALL, supervises: true },   // ALL SITES: oversees, is not posted, so never a "could be with you" candidate
@@ -82,7 +90,7 @@ export function rowsFor(s, date) {
   const d = date.getDate(), out = [];
   for (const p of r.people) {
     const code = p.days[d] || '', shift = interpretCode(code, r.legend, 'nurse'); if (shift.kind !== 'work') continue;
-    const g = groupDef(p.group || 'pool', r), key = keyOfPerson(p), fixed = g.fixed || '', choices = g.supervises ? (g.choices || []) : openSites(s, shift, g.choices || []), tip = fixed ? null : tipOf(s, date, key);
+    const g = groupDef(p.group || 'pool', r), key = keyOfPerson(p), fixed = g.fixed || '', choices = g.supervises ? (g.choices || []) : openSites(s, shift, g.choices || [], date), tip = fixed ? null : tipOf(s, date, key);
     // no suggestion once there is a tip: the tip already says where they probably go
     out.push({ person: p, key, code, shift, group: p.group, fixed, choices, post: fixed || postOf(s, date, key), tip, suggest: fixed || tip ? '' : suggestPost(s, key, date, choices) });
   }

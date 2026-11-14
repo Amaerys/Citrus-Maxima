@@ -1,0 +1,11 @@
+// Customisation settings: defaults, sanitising, getters. Run: node test/custom.mjs
+import assert from 'node:assert/strict';
+import * as C from '../docs/js/custom.js';
+let fails = 0; const t = (n, f) => { try { f(); console.log('  ✓', n); } catch (e) { fails++; console.log('  ✗', n, '\n    ', e.stack.split('\n').slice(0, 3).join('\n     ')); } };
+t('defaults when nothing is set', () => { const c = C.custom({}); assert.equal(c.start, 'today'); assert.deepEqual(C.visibleTabs({}), ['today', 'rota', 'plan', 'mind', 'social', 'apps']); assert.equal(c.today.top, 5); assert.equal(c.social.wake, 480); });
+t('junk from storage is cleaned', () => { const c = C.custom({ settings: { custom: { start: 'zzz', tabs: { hidden: ['today', 'mind', 'x'], order: ['apps', 'nope'] }, today: { top: 99, hidden: ['Plan', 'Nope'] }, social: { days: 5, wake: 'a', late: 300 } } } });
+  assert.equal(c.start, 'today'); assert.deepEqual(c.tabs.hidden, ['mind'], 'Today can never be hidden'); assert.equal(c.tabs.order[0], 'apps'); assert.equal(c.tabs.order.length, 6); assert.equal(c.today.top, 12); assert.deepEqual(c.today.hidden, ['Plan']); assert.equal(c.social.days, 0); assert.equal(c.social.wake, 480); assert.ok(c.social.late >= c.social.wake + 240); });
+t('a hidden tab cannot be the start tab; at least one Work segment stays', () => { assert.equal(C.custom({ settings: { custom: { start: 'mind', tabs: { hidden: ['mind'] } } } }).start, 'today'); assert.equal(C.custom({ settings: { custom: { workSegs: { hidden: ['calendar', 'team', 'nurses', 'home', 'career'] } } } }).workSegs.hidden.length, 4); });
+t('setCustom / toggle / move', () => { let s = C.setCustom({ settings: {} }, 'tabs', { hidden: ['apps'] }); assert.deepEqual(C.visibleTabs(s), ['today', 'rota', 'plan', 'mind', 'social']); s = C.setCustom(s, 'tabs', { order: C.move(C.custom(s).tabs.order, 'social', -1) }); assert.deepEqual(C.visibleTabs(s).slice(3), ['social', 'mind']);
+  assert.deepEqual(C.toggleIn(['a'], 'b'), ['a', 'b']); assert.deepEqual(C.toggleIn(['a', 'b'], 'a'), ['b']); assert.ok(!C.briefOn(C.setCustom({}, 'brief', { off: ['hours'] }), 'hours')); });
+console.log(fails ? `${fails} FAILED` : 'custom ok'); process.exit(fails ? 1 : 0);

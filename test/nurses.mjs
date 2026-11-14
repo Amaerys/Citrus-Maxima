@@ -84,7 +84,11 @@ await t('nights: 2 per village, no office clinics; "N candidates for 2 places" w
 await t('days: about 5 per village, Lower Village 3 on Fridays; office clinics 1 nurse (owner, 14/11)', () => {
   const D = { kind: 'work', type: 'D', hours: { start: 480, end: 1200, durationMin: 720 } };
   assert.equal(N.seatsFor({}, D, new Date(2026, 10, 15)).UPV, 5); assert.equal(N.seatsFor({}, D, new Date(2026, 10, 15)).LPV, 5);
-  assert.equal(N.seatsFor({}, D, new Date(2026, 10, 20)).LPV, 3, 'Friday'); assert.equal(N.seatsFor({}, D, new Date(2026, 10, 20)).UPV, 5);
+  assert.equal(N.seatsFor({}, D, new Date(2026, 10, 20)).LPV, 3, 'Friday'); assert.equal(N.seatsFor({}, D, new Date(2026, 10, 20)).UPO, 0, 'Friday office clinics are paramedic-run'); assert.deepEqual(N.openSites({}, D, ['UPV', 'LPV', 'UPO', 'LPO'], new Date(2026, 10, 20)), ['UPV', 'LPV']); assert.equal(N.seatsFor({}, D, new Date(2026, 10, 20)).UPV, 5);
   assert.equal(N.seatsFor({}, D, new Date(2026, 10, 15)).UPO, 1, 'office clinics: 1 nurse by day'); assert.equal(N.seatsFor({}, D, new Date(2026, 10, 15)).LPO, 1); assert.deepEqual(N.openSites({}, D, ['UPV', 'LPV', 'UPO', 'LPO']).length, 4);
 });
+// park clinics: nurses + paramedics, park hours; FSED 24h
+{ const N = await import('../docs/js/nurses.js');
+  const ok = N.placeNote('Aqua Arabia').includes('no doctor') && N.placeNote('Six Flags').includes('park hours') && N.placeNote('FSED').includes('24 hours') && N.placeNote('FSED').includes('Free Standing');
+  if (!ok) { console.error('FAIL place notes'); process.exit(1); } console.log('ok place notes'); }
 console.log(fails ? `${fails} FAILED` : 'nurses ok'); process.exit(fails ? 1 : 0);

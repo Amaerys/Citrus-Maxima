@@ -1,4 +1,5 @@
 // Today: morning briefing, evening wind-down, how-did-the-day-feel log with what it learns, and a study planner around your shifts. Pure functions (no DOM).
+import { briefOn } from './custom.js';
 import { keyOf, fromKey, addDays, startOfDay } from './util.js';
 import { dayInfo, myDay } from './model.js';
 import * as N from './nurses.js';
@@ -48,7 +49,9 @@ export function briefing(s, now = new Date()) {
   const cap = cfg.weeklyH || L.LAW.weeklyH, h = Math.round(mins / 6) / 10; if (mins) out.push({ icon: '⏱', text: `${h}h rostered this week${h > cap ? `, ${Math.round((h - cap) * 10) / 10}h over the ${cap}h limit` : `, ${Math.round((cap - h) * 10) / 10}h before overtime`}` });
   const job = currentJob(s); if (job) for (const k of upcoming(job, day, 14)) out.push({ icon: '📄', text: `${k.label} in ${k.days} days` });
   const ce = X.contractEnds(s, day, 7); if (ce.length) out.push({ icon: '📄', text: `Nurse contract ending: ${ce.slice(0, 2).map(c => fn(c)).join(', ')}` });
-  return out;
+  // Settings › Customise › Briefing switches lines off; the shift line always stays
+  const ID_OF = { '👥': 'team', '💉': 'nurses', '🧭': 'nurses', '🏠': 'home', '✅': 'tasks', '🎂': 'birthdays', '⏱': 'hours', '📄': 'contract' };
+  return out.filter(l => !ID_OF[l.icon] || briefOn(s, ID_OF[l.icon]));
 }
 
 /** One honest nurse line from nurses.workingWithMe (D03): "likely" only with posting history behind it; otherwise its shared summary. */
