@@ -46,6 +46,8 @@ await t('short names: surname initial only where two read the same, tiny first n
 });
 await t('who can tell you the postings: head nurse and construction-clinic leaders, never a fixed group’s leader', () => {
   const src = NB.heardSources(base).map(x => x.name); assert.deepEqual([...src].sort(), ['Head', 'Lead R.', 'Lead S.']);
+  const lead = NB.heardSources(base).find(x => x.name === 'Lead R.'), withNick = { ...base, friends: { f: { id: 'f', name: 'Lead R', nick: 'Griselda', rotaKey: lead.key } } };
+  assert.ok(NB.heardSources(withNick).some(x => x.name === 'Griselda'), 'a friend nickname is how the source reads');
 });
 await t('last source: the newest typed tip, never "last time" guesses', () => {
   let s = N.setPost(base, D(3), key(base, 'Bea'), 'UPV', { tip: true, from: 'Sage' }); s.posts[Object.keys(s.posts)[0]].at = 1;

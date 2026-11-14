@@ -81,4 +81,10 @@ await t('nights: 2 per village, no office clinics; "N candidates for 2 places" w
   const w = N.workingWithMe(st, d, mine); assert.equal(w.possible.length, 4, 'the two FSED nurses are never candidates'); assert.equal(w.summary, '4 candidates for 2 places at Lower Village · not posted yet');
   assert.ok(w.possible.every(p => Math.abs(p.chance - 0.5) < 1e-9), '2 places out of 4 = 50% each with no history');
 });
+await t('days: about 5 per village, Lower Village 3 on Fridays; office clinics have no count yet (owner, 14/11)', () => {
+  const D = { kind: 'work', type: 'D', hours: { start: 480, end: 1200, durationMin: 720 } };
+  assert.equal(N.seatsFor({}, D, new Date(2026, 10, 15)).UPV, 5); assert.equal(N.seatsFor({}, D, new Date(2026, 10, 15)).LPV, 5);
+  assert.equal(N.seatsFor({}, D, new Date(2026, 10, 20)).LPV, 3, 'Friday'); assert.equal(N.seatsFor({}, D, new Date(2026, 10, 20)).UPV, 5);
+  assert.equal(N.seatsFor({}, D, new Date(2026, 10, 15)).UPO, undefined); assert.deepEqual(N.openSites({}, D, ['UPV', 'LPV', 'UPO', 'LPO']).length, 4);
+});
 console.log(fails ? `${fails} FAILED` : 'nurses ok'); process.exit(fails ? 1 : 0);

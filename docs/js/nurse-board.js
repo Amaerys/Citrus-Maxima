@@ -30,7 +30,9 @@ export function shortNurseNames(names, extra = []) {
 export function heardSources(s) {
   const l = N.nurses(s).filter(n => n.group === 'head' || n.group === 'leaders' || (n.leader && N.isFloater(n.group)));
   const short = shortNurseNames(l.map(n => n.name));
-  return l.map((n, i) => ({ key: N.keyOfPerson(n), name: short[i], leader: !!n.leader })).sort((a, b) => b.leader - a.leader);
+  // the name YOU use for them wins: a friend's nickname (e.g. "Griselda" for Cresilda) is how the source chip reads
+  const nick = new Map(Object.values(s.friends || {}).filter(f => f?.rotaKey && f.nick).map(f => [f.rotaKey, f.nick]));
+  return l.map((n, i) => ({ key: N.keyOfPerson(n), name: nick.get(N.keyOfPerson(n)) || short[i], leader: !!n.leader })).sort((a, b) => b.leader - a.leader);
 }
 /** The source of the most recent tip you typed (not a guess): the next tip probably comes from the same person. */
 export function lastSource(s) {

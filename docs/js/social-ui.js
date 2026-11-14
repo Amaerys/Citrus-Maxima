@@ -58,7 +58,7 @@ const STARTERS = [
     entries: ['Faisal', 'Meshal', 'Mariam', 'Mohammed Merri'].map(q => ({ q, nick: q.includes(' ') ? `${q.split(' ')[0]} ${q.split(' ')[1][0]}.` : q, every: 21 })) },
   { id: 'nurse', title: 'Your nurses', kind: 'nurse', blurb: 'Linked to the nurses’ schedule. Anyone pulled out to another site shows up so you can enter their shifts by hand.',
     entries: [
-      { q: 'Cresilda Belleza', nick: 'Cresilda', every: 30, note: 'Team leader and a close friend. She suggests the posting list to the Head Nurse (Odai), so she can tell me who goes where.' },
+      { q: 'Cresilda Belleza', nick: 'Griselda', every: 30, note: 'Team leader and a close friend. She suggests the posting list to the Head Nurse (Odai), so she can tell me who goes where.' },
       { q: 'Areej Patuguial', nick: 'Areej', every: 14, fav: true, note: 'Work daughter 💛' },
       { q: 'Fatima Marwati', nick: 'Fatima M.', every: 14, fav: true, note: 'Work daughter 💛' },
       { q: 'Arnalyn Akam', nick: 'Arnalyn', every: 14, fav: true, note: 'Work daughter 💛' }] },

@@ -70,7 +70,15 @@ export function normalizeStatus(st, fallbackName = '') {
     const id = slug(it.id); if (!id) { issues.push(`inbox[${i}]: needs a stable id (so it is not offered twice), ignored`); return null; }
     if (seen.has(id)) { issues.push(`inbox[${i}]: duplicate id "${id}", ignored`); return null; }
     seen.add(id);
-    const type = ['task', 'event', 'note'].includes(it.type) ? it.type : 'task';
+    const type = ['task', 'event', 'note', 'posting'].includes(it.type) ? it.type : 'task';
+    // posting: nurse postings someone told you about (e.g. sent by Claude from a screenshot) — {date, from, site?, postings:[{nurse, site?}]};
+    // site "mine" (or none) = your own site that day. Accepting saves them as "heard" tips, never as confirmed posts.
+    if (type === 'posting') {
+      const date = validDate(it.date) ? it.date : ''; if (!date) { issues.push(`inbox[${i}] "${id}": a posting needs a date, ignored`); return null; }
+      const postings = (Array.isArray(it.postings) ? it.postings : []).slice(0, 40).map(p => ({ nurse: str(p?.nurse, 60).trim(), site: str(p?.site || it.site || 'mine', 30).trim() })).filter(p => p.nurse);
+      if (!postings.length) { issues.push(`inbox[${i}] "${id}": a posting needs postings[{nurse}], ignored`); return null; }
+      return { id, type, title: str(it.title, 120).trim() || `Nurse postings for ${date}`, text: str(it.text, 400), date, from: str(it.from, 40).trim(), postings, expires: validDate(it.expires) ? it.expires : '', pri: 0, minutes: 0, start: '', end: '', url: '' };
+    }
     const title = str(it.title || (type === 'note' ? it.text : ''), 120).trim();
     if (!title) { issues.push(`inbox[${i}] "${id}": needs a title, ignored`); return null; }
     const date = validDate(it.date) ? it.date : validDate(it.due) ? it.due : '';

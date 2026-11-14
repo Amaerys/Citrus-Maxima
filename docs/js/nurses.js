@@ -14,11 +14,16 @@ export const SITES = [
 export const siteId = (text) => SITES.find(x => x.re.test(String(text || '')))?.id || '';
 export const siteLabel = (id) => SITES.find(x => x.id === id)?.label || id;
 const ALL = SITES.map(x => x.id);
-/** How many floating nurses each site usually gets, per shift kind (owner, 14/11/2026): nights = 2 Lower Village + 2 Upper Village, no office
- *  clinics at night (FSED's 2 are a fixed group). Days are not known yet, so every site stays open by day. Override in settings.nurseStaffing. */
-export const TYPICAL = { night: { UPV: 2, LPV: 2, UPO: 0, LPO: 0 } };
+/** How many floating nurses each site usually gets (owner, 14/11/2026). Nights: 2 Lower Village + 2 Upper Village, no office clinics
+ *  (FSED's 2 are a fixed group). Days: about 5 per village (4 on some days, 6 rarely); lately Lower Village has 3 on Fridays. Office clinics
+ *  by day: not known yet, so they stay open with no seat count. Override in settings.nurseStaffing ({night:{…}, day:{…}, fri:{…}}). */
+export const TYPICAL = { night: { UPV: 2, LPV: 2, UPO: 0, LPO: 0 }, day: { UPV: 5, LPV: 5 }, fri: { LPV: 3 } };
 export const shiftKind = (sh) => sh && (sh.type === 'N' || sh.hours?.overnight || (sh.hours && sh.hours.start >= 18 * 60)) ? 'night' : 'day';
-export function seatsFor(s, sh) { const t = { ...(TYPICAL[shiftKind(sh)] || {}), ...((s?.settings?.nurseStaffing || {})[shiftKind(sh)] || {}) }; return Object.keys(t).length ? t : null; }
+export function seatsFor(s, sh, date = null) {
+  const k = shiftKind(sh), o = s?.settings?.nurseStaffing || {}, fri = k === 'day' && date && date.getDay() === 5;
+  const t = { ...(TYPICAL[k] || {}), ...(o[k] || {}), ...(fri ? { ...TYPICAL.fri, ...(o.fri || {}) } : {}) };
+  return Object.keys(t).length ? t : null;
+}
 /** Sites that are actually open on that shift (a 0 in the usual staffing closes it). */
 export const openSites = (s, sh, choices) => { const t = seatsFor(s, sh); return t ? choices.filter(id => (t[id] ?? 1) > 0) : choices; };
 /** group → who they are and where they can be posted. `fixed` groups work at one place and never float. */
@@ -144,7 +149,7 @@ export function workingWithMe(s, date, mine) {
   const likely = possible.filter(p => p.known && p.chance > p.base + 1e-9);
   const n = possible.length, fn = (r) => r.person.name.split(' ')[0];
   // usual seats at your site on your shift (nights: 2 per village) — "4 candidates, 2 will be with you" instead of a bare count
-  const seat = site ? seatsFor(s, mine.shift)?.[site] : null, seats = Number.isFinite(seat) ? Math.max(0, seat - confirmed.length - tipped.length) : null;
+  const seat = site ? seatsFor(s, mine.shift, date)?.[site] : null, seats = Number.isFinite(seat) ? Math.max(0, seat - confirmed.length - tipped.length) : null;
   if (seats != null && n) for (const p of possible) if (!p.known) { p.chance = Math.min(1, seats / n); p.base = p.chance; }
   const summary = confirmed.length ? `${confirmed.length} posted with you${n ? ` · ${n} more could be sent` : ''}`
     : tipped.length ? `${tipped.length} heard${n ? ` · ${n} more could be sent` : ''}`

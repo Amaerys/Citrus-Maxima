@@ -4,6 +4,9 @@
 import { keyOf, fromKey, addDays, startOfDay, uid } from './util.js';
 import { weekStartOf, weekProgress } from './planner.js';
 import { refOf } from './inbound.js';
+import * as N from './nurses.js';
+import { parsePostingList } from './nurse-board.js';
+import { dayInfo } from './model.js';
 
 const rec = (o) => Object.values(o || {});
 const clamp01 = (x) => Math.max(0, Math.min(1, x));
@@ -439,7 +442,7 @@ export function inboxPending(s, apps, now = new Date()) {
     const ref = refOf(st.app || name, it.id);
     if (s.inboxLog?.[ref]) continue;
     if (it.expires && it.expires < todayKey) continue;
-    if (it.type === 'event' && it.date < todayKey) continue;
+    if ((it.type === 'event' || it.type === 'posting') && it.date < todayKey) continue;
     out.push({ ref, app: st.app || name, item: it, at: st.updatedAt || '' });
   }
   return out.sort((a, b) => b.at.localeCompare(a.at));
@@ -448,6 +451,13 @@ export function inboxPending(s, apps, now = new Date()) {
 export function acceptInbox(s, p) {
   const { ref, app, item } = p, now = Date.now();
   let next = s, taskId = '';
+  if (item.type === 'posting') {
+    // names → that day's floating nurses with the same matcher as "Paste list"; "mine" = your own GP site that day
+    const date = fromKey(item.date), mySite = N.siteId(dayInfo(s, date).mine?.shift?.site || ''), rows = N.rowsFor(s, date);
+    const text = item.postings.map(p => `${/^mine$/i.test(p.site) ? (N.siteLabel(mySite) || '') : p.site}: ${p.nurse}`).join('\n');
+    const res = parsePostingList(text, rows); for (const hit of res.hits) next = N.setPost(next, date, hit.key, hit.site, { tip: true, from: item.from || app });
+    return { state: { ...next, inboxLog: { ...next.inboxLog, [ref]: { status: 'accepted', at: now, type: item.type, placed: res.hits.length, missed: res.unknown.length + res.offsite.length } } }, taskId: '', placed: res.hits.length, missed: [...res.unknown.map(u => u.text), ...res.offsite.map(o => o.name)] };
+  }
   if (item.type === 'note') {
     const date = item.date || keyOf(new Date()), cur = s.notes?.[date];
     next = { ...s, notes: { ...s.notes, [date]: `${cur ? cur + '\n' : ''}[${app}] ${item.text || item.title}` } };
