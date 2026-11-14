@@ -1091,7 +1091,7 @@ function weekStrip(from) {
 }
 
 function mciBadge() {
-  return h('span', { class: 'mci-quiet', title: 'MCI 2nd physician: if a mass-casualty incident happens near FSED (the 24-hour Free Standing Emergency Department) or the park clinics (Six Flags, Aqua Arabia: nurses and paramedics only, park hours), you are moved there immediately' }, 'MCI 2nd');
+  return h('span', { class: 'mci-quiet', title: 'MCI 2nd physician: if a mass-casualty incident happens near FSED (the 24-hour Free Standing Emergency Department) or the park clinics (Six Flags; Aqua Arabia, which is nurses and paramedics only; both open park hours), you are moved there immediately' }, 'MCI 2nd');
 }
 /** Shift as a progress bar: how far through, time left, when it ends. */
 function shiftProgress(w) {

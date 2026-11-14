@@ -26,12 +26,12 @@ export function seatsFor(s, sh, date = null) {
 }
 /** Sites that are actually open on that shift (a 0 in the usual staffing closes it). */
 export const openSites = (s, sh, choices, date = null) => { const t = seatsFor(s, sh, date); return t ? choices.filter(id => (t[id] ?? 1) > 0) : choices; };
-/** The fixed places (owner, 14/11/2026): FSED (Free Standing Emergency Department) runs 24 hours; the Aqua Arabia and Six Flags clinics
- *  are run by nurses and paramedics only (no doctor for now) and open around park hours, not 24 hours. */
+/** The fixed places (owner, 14/11/2026): FSED (Free Standing Emergency Department) runs 24 hours. The Aqua Arabia and Six Flags clinics open
+ *  around park hours, not 24 hours. Aqua Arabia is run by nurses and paramedics only (no doctor for now); Six Flags has doctors. */
 export const PLACE_INFO = {
   FSED: { full: 'Free Standing Emergency Department', hours: '24 hours', staff: 'doctors, nurses and paramedics' },
   'Aqua Arabia': { hours: 'park hours only', staff: 'nurses and paramedics, no doctor' },
-  'Six Flags': { hours: 'park hours only', staff: 'nurses and paramedics, no doctor' },
+  'Six Flags': { hours: 'park hours only', staff: 'doctors, nurses and paramedics' },
 };
 export const placeNote = (name) => { const x = PLACE_INFO[name]; return x ? `${x.full ? x.full + ' · ' : ''}${x.hours} · ${x.staff}` : ''; };
 /** group → who they are and where they can be posted. `fixed` groups work at one place and never float. */

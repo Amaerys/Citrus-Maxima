@@ -89,6 +89,6 @@ await t('days: about 5 per village, Lower Village 3 on Fridays; office clinics 1
 });
 // park clinics: nurses + paramedics, park hours; FSED 24h
 { const N = await import('../docs/js/nurses.js');
-  const ok = N.placeNote('Aqua Arabia').includes('no doctor') && N.placeNote('Six Flags').includes('park hours') && N.placeNote('FSED').includes('24 hours') && N.placeNote('FSED').includes('Free Standing');
+  const ok = N.placeNote('Aqua Arabia').includes('no doctor') && N.placeNote('Six Flags').includes('park hours') && N.placeNote('Six Flags').includes('doctors') && !N.placeNote('Six Flags').includes('no doctor') && N.placeNote('FSED').includes('24 hours') && N.placeNote('FSED').includes('Free Standing');
   if (!ok) { console.error('FAIL place notes'); process.exit(1); } console.log('ok place notes'); }
 console.log(fails ? `${fails} FAILED` : 'nurses ok'); process.exit(fails ? 1 : 0);
