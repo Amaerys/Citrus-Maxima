@@ -458,6 +458,11 @@ export function acceptInbox(s, p) {
     const res = parsePostingList(text, rows); for (const hit of res.hits) next = N.setPost(next, date, hit.key, hit.site, { tip: true, from: item.from || app });
     return { state: { ...next, inboxLog: { ...next.inboxLog, [ref]: { status: 'accepted', at: now, type: item.type, placed: res.hits.length, missed: res.unknown.length + res.offsite.length } } }, taskId: '', placed: res.hits.length, missed: [...res.unknown.map(u => u.text), ...res.offsite.map(o => o.name)] };
   }
+  if (item.type === 'nurse') {   // "Radz can lead": find her on the nurse sheets and mark her
+    const p = N.findNurse(s, item.nurse); if (!p) return { state: s, taskId: '', missed: [item.nurse] };
+    const next2 = N.setCanLead(s, N.keyOfPerson(p), item.canLead);
+    return { state: { ...next2, inboxLog: { ...next2.inboxLog, [ref]: { status: 'accepted', at: now, type: item.type } } }, taskId: '', name: p.name };
+  }
   if (item.type === 'swap') {   // same record as Correct-this-day; imports never overwrite it
     const swaps = { ...(s.swaps || {}), [item.date]: { code: item.code, with: item.with, note: item.note || item.title, at: now } }, deleted = { ...(s.deleted || {}) }; delete deleted[`swap:${item.date}`];
     return { state: { ...s, swaps, deleted, inboxLog: { ...s.inboxLog, [ref]: { status: 'accepted', at: now, type: item.type } } }, taskId: '' };

@@ -66,6 +66,16 @@ export const nurseRotaFor = (s, date) => rec(s.rotas).find(r => r.unitKind === '
 export const nurseRotas = (s) => { const l = rec(s.rotas).filter(r => r.unitKind === 'nurse'); registerGroups(l); return l; };
 export const nurses = (s) => { const m = new Map(); for (const r of nurseRotas(s)) for (const p of r.people) m.set(keyOfPerson(p), p); return [...m.values()]; };
 
+/** Nurses YOU know can step in as team leader (e.g. a senior pool nurse who leads a village some days). Synced in settings.nurseLeads {key: true}. */
+export const canLead = (s, key) => !!s?.settings?.nurseLeads?.[key];
+export function setCanLead(s, key, on) { const m = { ...(s.settings?.nurseLeads || {}) }; if (on) m[key] = true; else delete m[key]; return { ...s, settings: { ...s.settings, nurseLeads: m } }; }
+/** A nurse by a name as people say it ("Radz", "Radznahar", "Radznahar Ulidal"): every word must start a word of the sheet name; one match only. */
+export function findNurse(s, text) {
+  const w = String(text || '').toLowerCase().split(/[^a-z\u00c0-\u024f]+/).filter(Boolean); if (!w.length) return null;
+  const hit = nurses(s).filter(p => { const pw = p.name.toLowerCase().split(/[^a-z\u00c0-\u024f]+/); return w.every(x => pw.some(y => y.startsWith(x))); });
+  return hit.length === 1 ? hit[0] : null;
+}
+
 // ───────── postings
 const pk = (date, key) => `${keyOf(date)}:${key}`;
 /** A posting is either confirmed, or a tip: something you heard (e.g. from the team leader) before it was official. Only confirmed postings count as fact and as history. */

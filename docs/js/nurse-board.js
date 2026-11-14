@@ -28,7 +28,7 @@ export function shortNurseNames(names, extra = []) {
 /** People who actually know where the construction-clinic nurses go: the head nurse and the team leaders of the floating groups.
  *  FSED / Aqua Arabia leaders are fixed at their place and do not know the postings, so they are never offered. */
 export function heardSources(s) {
-  const l = N.nurses(s).filter(n => n.group === 'head' || n.group === 'leaders' || (n.leader && N.isFloater(n.group)));
+  const l = N.nurses(s).filter(n => n.group === 'head' || n.group === 'leaders' || ((n.leader || N.canLead(s, N.keyOfPerson(n))) && N.isFloater(n.group)));   // + nurses you marked "can lead"
   const short = shortNurseNames(l.map(n => n.name));
   // the name YOU use for them wins: a friend's nickname (e.g. "Griselda" for Cresilda) is how the source chip reads
   const nick = new Map(Object.values(s.friends || {}).filter(f => f?.rotaKey && f.nick).map(f => [f.rotaKey, f.nick]));
