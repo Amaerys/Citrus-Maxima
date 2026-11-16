@@ -1678,6 +1678,13 @@ function regenerate() {
   rt.suggestions = sg;
   publishPlanSoon();
 }
+/** Your goals for other apps to link to (Bergamot's tasks and habits, Calamansi's diet): aims with progress, this year's resolutions, the time goals. */
+function planGoals(s) {
+  const y = new Date().getFullYear();
+  return { aims: Object.values(s.aims || {}).filter(a => a && a.title && a.status !== 'archived').slice(0, 30).map(a => ({ id: a.id, title: a.title, area: a.area || '', deadline: a.deadline || '', status: a.status || 'active', progress: Math.round((M.aimProgress(s, a) || 0) * 100) })),
+    resolutions: Object.values(s.resolutions || {}).filter(r => r && r.year === y).slice(0, 20).map(r => ({ id: r.id, title: r.title, area: r.area || '', aimId: r.aimId || '' })),
+    time: (s.goals || []).map(g => ({ id: g.id, name: g.name, kind: g.kind || '', hoursPerWeek: +g.hoursPerWeek || 0 })) };
+}
 // hub/citrus/plan.json: what Citrus planned for the next days, per app, plus your shifts — read by Mephisto & co.
 let planTimer = null;
 function publishPlanSoon() { clearTimeout(planTimer); planTimer = setTimeout(publishPlan, 4000); }
@@ -1695,7 +1702,7 @@ async function publishPlan() {
     days[k] = { shift, blocks: list };
     blocks.push(...list);
   }
-  try { await G.writePlan(s.settings.driveFolder, { app: 'citrus', contract: CONTRACT, updatedAt: new Date().toISOString(), from: keyOf(from), days, blocks, mind: M.mindSummary(s, new Date(), mergedApps()) }); } catch (e) { console.warn('plan.json', e.message); }
+  try { await G.writePlan(s.settings.driveFolder, { app: 'citrus', contract: CONTRACT, updatedAt: new Date().toISOString(), from: keyOf(from), days, blocks, mind: M.mindSummary(s, new Date(), mergedApps()), goals: planGoals(s) }); } catch (e) { console.warn('plan.json', e.message); }
 }
 function guessApp(title) { const t = String(title || '').toLowerCase(); for (const k of Object.keys(APP_META)) if (t.includes(k)) return k; if (/german|deutsch/.test(t)) return 'mephisto'; if (/gym|workout|lift/.test(t)) return 'orange'; if (/ecg|ekg/.test(t)) return 'sinus'; if (/card|review|anki/.test(t)) return 'yuzu'; return ''; }
 

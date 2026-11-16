@@ -117,6 +117,7 @@ const A = await device(G, { at: T(4, 9), signedIn: true, label: 'A' });
   await sleep(4500); // plan.json debounce 4 s, state 2.5 s
   const plan = G.readJsonAt(['My Apps', 'hub', 'citrus'], 'plan.json');
   (plan?.blocks?.length ? ok : (a, b) => note('P1', a, b))('plan.json', `written with ${plan?.blocks?.length || 0} blocks (${[...new Set((plan?.blocks || []).map(b => b.app).filter(Boolean))].join(', ')})`);
+  (Array.isArray(plan?.goals?.aims) && Array.isArray(plan?.goals?.time) && plan.goals.time.length ? ok : (a, b) => note('P1', a, b))('plan.json goals', `aims ${plan?.goals?.aims?.length ?? '–'}, time goals ${plan?.goals?.time?.length ?? '–'}`);
   const remote = G.readJsonAt(['My Apps', 'hub', 'citrus'], 'state.json');
   (remote?.rotas ? ok : (a, b) => note('P1', a, b))('state.json', remote ? `saved (${(JSON.stringify(remote).length / 1024).toFixed(0)} KB)` : 'not written');
   if (remote && JSON.stringify(remote).length > 400 * 1024) note('P3', 'drive', 'state.json carries full rota grids; it will grow ~100 KB per month of rotas');
