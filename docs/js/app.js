@@ -29,6 +29,7 @@ import { checkBackup, describeCounts } from './backup-check.js';
 import { contactOf, setTiming } from './social.js';
 import * as CZ from './custom.js';
 import * as MD from './mandarin.js';
+import * as CL from './clementine.js';
 import { h, toast, safeUrl, keyOf, fromKey, addDays, startOfDay, sameDay, fmtDate, fmtDateShort, fmtTime, fmtMin, fmtDur, relDay, pad2, DAY_SHORT, DAY_NAMES, MONTHS, telLink, firstName, atMin, minsOf, uid } from './util.js';
 
 // ---------------- runtime state (not persisted) ----------------
@@ -162,7 +163,7 @@ function show(view) {
 function render() {
   { const c = CZ.custom(S()); setTiming(c.social); applyTabs(c); }   // your Customise choices first: tabs, free-time hours
   ingestApps();   // numbers the apps report become history before anything is drawn
-  const fn = { today: renderToday, rota: renderWork, plan: renderPlan, mind: MU.renderMind, social: SU.renderSocial, apps: renderApps, more: renderMore }[rt.view] || renderToday;
+  const fn = { today: renderToday, rota: renderWork, plan: renderPlan, mind: MU.renderMind, social: () => (CL.live(S()) ? clementinePanel() : SU.renderSocial()), apps: renderApps, more: renderMore }[rt.view] || renderToday;
   const el = $(`#view-${rt.view}`);
   el.replaceChildren(...[authBanner(), fn()].flat().filter(Boolean));
   // every view gets a heading for screen readers, even the ones whose design has no visible title (beta T10-23)
@@ -863,7 +864,7 @@ function renderToday() {
   main.push(...top.map(r => r.el));
   if (rest.length) main.push(h('details', { class: 'more-today', open: getUi()[UI_MORE] ? '' : null, onToggle: (e) => { try { localStorage.setItem(UI_KEY, JSON.stringify({ ...getUi(), [UI_MORE]: e.currentTarget.open })); } catch {} } }, h('summary', {}, h('span', { class: 'title' }, 'More for today'), h('span', { class: 'chips' }, rest.map(r => h('span', { class: 'chip' }, r.label)))), ...rest.map(r => r.el)));
   side.push(eventsCard(now));
-  { const fc = SU.todayCard(); if (fc) side.push(fc); }
+  { const fc = CL.live(S()) ? clementineToday() : SU.todayCard(); if (fc) side.push(fc); }
   if (Object.keys(mergedApps()).length) side.push(appsCard());
   side.push(noteCard(now));
   if (wide) return h('div', { class: 'cockpit' }, h('div', { class: 'ck-col' }, ...main, ...side),
@@ -940,7 +941,7 @@ function customiseCard() {
     sec('Today', 'hide or pin cards, how many stay open', h('div', { class: 'tiny dim' }, 'Tap to hide · ★ to pin to the top'), ...CZ.TODAY_CARDS.map(l => h('div', { class: 'cz-row' }, h('span', { class: 'grow' }, l), chip(c.today.pinned.includes(l), '★', () => set('today', { pinned: CZ.toggleIn(c.today.pinned, l) }), { 'aria-label': `Pin ${l}` }), chip(!c.today.hidden.includes(l), c.today.hidden.includes(l) ? 'Hidden' : 'Shown', () => set('today', { hidden: CZ.toggleIn(c.today.hidden, l) })))),
       h('div', { class: 'cz-row' }, h('span', { class: 'grow small' }, 'Cards open before "More for today"'), h('input', { type: 'number', min: 1, max: 12, value: c.today.top, 'aria-label': 'Cards open', class: 'cz-num', onChange: (e) => set('today', { top: +e.target.value }) }))),
     sec('Briefing', 'which lines the morning card shows', h('div', { class: 'chips' }, CZ.BRIEF_LINES.map(([id, l]) => id === 'shift' ? chip(true, `${l} (always)`, () => {}, { disabled: true }) : chip(!c.brief.off.includes(id), l, () => set('brief', { off: CZ.toggleIn(c.brief.off, id) }))))),
-    sec('Social', 'your free hours and meet-ups', h('div', { class: 'cz-row' }, h('span', { class: 'grow small' }, 'Day starts'), h('input', { type: 'time', value: hm(c.social.wake), 'aria-label': 'Day starts', onChange: (e) => set('social', { wake: toMin(e.target.value) }) })),
+    CL.live(S()) ? sec('Social', 'set in Clementine now', h('div', { class: 'tiny dim' }, 'Your free hours and meet-up settings live in Clementine.')) : sec('Social', 'your free hours and meet-ups', h('div', { class: 'cz-row' }, h('span', { class: 'grow small' }, 'Day starts'), h('input', { type: 'time', value: hm(c.social.wake), 'aria-label': 'Day starts', onChange: (e) => set('social', { wake: toMin(e.target.value) }) })),
       h('div', { class: 'cz-row' }, h('span', { class: 'grow small' }, 'Day ends'), h('input', { type: 'time', value: hm(c.social.late % 1440), 'aria-label': 'Day ends', onChange: (e) => { const m = toMin(e.target.value); set('social', { late: m < 6 * 60 ? m + 1440 : m }); } })),
       h('div', { class: 'cz-row' }, h('span', { class: 'grow small' }, 'Shortest meet-up worth suggesting'), h('select', { 'aria-label': 'Shortest meet-up', onChange: (e) => set('social', { minMeet: +e.target.value }) }, [[60, '1h'], [90, '1½h'], [120, '2h'], [180, '3h']].map(([m, l]) => h('option', { value: m, selected: c.social.minMeet === m }, l)))),
       h('div', { class: 'cz-row' }, h('span', { class: 'grow small' }, '"Who is free" shows'), h('div', { class: 'chips' }, [[0, 'Fit screen'], [7, '7 days'], [14, '14'], [21, '21']].map(([d, l]) => chip(c.social.days === d, l, () => set('social', { days: d })))))),
@@ -1395,6 +1396,27 @@ function noteCard(date) {
 
 // ---------------- ROTA ----------------
 let workSegDefault = 'calendar';
+// ───────── Clementine (Social & People) is live: Social shows what it publishes; friends and contacts are written only there
+function clementinePanel() {
+  const s = S(), st = mergedApps().clementine || {}, go = (url) => window.open(url, '_blank', 'noopener');
+  const when = (d) => { const dt = fromKey(d.date); return dt ? `${relDay(dt)}${d.start ? ' ' + d.start : ''}` : d.date; };
+  const free = CL.freeTonight(s), up = CL.upcoming(s), dates = CL.dates(s).filter(d => d.inDays <= 14);
+  return [h('h1', {}, 'Social'),
+    h('div', { class: 'card' }, h('div', { class: 'title' }, '🍊 Clementine'), h('div', { class: 'small' }, st.summary || 'Your friends, contacts, free time, outings and birthdays live in Clementine now.'),
+      h('div', { class: 'row wrap', style: { marginTop: '8px', gap: '6px' } }, h('button', { class: 'btn primary', onClick: () => go(CL.SITE) }, 'Open Clementine'), ...(st.actions || []).map(x => h('button', { class: 'btn sm', onClick: () => go(x.url) }, x.label)))),
+    free.length ? h('div', { class: 'card' }, h('div', { class: 'title' }, 'Free with you today'), ...free.map(x => h('div', { class: 'row' }, h('span', { class: 'small grow' }, x.name), h('span', { class: 'tiny dim' }, `${x.from}–${x.to}`)))) : null,
+    up.length ? h('div', { class: 'card' }, h('div', { class: 'title' }, 'Coming up'), ...up.map(o => h('div', { class: 'row' }, h('span', { class: 'small', style: { minWidth: '6.5em' } }, when(o)), h('span', { class: 'small grow' }, o.what, o.who ? h('span', { class: 'dim' }, ` · ${o.who}`) : null)))) : null,
+    dates.length ? h('div', { class: 'card' }, h('div', { class: 'title' }, 'Birthdays and dates'), ...dates.map(d => h('div', { class: 'row' }, h('span', { class: 'small grow' }, d.name, h('span', { class: 'dim' }, ` · ${d.label}${d.age ? ` (${d.age})` : ''}`)), h('span', { class: 'tiny dim' }, d.inDays === 0 ? 'today' : d.inDays === 1 ? 'tomorrow' : `in ${d.inDays} days`)))) : null,
+    h('div', { class: 'tiny dim', style: { margin: '6px 2px' } }, 'Clementine updates this when it syncs. Add or edit people there.')].filter(Boolean);
+}
+function clementineToday() {
+  const s = S(), free = CL.freeTonight(s), d = CL.dates(s).filter(x => x.inDays <= 2), up = CL.upcoming(s).filter(o => o.date === keyOf(new Date()));
+  if (!free.length && !d.length && !up.length) return null;
+  return h('div', { class: 'card' }, h('div', { class: 'row' }, h('div', { class: 'title grow' }, 'Friends'), h('button', { class: 'btn sm ghost', onClick: () => show('social') }, 'Open')),
+    up.length ? h('div', { class: 'small' }, `Today: ${up.map(o => `${o.what}${o.start ? ' ' + o.start : ''}${o.who ? ' with ' + o.who : ''}`).join(' · ')}`) : null,
+    free.length ? h('div', { class: 'small' }, `Free with you: ${free.slice(0, 4).map(x => `${x.name} ${x.from}–${x.to}`).join(', ')}`) : null,
+    d.length ? h('div', { class: 'small' }, `🎂 ${d.map(x => `${x.name} ${x.inDays === 0 ? 'today' : x.inDays === 1 ? 'tomorrow' : 'in 2 days'}`).join(' · ')}`) : null);
+}
 function mandarinPanel() {
   const s = S(), st = mergedApps().mandarin || {}, days = MD.nextDays(s), go = (url) => window.open(url, '_blank', 'noopener');
   const fmt = (d) => { const dt = new Date(d.date + 'T12:00'); return `${DAY_SHORT[dt.getDay()]} ${dt.getDate()}`; };

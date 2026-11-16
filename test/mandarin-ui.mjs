@@ -20,7 +20,7 @@ const gp = { id: 'gp', unitKind: 'gp', unit: 'GP', year: 2026, month: 11, daysIn
 const status0 = { app: 'claude', title: 'Claude', updatedAt: '2026-11-14T10:00:00Z', inbox: [{ id: 'team-x', type: 'posting', date: '2026-11-15', from: 'Tester', site: 'mine', postings: [{ nurse: 'Testa Quill' }, { nurse: 'Bea Moss' }] }] };
 const mandarin = { app: 'mandarin', title: 'Mandarin', summary: 'today D1 Upper Village 08:00–20:00', updatedAt: '2026-11-14T10:00:00Z', actions: [{ id: 'nurses', label: 'Nurses', url: 'https://mandarin-work.github.io/Mandarin/#nurses' }],
   _shifts: { days: [{ date: '2026-11-15', kind: 'off', code: '', corrected: true }, { date: '2026-11-16', kind: 'work', code: 'D1', site: 'Upper Village', start: '08:00', end: '20:00' }] } };
-const state = { me: { name: 'Dr Me', id: '1' }, rotas: { gp, n: nurse }, apps: { claude: status0, mandarin } };
+const state = { me: { name: 'Dr Me', id: '1' }, rotas: { gp, n: nurse }, apps: { claude: status0, mandarin, clementine: { app: 'clementine', title: 'Clementine', summary: '2 friends free tonight', updatedAt: '2026-11-14T10:00:00Z', actions: [{ id: 'free', label: 'Free', url: 'https://clementine-social.github.io/Clementine/?do=free' }], extra: { birthdays: [{ name: 'Tess Example', label: 'birthday', birthday: true, inDays: 0, date: '2026-11-15' }], freeTonight: [{ name: 'Bo', from: '18:00', to: '23:00' }], upcoming: [] } } } };
 const browser = await chromium.launch(); const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block' }); const p = await ctx.newPage(); const errs = []; p.on('pageerror', e => errs.push(String(e)));
 await p.clock.install({ time: new Date(2026, 10, 15, 9, 0) });
 await p.addInitScript((st) => { if (!localStorage.getItem('citrus.state.v1')) localStorage.setItem('citrus.state.v1', JSON.stringify(st)); }, state);
@@ -35,5 +35,9 @@ check(/Open Mandarin/.test(work) && /Your next days/.test(work) && /D1 · Upper 
 check(await p.locator('.work-seg button:has-text("Nurses")').count() === 0, 'old Work sections gone');
 await p.screenshot({ path: '/tmp/claude-0/-home-claude/a1f5476a-0219-5c7e-9801-fd990059411a/scratchpad/mandarin-panel.png' }); await p.click('.work-seg button:has-text("Home")'); await sleep(300); check(await p.locator('#view-rota').innerText().then(x => !/Open Mandarin/.test(x)), 'Home still works');
 await p.screenshot({ path: '/tmp/claude-0/-home-claude/a1f5476a-0219-5c7e-9801-fd990059411a/scratchpad/mandarin-work.png' });
+await p.click('nav.tabs button[data-view=social]'); await sleep(400);
+{ const soc = await p.locator('#view-social').innerText(); check(/Open Clementine/.test(soc) && /Free with you today/.test(soc) && /Tess Example/.test(soc), 'Social shows the Clementine panel'); }
+await p.click('nav.tabs button[data-view=today]'); await sleep(400);
+{ const td = await p.locator('#view-today').innerText(); check(/Tess Example's birthday/.test(td) || /Tess Example today/.test(td), 'Today shows the birthday from Clementine'); }
 check(errs.length === 0, 'no page errors ' + errs.join(' | '));
 await browser.close(); server.close(); console.log(bad ? `${bad} FAILED` : 'mandarin-ui ok'); process.exit(bad ? 1 : 0);
