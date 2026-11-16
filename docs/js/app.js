@@ -30,6 +30,7 @@ import { contactOf, setTiming } from './social.js';
 import * as CZ from './custom.js';
 import * as MD from './mandarin.js';
 import * as CL from './clementine.js';
+import * as KA from './calamansi.js';
 import { h, toast, safeUrl, keyOf, fromKey, addDays, startOfDay, sameDay, fmtDate, fmtDateShort, fmtTime, fmtMin, fmtDur, relDay, pad2, DAY_SHORT, DAY_NAMES, MONTHS, telLink, firstName, atMin, minsOf, uid } from './util.js';
 
 // ---------------- runtime state (not persisted) ----------------
@@ -856,7 +857,7 @@ function renderToday() {
   add(MU.inboxPanel(3), 96, 'From your apps');   // things sent in (postings, swaps, tasks) wait on Today too, not only in Mind
   if (!mdLive) add(RU.todayCard(), 80, 'Contract dates');
   if (!wide) add(planCard(now), 70, 'Plan');   // the wide cockpit has its own Plan column
-  add(CU.todayCard(), CU.todayScore(), 'Home');   // an overdue chore moves above Plan (beta T05-29)
+  if (KA.live(S())) { const k = calamansiToday(); add(k, KA.chores(S()).some(c => c.late > 0) ? 75 : 55, 'Home'); } else add(CU.todayCard(), CU.todayScore(), 'Home');   // an overdue chore moves above Plan (beta T05-29)
   add(MU.mindCard(), 58, 'Mind');
   if (info.hasRota) add(onCallCard(info), working ? 40 : 22, 'On call');
   ranked.sort((x, y) => y.score - x.score);
@@ -1417,6 +1418,28 @@ function clementineToday() {
     free.length ? h('div', { class: 'small' }, `Free with you: ${free.slice(0, 4).map(x => `${x.name} ${x.from}–${x.to}`).join(', ')}`) : null,
     d.length ? h('div', { class: 'small' }, `🎂 ${d.map(x => `${x.name} ${x.inDays === 0 ? 'today' : x.inDays === 1 ? 'tomorrow' : 'in 2 days'}`).join(' · ')}`) : null);
 }
+// ───────── Calamansi (Home, Kitchen & daily life) is live: Home shows what it publishes; chores are written only there
+function calamansiPanel() {
+  const s = S(), st = mergedApps().calamansi || {}, go = (url) => window.open(url, '_blank', 'noopener');
+  const ch = KA.chores(s), ml = KA.meals(s), sh = KA.shopping(s), fr = KA.fridge(s), bl = KA.bills(s);
+  const mealRow = (m) => h('div', { class: 'row' }, h('span', { class: 'small', style: { minWidth: '6.5em' } }, m.label), h('span', { class: `small grow ${m.done ? 'dim' : ''}` }, `${m.icon ? m.icon + ' ' : ''}${m.title}${m.packed ? ' · packed' : ''}${m.done ? ' ✓' : ''}`));
+  return [h('div', { class: 'card' }, h('div', { class: 'title' }, '🍋 Calamansi'), h('div', { class: 'small' }, st.summary || 'Your chores, meals, fridge, shopping, bills and car live in Calamansi now.'),
+      h('div', { class: 'row wrap', style: { marginTop: '8px', gap: '6px' } }, h('button', { class: 'btn primary', onClick: () => go(`${KA.SITE}?from=citrus`) }, 'Open Calamansi'), ...(st.actions || []).map(x => h('button', { class: 'btn sm', onClick: () => go(x.url) }, x.label)))),
+    ch.length ? h('div', { class: 'card' }, h('div', { class: 'title' }, 'Chores'), ...ch.map(c => h('div', { class: 'row' }, h('span', { class: 'small grow' }, `${c.icon ? c.icon + ' ' : ''}${c.title}`), h('span', { class: `tiny ${c.late > 0 ? 'bad' : 'dim'}` }, c.status)))) : null,
+    ml.today.length || ml.tomorrow.length ? h('div', { class: 'card' }, h('div', { class: 'title' }, 'Meals'), ...ml.today.map(mealRow), ml.tomorrow.length ? h('div', { class: 'tiny dim', style: { marginTop: '6px' } }, 'Tomorrow') : null, ...ml.tomorrow.map(mealRow),
+      ml.batch ? h('div', { class: 'tiny dim', style: { marginTop: '6px' } }, `Batch cook ${ml.batch.date}: ${ml.batch.title}${ml.batch.portions ? ` (${ml.batch.portions} portions)` : ''}`) : null) : null,
+    fr.length ? h('div', { class: 'card' }, h('div', { class: 'title' }, 'Use first'), h('div', { class: 'small' }, fr.map(f => `${f.name}${f.days == null ? '' : f.days <= 0 ? ' (today)' : ` (${f.days}d)`}`).join(', '))) : null,
+    sh.open ? h('div', { class: 'card' }, h('div', { class: 'title' }, `Shopping · ${sh.open}`), h('div', { class: 'small' }, sh.items.join(', '))) : null,
+    bl.length ? h('div', { class: 'card' }, h('div', { class: 'title' }, 'Bills'), ...bl.map(b => h('div', { class: 'row' }, h('span', { class: 'small grow' }, b.title), h('span', { class: 'tiny dim' }, `${b.due}${b.amount ? ` · ${b.amount} SAR` : ''}`)))) : null,
+    h('div', { class: 'tiny dim', style: { margin: '6px 2px' } }, 'Calamansi updates this when it syncs. Tick chores and plan meals there.')].filter(Boolean);
+}
+function calamansiToday() {
+  const s = S(), ch = KA.chores(s).filter(c => c.late > 0 || /today|now/.test(c.status)), ml = KA.meals(s).today.filter(m => !m.done);
+  if (!ch.length && !ml.length) return null;
+  return h('div', { class: 'card' }, h('div', { class: 'row' }, h('div', { class: 'title grow' }, '🍋 Home'), h('button', { class: 'btn sm ghost', onClick: () => { rt.workSeg = 'home'; show('rota'); } }, 'Open')),
+    ch.length ? h('div', { class: 'small' }, `Chores: ${ch.slice(0, 4).map(c => `${c.title} (${c.status})`).join(', ')}`) : null,
+    ml.length ? h('div', { class: 'small' }, `Meals: ${ml.slice(0, 3).map(m => `${m.label} ${m.title}`).join(' · ')}`) : null);
+}
 function mandarinPanel() {
   const s = S(), st = mergedApps().mandarin || {}, days = MD.nextDays(s), go = (url) => window.open(url, '_blank', 'noopener');
   const fmt = (d) => { const dt = new Date(d.date + 'T12:00'); return `${DAY_SHORT[dt.getDay()]} ${dt.getDate()}`; };
@@ -1431,7 +1454,7 @@ function renderWork() {
   if (MD.live(S())) {   // Mandarin owns the work now: Citrus shows what it publishes + opens it; Home stays here until Calamansi
     const seg = rt.workSeg === 'home' && !CZ.custom(S()).workSegs.hidden.includes('home') ? 'home' : 'mandarin';
     const bar = h('div', { class: 'seg work-seg', role: 'tablist' }, [['mandarin', 'Mandarin'], ['home', 'Home']].filter(([id]) => id === 'mandarin' || !CZ.custom(S()).workSegs.hidden.includes(id)).map(([id, l]) => h('button', { class: seg === id ? 'active' : '', role: 'tab', 'aria-selected': seg === id ? 'true' : 'false', onClick: () => { rt.workSeg = id; render(); } }, l)));
-    return [h('h1', {}, 'Work'), bar, ...[seg === 'home' ? CU.renderHome() : mandarinPanel()].flat()];
+    return [h('h1', {}, 'Work'), bar, ...[seg === 'home' ? (KA.live(S()) ? calamansiPanel() : CU.renderHome()) : mandarinPanel()].flat()];
   }
   const SEG = CZ.visibleWorkSegs(S()), want = rt.workSeg || workSegDefault, seg = SEG.some(([id]) => id === want) ? want : SEG[0][0];   // hidden segments (Customise) are skipped
   const bar = h('div', { class: 'seg work-seg', role: 'tablist' }, SEG.map(([id, l]) => h('button', { class: seg === id ? 'active' : '', role: 'tab', 'aria-selected': seg === id ? 'true' : 'false', onClick: () => { rt.workSeg = id; render(); window.scrollTo(0, 0); } }, l)));

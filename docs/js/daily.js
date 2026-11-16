@@ -1,6 +1,7 @@
 // Today: morning briefing, evening wind-down, how-did-the-day-feel log with what it learns, and a study planner around your shifts. Pure functions (no DOM).
 import { briefOn } from './custom.js';
 import { live as mandarinLive } from './mandarin.js';
+import { live as calamansiLive, todayLine as calamansiLine } from './calamansi.js';
 import { live as clementineLive, todayLine as clementineToday } from './clementine.js';
 import { keyOf, fromKey, addDays, startOfDay } from './util.js';
 import { dayInfo, myDay } from './model.js';
@@ -44,7 +45,8 @@ export function briefing(s, now = new Date()) {
   // During last night's tail (after midnight) the nurses with you are last night's, not tonight's (beta T04-07)
   if (md.overnightTail && now < md.overnightTail.window.end && N.nurseRotas(s).length) { const y = addDays(day, -1), t = nurseLine(N.workingWithMe(s, y, dayInfo(s, y).mine)); if (t) out.push({ icon: '💉', text: `Now: ${t.text}` }); }
   if (md.today && N.nurseRotas(s).length) { const t = nurseLine(N.workingWithMe(s, day, mine)); if (t) out.push({ icon: '💉', text: t.text }); if (t?.head) out.push({ icon: '🧭', text: t.head }); }
-  const due = C.choreList(s).filter(c => C.dueDate(c, day) <= day).map(c => c.title); if (due.length) out.push({ icon: '🏠', text: `Due at home: ${due.slice(0, 3).join(', ')}` });
+  if (calamansiLive(s)) { const t = calamansiLine(s); if (t) out.push({ icon: '🏠', text: t }); }   // Calamansi owns chores now
+  else { const due = C.choreList(s).filter(c => C.dueDate(c, day) <= day).map(c => c.title); if (due.length) out.push({ icon: '🏠', text: `Due at home: ${due.slice(0, 3).join(', ')}` }); }
   const tasks = rec(s.tasks).filter(t => !t.done && t.due === key).map(t => t.title); if (tasks.length) out.push({ icon: '✅', text: `${tasks.length} task${tasks.length > 1 ? 's' : ''} due: ${tasks.slice(0, 2).join(', ')}` });
   if (clementineLive(s)) { const t = clementineToday(s); if (t) out.push({ icon: '🎂', text: t }); } else {   // Clementine owns birthdays now
   const bd = [...F.birthdays(s, day, 0).map(b => b.friend.nick || b.friend.name), ...X.rotaBirthdays(s, day, 0).map(b => b.name)]; if (bd.length) out.push({ icon: '🎂', text: `Birthday today: ${bd.slice(0, 3).join(', ')}` }); }
