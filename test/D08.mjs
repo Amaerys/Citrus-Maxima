@@ -83,7 +83,9 @@ async function open({ width = 390, height = 844, seed = ME, ui = 'clean', time =
   await page.goto(URL0); await sleep(600); return { ctx, page };
 }
 const tab = async (page, v) => { await page.click(`nav.tabs button[data-view=${v}]`); await sleep(250); };
-const seg = async (page, label) => { await page.click('.mn-main'); await sleep(150); await page.click(`.ml-tile:has-text("${label}")`); await sleep(300); };
+const seg = async (page, label) => { if (label === 'Aims' || label === 'Year') { await page.click('nav.tabs button[data-view=plan]'); await sleep(250); await page.click(`#view-plan .work-seg button:has-text("${label}")`); await sleep(300); return; }   // goals live in Plan now
+  if (await page.locator('#view-mind').isHidden()) { await page.click('nav.tabs button[data-view=mind]'); await sleep(250); }
+  await page.click('.mn-main'); await sleep(150); await page.click(`.ml-tile:has-text("${label}")`); await sleep(300); };
 const state = (page) => page.evaluate(() => JSON.parse(localStorage.getItem('citrus.state.v1')));
 const overflow = (page) => page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
 const closeSheets = (page) => page.evaluate(() => document.querySelectorAll('.sheet-bg').forEach(e => e.remove()));
@@ -124,8 +126,8 @@ const closeSheets = (page) => page.evaluate(() => document.querySelectorAll('.sh
   check(await page.locator('#view-mind .card.guide').count() === 0, 'guide closes itself once all three are done');
   s = await state(page); check(Object.keys(s.aims).length === 1 && Object.values(s.aims)[0].milestones.length === 4, 'objective added with milestones');
   await seg(page, 'Habits'); check(!/\b0% this week/.test(await page.locator('#view-mind').innerText()), 'T07-12 Habits does not say 0% this week');
-  await seg(page, 'Aims'); check(await page.locator('#view-mind .kit-card').count() === 1, 'T07-04 the rest of the kit stays on offer under Aims');
-  await page.click('#view-mind .kit-card .btn:has-text("Hide")'); await sleep(250); check(await page.locator('#view-mind .kit-card').count() === 0, '…until hidden');
+  await seg(page, 'Aims'); check(await page.locator('#view-plan .kit-card').count() === 1, 'T07-04 the rest of the kit stays on offer under Aims (in Plan)');
+  await page.click('#view-plan .kit-card .btn:has-text("Hide")'); await sleep(250); check(await page.locator('#view-plan .kit-card').count() === 0, '…until hidden');
   check(page.errors.length === 0, 'no page errors: ' + page.errors.join(' | ').slice(0, 200));
   await ctx.close();
 }
@@ -162,11 +164,10 @@ const closeSheets = (page) => page.evaluate(() => document.querySelectorAll('.sh
   // T07-25 weekly focus tasks are due on Sunday (Riyadh week)
   await page.click('#view-mind .method:has-text("Weekly review")'); await sleep(200); await page.locator('.sheet textarea').first().fill('ok'); await page.locator('.sheet input[type=text]').first().fill('Plan leave'); await page.click('.sheet .btn.primary:has-text("Save")'); await sleep(250);
   s = await state(page); const wk = Object.values(s.tasks).find(t => t.title === 'Plan leave'); check(wk?.due === '2026-11-15', `T07-25 next-week focus due Sunday 15 Nov (${wk?.due})`);
-  // T07-16 one order: Aims › Year › Reflect
-  await seg(page, 'Aims'); await page.click('.mn-step[aria-label="Next section"]'); await sleep(200); check(/Year/.test(await page.locator('.mn-main b').innerText()), 'T07-16 › after Aims is Year, as in the launcher');
-  await page.click('.mn-step[aria-label="Next section"]'); await sleep(200); check(/Reflect/.test(await page.locator('.mn-main b').innerText()), '…then Reflect');
+  // T07-16 (revised 16/11/2026): Aims and Year moved to Plan, so Mind steps Habits › Reflect
+  await seg(page, 'Habits'); await page.click('.mn-step[aria-label="Next section"]'); await sleep(200); check(/Reflect/.test(await page.locator('.mn-main b').innerText()), 'Mind: › after Habits is Reflect');
   // T07-15 aim slider label follows; T07-09 no-days habit blocked; T07-10 emoji
-  await seg(page, 'Aims'); await page.click('#view-mind button:has-text("+ Objective")'); await sleep(200);
+  await seg(page, 'Aims'); await page.click('#view-plan button:has-text("+ Objective")'); await sleep(200);
   await page.locator('.sheet input[type=range]').fill('40'); await sleep(50); check(/Manual progress 40%/.test(await page.locator('.sheet').innerText()), 'T07-15 slider label follows the slider');
   check(await page.evaluate(() => getComputedStyle(document.querySelector('.sheet input[type=range]')).accentColor) !== 'auto', 'slider uses the theme accent'); await closeSheets(page);
   await seg(page, 'Habits'); await page.click('#view-mind button:has-text("Add a habit")'); await sleep(200);

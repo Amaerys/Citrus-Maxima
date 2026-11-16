@@ -106,7 +106,7 @@ check(await over(p) <= 0, 'no horizontal overflow on Social @390');
 
 console.log('Mind launcher');
 await tab(p, 'mind'); check(await p.locator('#view-mind .mind-seg').count() === 0 && await p.locator('.mind-nav').count() === 1, 'crowded strip replaced by the switcher');
-await p.click('.mn-main'); await sleep(300); check(await p.locator('.ml-tile').count() === 8, 'launcher shows all eight sections'); await p.screenshot({ path: `${shots}/mind-launcher.png` });
+await p.click('.mn-main'); await sleep(300); check(await p.locator('.ml-tile').count() === 6, 'launcher shows all six sections (Aims and Year live in Plan)'); await p.screenshot({ path: `${shots}/mind-launcher.png` });
 await p.click('.ml-tile:has-text("Library")'); await sleep(300); check(await p.locator('#view-mind .kinds').count() === 1, 'Library opens from the launcher');
 await p.click('.mn-step[aria-label="Next section"]'); await sleep(250); check(/Notes/.test(await txt(p, '.mn-main')), 'next arrow moves to Notes');
 await p.click('.mn-step[aria-label="Next section"]'); await sleep(250); check(/Overview/.test(await txt(p, '.mn-main')), 'next wraps around to Overview');

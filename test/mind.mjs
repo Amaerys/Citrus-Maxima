@@ -128,7 +128,9 @@ async function open(width, height, seed) {
   await page.goto(URL0); await sleep(500); return { ctx, page };
 }
 const tab = async (page, v) => { await page.click(`nav.tabs button[data-view=${v}]`); await sleep(250); };
-const seg = async (page, label) => { await page.click('.mn-main'); await sleep(150); await page.click(`.ml-tile:has-text("${label}")`); await sleep(350); };
+const seg = async (page, label) => { if (label === 'Aims' || label === 'Year') { await page.click('nav.tabs button[data-view=plan]'); await sleep(250); await page.click(`#view-plan .work-seg button:has-text("${label}")`); await sleep(350); return; }   // goals live in Plan now
+  if (await page.locator('#view-mind').isHidden()) { await page.click('nav.tabs button[data-view=mind]'); await sleep(250); }
+  await page.click('.mn-main'); await sleep(150); await page.click(`.ml-tile:has-text("${label}")`); await sleep(350); };
 const overflow = (page) => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
 const rawLeak = (page) => page.evaluate(() => /\b(null|undefined|NaN|\[object Object\])\b/.test(document.querySelector('main')?.innerText || ''));
 
@@ -142,7 +144,7 @@ const rawLeak = (page) => page.evaluate(() => /\b(null|undefined|NaN|\[object Ob
   while (await page.locator('#view-mind .card.guide .kit-pick .kchip:not(.on)').count()) await page.locator('#view-mind .card.guide .kit-pick .kchip:not(.on)').first().click();
   await page.click('#view-mind .card.guide .kit-pick .btn.primary'); await sleep(300);
   await page.click('#view-mind .card.guide .kchip:has-text("Pass USMLE")'); await sleep(300);
-  await seg(page, 'Aims'); await page.click('#view-mind .kit-card .kchip:has-text("Be consistently fit")'); await sleep(300); await seg(page, 'Overview');
+  await seg(page, 'Aims'); await page.click('#view-plan .kit-card .kchip:has-text("Be consistently fit")'); await sleep(300); await seg(page, 'Overview');
   check(await page.locator('#view-mind .card.guide .g-step.done').count() === 2 && await page.locator('#view-mind .kit-card').count() === 0, 'kit added: habits and objectives ticked off, only “capture a task” left');
   await page.fill('#view-mind .capture input', 'call bank tomorrow 20m !'); await sleep(100);
   check(/20m|⏱/.test(await page.locator('#view-mind .cap-hint').innerText()), 'capture shows what it understood');
@@ -154,15 +156,15 @@ const rawLeak = (page) => page.evaluate(() => /\b(null|undefined|NaN|\[object Ob
   check(await page.locator('#view-mind .mrow.habit .tick.on').count() >= 1, 'habit ticks');
   check(await page.locator('#view-mind .m-heat').count() === 1, 'habit heat map is drawn');
   await page.screenshot({ path: `${shots}/02-habits-360.png`, fullPage: true });
-  await seg(page, 'Aims'); check(await page.locator('#view-mind .card.aim').count() === 2, 'aims from the kit are shown'); await page.click('#view-mind .mile >> nth=0'); await sleep(250);
-  check(await page.locator('#view-mind .mile.on').count() === 1, 'milestone checks off');
+  await seg(page, 'Aims'); check(await page.locator('#view-plan .card.aim').count() === 2, 'aims from the kit are shown'); await page.click('#view-plan .mile >> nth=0'); await sleep(250);
+  check(await page.locator('#view-plan .mile.on').count() === 1, 'milestone checks off');
   await page.screenshot({ path: `${shots}/03-aims-360.png`, fullPage: true });
   await seg(page, 'Reflect'); await page.click('#view-mind .card.space .btn.primary'); await sleep(300);
   await page.locator('.sheet textarea, .sheet input[type=text]').first().fill('Shipped the Mind tab'); await page.click('.sheet .btn.primary:has-text("Save")'); await sleep(300);
   check((await page.locator('#view-mind .mrow.refl').count()) === 1, 'reflection saved to the journal');
   await page.screenshot({ path: `${shots}/04-reflect-360.png`, fullPage: true });
   await seg(page, 'Year'); await page.click('button:has-text("+ Resolution")'); await page.fill('.sheet input[type=text]', 'Read 24 books'); await page.click('.sheet .btn.primary:has-text("Save")'); await sleep(300);
-  check((await page.locator('#view-mind .mrow.res').count()) === 1, 'resolution added'); await page.click('#view-mind .q >> nth=3'); await sleep(250); await page.click('.sheet .btn.primary:has-text("Save")'); await sleep(250);
+  check((await page.locator('#view-plan .mrow.res').count()) === 1, 'resolution added'); await page.click('#view-plan .q >> nth=3'); await sleep(250); await page.click('.sheet .btn.primary:has-text("Save")'); await sleep(250);
   check(await page.locator('.q.on').count() === 1, 'quarter check-in recorded');
   await page.screenshot({ path: `${shots}/05-year-360.png`, fullPage: true });
   await seg(page, 'Overview'); await page.screenshot({ path: `${shots}/06-overview-360.png`, fullPage: true });

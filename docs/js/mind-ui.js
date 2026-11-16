@@ -18,7 +18,8 @@ export const mindSeg = () => ui.seg;
 export function setSeg(seg, area = '') { ui.seg = seg; ui.area = area; }
 
 // one order for the launcher grid and the ‹ › steps: SEGS is read off GROUPS
-const GROUPS = [['Today', ['overview', 'tasks', 'habits']], ['Direction', ['aims', 'year', 'reflect']], ['Keep', ['library', 'notes']]];
+// Aims and Year resolutions moved to Plan (owner, 16/11/2026: one goal system in Citrus); Mind keeps the day-to-day
+const GROUPS = [['Today', ['overview', 'tasks', 'habits']], ['Direction', ['reflect']], ['Keep', ['library', 'notes']]];
 const SEG_META = { overview: ['Overview', '◉'], tasks: ['Tasks', '✓'], habits: ['Habits', '🔁'], aims: ['Aims', '🎯'], reflect: ['Reflect', '✎'], year: ['Year', '🗓'], library: ['Library', '📚'], notes: ['Notes', '📝'] };
 const SEGS = GROUPS.flatMap(([, ids]) => ids).map(id => [id, ...SEG_META[id]]);
 const MOODS = ['😞', '😕', '😐', '🙂', '😄'];
@@ -624,7 +625,10 @@ function launcher() {
   box.box.append(h('h2', {}, 'Mind'), ...GROUPS.map(([g, ids]) => h('div', { class: 'ml-group' }, h('div', { class: 'ml-h' }, g), h('div', { class: 'ml-grid' }, ids.map(id => { const [, label, icon] = by[id], badge = id === 'overview' ? M.inboxPending(S(), apps(), now()).length : 0;
     return h('button', { class: `ml-tile ${ui.seg === id ? 'on' : ''}`, 'data-seg': id, onClick: () => go(id) }, h('span', { class: 'ml-ic' }, icon), h('span', { class: 'ml-t' }, label), h('span', { class: 'ml-s' }, segSub(id)), badge ? h('span', { class: 'pill-n' }, badge) : null); })))));
 }
+/** Plan's goal sections (Aims, Year): the same views, shown in the Plan tab. */
+export function goalsView(which) { const body = (which === 'year' ? yearView : aimsView)(); return [h('div', { class: `mind-body seg-${which}` }, ...[body].flat(2).filter(Boolean))]; }
 export function renderMind() {
+  if (ui.seg === 'aims' || ui.seg === 'year') { const w = ui.seg; ui.seg = 'overview'; setTimeout(() => ctx.go?.('plan', w), 0); }   // old links to Aims/Year open Plan
   const i = SEGS.findIndex(x => x[0] === ui.seg), cur = SEGS[i < 0 ? 0 : i], step = (d) => { ui.seg = SEGS[(Math.max(i, 0) + d + SEGS.length) % SEGS.length][0]; ctx.render(); window.scrollTo(0, 0); };
   const pending = M.inboxPending(S(), apps(), now()).length;
   const seg = h('div', { class: 'mind-nav', role: 'navigation', 'aria-label': 'Mind sections' },

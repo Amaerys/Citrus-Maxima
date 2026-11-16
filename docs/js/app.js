@@ -80,10 +80,10 @@ async function boot() {
   const addEventFn = async (it, opt = {}) => { const cal = S().settings.calendarIds?.[0] || 'primary'; const d = fromKey(it.date), hm = (v) => { const [a, b] = String(v).split(':').map(Number); return a * 60 + b; }, st = hm(it.start); return calendarCreate(cal, { title: it.title, start: atMin(d, st), end: atMin(d, it.end ? hm(it.end) : st + (it.minutes || 30)), description: it.text || '', reminders: planAlarm() }, { src: 'inbox' }, { quiet: !!opt.quiet }); };
   MU.initMind({
     S, update: (fn) => store.update(fn), sheet, apps: mergedApps, appMeta: (n) => appMeta(n, mergedApps()[n] || {}), render: () => render(), regenerate: () => { regenerate(); render(); },
-    go: (v, sub) => { if (v === 'rota' && sub) rt.workSeg = sub; show(v); }, launch: (app, id) => launch(app, id), appUrl: (n) => launchUrl(n, mergedApps()[n] || {}, null),
+    go: (v, sub) => { if (v === 'rota' && sub) rt.workSeg = sub; if (v === 'plan' && sub) rt.planSeg = sub; show(v); }, launch: (app, id) => launch(app, id), appUrl: (n) => launchUrl(n, mergedApps()[n] || {}, null),
     addEvent: addEventFn,
   });
-  const sub = { S, update: (fn) => store.update(fn), sheet, render: () => render(), go: (v, sub) => { if (v === 'rota' && sub) rt.workSeg = sub; show(v); }, busyOf: busyOfDay, addEvent: addEventFn };
+  const sub = { S, update: (fn) => store.update(fn), sheet, render: () => render(), go: (v, sub) => { if (v === 'rota' && sub) rt.workSeg = sub; if (v === 'plan' && sub) rt.planSeg = sub; show(v); }, busyOf: busyOfDay, addEvent: addEventFn };
   SU.initSocial({ ...sub, allPeople: () => allPeople(S()), isMeKey: (k) => { const m = S().me; return !!m && (k === `id:${m.id}` || k === `name:${String(m.name || '').toLowerCase()}`); } }); CU.initChores(sub); LU.initLabor(sub); RU.initCareer(sub); XU.initPlans(sub); CHU.initChanges(sub); DU.initDaily({ ...sub, planned: plannedOn, hasApp: (n) => !!mergedApps()[n], launchApp: (n) => launch(n, null) }); EU.initExtras({ ...sub, invite: (ids, what, slot = null) => SU.inviteSheet(ids, slot, what) /* the picked slot travels with it */ }); PU.initPeople({ ...sub, apps: mergedApps, openDay: (d) => daySheet(d), personSheet, personKeyOf, shiftChip, importButton });
   store.subscribe(() => { render(); remindSoon(); });
   store.onRemoteSync(scheduleRemoteSave);
@@ -1702,6 +1702,9 @@ function guessApp(title) { const t = String(title || '').toLowerCase(); for (con
 /** The Plan tab: a weekly cockpit (balance of rest / study / gym / social, goals, a day strip), then one card per day.
  *  Day cards sit side by side on wide screens (beta T06-25). */
 function renderPlan() {
+  // Plan owns every goal: the week planner, Aims (objectives + milestones) and Year resolutions (moved from Mind 16/11/2026)
+  const pseg = rt.planSeg || 'week', segBar = h('div', { class: 'seg work-seg', role: 'tablist', 'aria-label': 'Plan sections' }, [['week', 'Week'], ['aims', 'Aims'], ['year', 'Year']].map(([id, l]) => h('button', { class: pseg === id ? 'active' : '', role: 'tab', 'aria-selected': pseg === id ? 'true' : 'false', onClick: () => { rt.planSeg = id; render(); } }, l)));
+  if (pseg !== 'week') return [h('h1', {}, 'Plan'), segBar, ...MU.goalsView(pseg)];
   const s = S(), now = new Date(), from = rt.planFrom || startOfDay(now);
   if (!rt.suggestions.days) regenerate();   // the planner's day labels and notes come with a run
   const horizon = planHorizon(), days = Array.from({ length: horizon }, (_, i) => planDay(addDays(from, i)));
@@ -1712,6 +1715,7 @@ function renderPlan() {
     h('button', { class: 'btn sm', title: 'Plan again from now', onClick: () => { rt.planFrom = null; regenerate(); render(); toast('Plan redone from now'); } }, 'Regenerate'))];
   if (!Object.keys(s.rotas).length || !s.me) out.push(h('div', { class: 'banner' }, h('span', { class: 'grow' }, !Object.keys(s.rotas).length ? 'No rota loaded, so every day is planned as a free day. Import your rota first.' : 'Pick your row in Settings › Me so the plan can work around your shifts.'),
     h('button', { class: 'btn sm', onClick: () => show(!Object.keys(s.rotas).length ? 'rota' : 'more') }, !Object.keys(s.rotas).length ? 'Import' : 'Settings')));
+  out.splice(1, 0, segBar);
   out.push(planWeekCard(days, now));
   const rv = reviewCard(); if (rv) out.push(rv);
   out.push(h('div', { class: 'plan-days' }, ...days.map(d => planDayCard(d, now))));
