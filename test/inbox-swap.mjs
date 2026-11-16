@@ -15,3 +15,8 @@ console.log('inbox-swap ok');
   const r2 = M.acceptInbox(s, { ref: 'claude:lead-x', app: 'claude', item: it2 }); assert.ok(N.canLead(r2.state, 'id:91')); assert.ok(!N.canLead(r2.state, 'id:92'));
   const NB = await import('../docs/js/nurse-board.js'); assert.ok(NB.heardSources(r2.state).some(x => x.key === 'id:91'), 'a nurse who can lead is offered as a tip source');
   console.log('nurse lead ok'); }
+// once Mandarin reports in, work items (posting, swap, nurse) are left to it; tasks still come to Citrus
+{ const apps = { claude: { app: 'claude', inbox: [{ id: 'a', type: 'swap', date: '2099-01-02', code: 'D1' }, { id: 'b', type: 'task', title: 'x' }] } };
+  assert.equal(M.inboxPending({}, apps).length, 2);
+  const left = M.inboxPending({}, { ...apps, mandarin: { app: 'mandarin', inbox: [] } }); assert.deepEqual(left.map(x => x.item.id), ['b']);
+  console.log('mandarin takes work items ok'); }
