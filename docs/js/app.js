@@ -31,6 +31,7 @@ import * as CZ from './custom.js';
 import * as MD from './mandarin.js';
 import * as CL from './clementine.js';
 import * as KA from './calamansi.js';
+import * as BG from './bergamot.js';
 import { h, toast, safeUrl, keyOf, fromKey, addDays, startOfDay, sameDay, fmtDate, fmtDateShort, fmtTime, fmtMin, fmtDur, relDay, pad2, DAY_SHORT, DAY_NAMES, MONTHS, telLink, firstName, atMin, minsOf, uid } from './util.js';
 
 // ---------------- runtime state (not persisted) ----------------
@@ -164,7 +165,7 @@ function show(view) {
 function render() {
   { const c = CZ.custom(S()); setTiming(c.social); applyTabs(c); }   // your Customise choices first: tabs, free-time hours
   ingestApps();   // numbers the apps report become history before anything is drawn
-  const fn = { today: renderToday, rota: renderWork, plan: renderPlan, mind: MU.renderMind, social: () => (CL.live(S()) ? clementinePanel() : SU.renderSocial()), apps: renderApps, more: renderMore }[rt.view] || renderToday;
+  const fn = { today: renderToday, rota: renderWork, plan: renderPlan, mind: () => (BG.live(S()) ? bergamotView() : MU.renderMind()), social: () => (CL.live(S()) ? clementinePanel() : SU.renderSocial()), apps: renderApps, more: renderMore }[rt.view] || renderToday;
   const el = $(`#view-${rt.view}`);
   el.replaceChildren(...[authBanner(), fn()].flat().filter(Boolean));
   // every view gets a heading for screen readers, even the ones whose design has no visible title (beta T10-23)
@@ -858,7 +859,7 @@ function renderToday() {
   if (!mdLive) add(RU.todayCard(), 80, 'Contract dates');
   if (!wide) add(planCard(now), 70, 'Plan');   // the wide cockpit has its own Plan column
   if (KA.live(S())) { const k = calamansiToday(); add(k, KA.chores(S()).some(c => c.late > 0) ? 75 : 55, 'Home'); } else add(CU.todayCard(), CU.todayScore(), 'Home');   // an overdue chore moves above Plan (beta T05-29)
-  add(MU.mindCard(), 58, 'Mind');
+  add(BG.live(S()) ? bergamotToday() : MU.mindCard(), 58, 'Mind');
   if (info.hasRota) add(onCallCard(info), working ? 40 : 22, 'On call');
   ranked.sort((x, y) => y.score - x.score);
   const TOP = cz.today.top + ranked.filter(r => cz.today.pinned.includes(r.label)).length, top = ranked.slice(0, TOP), rest = ranked.slice(TOP);
@@ -1419,6 +1420,28 @@ function clementineToday() {
     d.length ? h('div', { class: 'small' }, `🎂 ${d.map(x => `${x.name} ${x.inDays === 0 ? 'today' : x.inDays === 1 ? 'tomorrow' : 'in 2 days'}`).join(' · ')}`) : null);
 }
 // ───────── Calamansi (Home, Kitchen & daily life) is live: Home shows what it publishes; chores are written only there
+// ───────── Bergamot (journal, notes, tasks, habits) is live: Mind shows what it publishes; Library stays here until Sudachi
+function bergamotView() {
+  const seg = rt.mindSeg === 'library' ? 'library' : 'bergamot', bar = h('div', { class: 'seg work-seg', role: 'tablist' }, [['bergamot', 'Bergamot'], ['library', 'Library']].map(([id, l]) => h('button', { class: seg === id ? 'active' : '', role: 'tab', 'aria-selected': seg === id ? 'true' : 'false', onClick: () => { rt.mindSeg = id; render(); } }, l)));
+  if (seg === 'library') { MU.setSeg('library'); return [h('h1', {}, 'Mind'), bar, ...MU.renderMind().slice(1)]; }
+  const s = S(), st = mergedApps().bergamot || {}, go = (url) => window.open(url, '_blank', 'noopener'), t = BG.tasks(s), hb = BG.habits(s), md = BG.mood(s), sk = BG.streaks(s);
+  const MOOD = ['', '😞', '😕', '😐', '🙂', '😄'];
+  return [h('h1', {}, 'Mind'), bar,
+    h('div', { class: 'card' }, h('div', { class: 'title' }, '🍈 Bergamot'), h('div', { class: 'small' }, st.summary || 'Your journal, notes, tasks and habits live in Bergamot now.'),
+      h('div', { class: 'row wrap', style: { marginTop: '8px', gap: '6px' } }, h('button', { class: 'btn primary', onClick: () => go(`${BG.SITE}?do=write&from=citrus`) }, BG.journaledToday(s) ? 'Write more' : 'Write today'), h('button', { class: 'btn', onClick: () => go(`${BG.SITE}?from=citrus`) }, 'Open Bergamot'), ...(st.actions || []).filter(x => x.id !== 'write').map(x => h('button', { class: 'btn sm', onClick: () => go(x.url) }, x.label)))),
+    t.today || t.overdue || t.top.length ? h('div', { class: 'card' }, h('div', { class: 'title' }, `Tasks · ${t.today} today${t.overdue ? ` · ${t.overdue} overdue` : ''}`), ...t.top.map(x => h('div', { class: 'row' }, h('span', { class: 'small grow' }, x.title), h('span', { class: 'tiny dim' }, x.due)))) : null,
+    hb.due ? h('div', { class: 'card' }, h('div', { class: 'title' }, `Habits · ${hb.done}/${hb.due}`), hb.pending.length ? h('div', { class: 'small' }, `Left today: ${hb.pending.join(', ')}`) : h('div', { class: 'small' }, 'All done today ✓'), sk.length ? h('div', { class: 'tiny dim' }, sk.map(x => `${x.name} ${x.days}d`).join(' · ')) : null) : null,
+    h('div', { class: 'card' }, h('div', { class: 'title' }, 'Journal'), h('div', { class: 'small' }, BG.journaledToday(s) ? 'Written today ✓' : 'Not written today yet', md.today ? ` · mood ${MOOD[Math.round(md.today)] || md.today}` : '', md.week ? ` · week ${md.week.toFixed(1)}/5` : '')),
+    h('div', { class: 'tiny dim', style: { margin: '6px 2px' } }, 'Bergamot updates this when it syncs. Your goals stay in Plan › Aims, where Bergamot\'s links show.')].filter(Boolean);
+}
+function bergamotToday() {
+  const s = S(), t = BG.tasks(s), hb = BG.habits(s), j = BG.journaledToday(s);
+  if (!t.today && !t.overdue && !hb.due && j) return null;
+  return h('div', { class: 'card' }, h('div', { class: 'row' }, h('div', { class: 'title grow' }, '🍈 Mind'), h('button', { class: 'btn sm ghost', onClick: () => window.open(`${BG.SITE}?do=${j ? 'today' : 'write'}&from=citrus`, '_blank', 'noopener') }, j ? 'Open' : 'Write')),
+    t.today || t.overdue ? h('div', { class: 'small' }, `Tasks: ${t.top.slice(0, 3).map(x => x.title).join(', ') || `${t.today} today`}${t.overdue ? ` · ${t.overdue} overdue` : ''}`) : null,
+    hb.due ? h('div', { class: 'small' }, `Habits ${hb.done}/${hb.due}${hb.pending.length ? ` · left: ${hb.pending.slice(0, 3).join(', ')}` : ''}`) : null,
+    h('div', { class: 'small dim' }, j ? 'Journal written today ✓' : 'Not journaled yet today'));
+}
 function calamansiPanel() {
   const s = S(), st = mergedApps().calamansi || {}, go = (url) => window.open(url, '_blank', 'noopener');
   const ch = KA.chores(s), ml = KA.meals(s), sh = KA.shopping(s), fr = KA.fridge(s), bl = KA.bills(s);

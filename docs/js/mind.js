@@ -438,9 +438,10 @@ export function metricSeries(s) {
 /** Proposals from other apps you haven't decided on (and that haven't expired). */
 const WORK_TYPES = new Set(['posting', 'swap', 'nurse']);
 export function inboxPending(s, apps, now = new Date()) {
-  const todayKey = keyOf(now), out = [], mandarin = Object.entries(apps || {}).some(([n, st]) => (st.app || n) === 'mandarin');
+  const todayKey = keyOf(now), out = [], mandarin = Object.entries(apps || {}).some(([n, st]) => (st.app || n) === 'mandarin'), bergamot = Object.entries(apps || {}).some(([n, st]) => (st.app || n) === 'bergamot');
   for (const [name, st] of Object.entries(apps || {})) for (const it of st.inbox || []) {
-    if (mandarin && WORK_TYPES.has(it.type)) continue;   // Mandarin is live: it takes work items (postings, swaps, nurses), so they are not handled twice
+    if (mandarin && WORK_TYPES.has(it.type)) continue;
+    if (bergamot && (st.app || name) === 'claude' && (it.type === 'task' || it.type === 'note')) continue;   // Bergamot takes Claude's tasks and notes   // Mandarin is live: it takes work items (postings, swaps, nurses), so they are not handled twice
     const ref = refOf(st.app || name, it.id);
     if (s.inboxLog?.[ref]) continue;
     if (it.expires && it.expires < todayKey) continue;
@@ -453,6 +454,8 @@ export function inboxPending(s, apps, now = new Date()) {
 export function acceptInbox(s, p) {
   const { ref, app, item } = p, now = Date.now();
   let next = s, taskId = '';
+  // Bergamot owns tasks and notes now: a task or note from another app (a birthday, a bill) is acknowledged here, not copied into Citrus
+  if ((item.type === 'task' || item.type === 'note') && s.apps?.bergamot) return { state: { ...s, inboxLog: { ...s.inboxLog, [ref]: { status: 'accepted', at: now, type: item.type } } }, taskId: '' };
   if (item.type === 'posting') {
     // names → that day's floating nurses with the same matcher as "Paste list"; "mine" = your own GP site that day
     const date = fromKey(item.date), mySite = N.siteId(dayInfo(s, date).mine?.shift?.site || ''), rows = N.rowsFor(s, date);

@@ -1,5 +1,6 @@
 // Mind screens. One view with six segments (Overview · Tasks · Habits · Aims · Reflect · Year), plus the card on Today,
 // the capture bar, the inbox from other apps, and the sheets. app.js hands over what it owns through initMind(ctx).
+import * as BG from './bergamot.js';
 import { h, toast, keyOf, fromKey, addDays, startOfDay, fmtDate, relDay, DAY_SHORT, MONTHS } from './util.js';
 import { weekStartOf } from './planner.js';
 import * as M from './mind.js';
@@ -166,7 +167,7 @@ export function inboxRow(p) {
   const it = p.item, meta = ctx.appMeta?.(p.app) || {};
   return h('div', { class: 'ibx' }, h('span', { class: 'ibx-ic', style: { '--c': meta.color || 'var(--orange)' } }, meta.icon || '⚡'),
     h('div', { class: 'grow' }, h('div', { class: 'mtitle' }, it.title), it.type === 'posting' ? h('div', { class: 'tiny dim' }, `${it.postings.map(x => x.nurse).join(', ')}${it.from ? ` · from ${it.from}` : ''}`) : it.type === 'swap' ? h('div', { class: 'tiny dim' }, `${it.date}: you work ${it.code || 'nothing (off)'}${it.with ? ` · swapped with ${it.with}` : ''}`) : null, h('div', { class: 'msub' }, h('span', {}, meta.title || p.app), it.date ? h('span', {}, dueLabel(it.date)) : null, it.minutes ? h('span', {}, `${it.minutes}m`) : null, h('span', {}, it.type))),
-    h('button', { class: 'btn sm primary', onClick: () => acceptProposal(p) }, it.type === 'event' ? 'Add event' : it.type === 'posting' ? 'Add as heard' : it.type === 'swap' ? 'Apply swap' : it.type === 'nurse' ? 'Apply' : 'Take'), h('button', { class: 'btn sm ghost', 'aria-label': 'Dismiss', onClick: () => up(s => M.dismissInbox(s, p.ref)) }, '✕'));
+    h('button', { class: 'btn sm primary', onClick: () => acceptProposal(p) }, (it.type === 'task' || it.type === 'note') && S().apps?.bergamot ? 'Got it' : it.type === 'event' ? 'Add event' : it.type === 'posting' ? 'Add as heard' : it.type === 'swap' ? 'Apply swap' : it.type === 'nurse' ? 'Apply' : 'Take'), h('button', { class: 'btn sm ghost', 'aria-label': 'Dismiss', onClick: () => up(s => M.dismissInbox(s, p.ref)) }, '✕'));
 }
 export async function acceptProposal(p) {
   let cal = null; if (p.item.type === 'event' && p.item.start != null) { try { cal = await ctx.addEvent?.(p.item, { quiet: true }); } catch (e) { toast(e.message || 'Could not add the event', 'err'); return; } }
@@ -174,6 +175,7 @@ export async function acceptProposal(p) {
   if (p.item.type === 'posting') { toast(`${res.placed} posting${res.placed === 1 ? '' : 's'} saved as heard${p.item.from ? ` from ${p.item.from}` : ''}${res.missed.length ? ` · not matched: ${res.missed.join(', ')}` : ''}`, res.missed.length ? 'err' : 'ok'); return; }
   if (p.item.type === 'nurse') { if (res.missed) toast(`No single nurse matches "${p.item.nurse}" on your nurse sheets`, 'err'); else toast(`${res.name}: ${p.item.canLead ? 'can be team leader' : 'no longer marked as a possible leader'}`, 'ok'); return; }
   if (p.item.type === 'swap') { ctx.regenerate?.(); toast(`Swap saved for ${p.item.date}${p.item.with ? ` with ${p.item.with}` : ''}`, 'ok'); return; }
+  if ((p.item.type === 'task' || p.item.type === 'note') && S().apps?.bergamot) { toast('Noted', 'ok'); return; }
   toast(p.item.type === 'note' ? 'Added to notes' : cal?.how === 'queued' ? 'Taken in: the event goes to your calendar when you are online' : cal ? 'Taken in and added to your calendar' : 'Taken in');   // one toast: addEvent was quiet if (p.item.minutes && p.item.date) ctx.regenerate?.();
 }
 function trendCard() {
@@ -409,10 +411,12 @@ function habitSheet(id) {
 function aimCard(a) {
   const s = S(), p = M.aimProgress(s, a), left = M.daysLeft(a.deadline, now()), color = areaColor(a.area);
   const tasks = Object.values(s.tasks || {}).filter(t => t.aimId === a.id), habits = M.activeHabits(s).filter(x => x.aimId === a.id);
+  const bg = BG.goalLink(s, a.id);   // Bergamot's tasks, habits and journal entries linked to this aim
   return h('div', { class: 'card aim', style: { '--c': color } },
     h('div', { class: 'row top', onClick: () => aimSheet(a.id) }, ring(p, { size: 58, stroke: 6, color, label: pctTxt(p), cls: 'breathing' }),
       h('div', { class: 'grow' }, h('div', { class: 'title' }, a.title), a.why ? h('div', { class: 'dim tiny quote' }, a.why) : null,
         h('div', { class: 'msub' }, a.area ? h('span', { style: { color } }, M.areaOf(a.area)?.name) : null, left != null ? h('span', { class: left < 0 ? 'late' : left < 30 ? 'warnc' : '' }, left < 0 ? `${-left}d past` : `${left}d left`) : null, tasks.length ? h('span', {}, `${tasks.filter(t => t.done).length}/${tasks.length} tasks`) : null, habits.length ? h('span', {}, `${habits.length} habit${habits.length > 1 ? 's' : ''}`) : null, a.link ? h('span', { class: 'ok' }, `live · ${a.link}`) : null))),
+    bg && (bg.tasks || bg.habits || bg.entries || bg.notes) ? h('div', { class: 'tiny dim', style: { margin: '4px 0 0' } }, `In Bergamot: ${[bg.tasks ? `${bg.done}/${bg.tasks} tasks done${bg.doneWeek ? ` (${bg.doneWeek} this week)` : ''}` : '', bg.habits ? `${bg.habits} habit${bg.habits === 1 ? '' : 's'}` : '', bg.entries ? `${bg.entries} journal entr${bg.entries === 1 ? 'y' : 'ies'}` : '', bg.notes ? `${bg.notes} note${bg.notes === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ')}`) : null,
     a.milestones?.length ? h('div', { class: 'miles' }, a.milestones.map((m, i) => h('button', { class: `mile ${m.done ? 'on' : ''}`, onClick: () => up(st => M.updateAim(st, a.id, { milestones: st.aims[a.id].milestones.map((x, j) => j === i ? { ...x, done: !x.done } : x) })) }, h('i'), m.title))) : null);
 }
 function aimsView() {
