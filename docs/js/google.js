@@ -418,6 +418,11 @@ export async function listAppStatus(root) {
   persistIds();
   return { apps, fileToApp, folderToApp };
 }
+/** Another app's public hub file (e.g. hub/mandarin/shifts.json). Read only: Citrus never writes into another app's folder. */
+export async function readHubFile(root, app, name) {
+  const dir = await ensurePath([...P(root).hub, app], { create: false }); if (!dir) return null;
+  const { file } = await findFile(dir, name); return file ? readJsonFile(file) : null;
+}
 /** One status file by id (after the changes feed said it moved). */
 export async function readStatusFile(fileId, app) {
   const meta = await fileMeta(fileId, 'id,modifiedTime,trashed'); if (!meta || meta.trashed) return null;

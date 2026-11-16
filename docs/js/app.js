@@ -28,6 +28,7 @@ import * as TM from './today-model.js';
 import { checkBackup, describeCounts } from './backup-check.js';
 import { contactOf, setTiming } from './social.js';
 import * as CZ from './custom.js';
+import * as MD from './mandarin.js';
 import { h, toast, safeUrl, keyOf, fromKey, addDays, startOfDay, sameDay, fmtDate, fmtDateShort, fmtTime, fmtMin, fmtDur, relDay, pad2, DAY_SHORT, DAY_NAMES, MONTHS, telLink, firstName, atMin, minsOf, uid } from './util.js';
 
 // ---------------- runtime state (not persisted) ----------------
@@ -45,7 +46,7 @@ const rt = {
 
 const $ = (s, el = document) => el.querySelector(s);
 const views = {};
-const S = () => store.get();
+const S = () => MD.withMandarin(store.get());   // Mandarin's corrections overlay Citrus's old ones (mandarin.js)
 
 // ---------------- boot ----------------
 async function boot() {
@@ -251,13 +252,20 @@ async function syncApps(only = null) {
     const d = drive[name];
     if (!d || (st.updatedAt || '') > (d.updatedAt || '')) { try { await G.uploadAppStatus(root, name, st); drive[name] = st; } catch (e) { console.warn('mirror', name, e.message); } }
   }
+  if (drive.mandarin) {   // Mandarin's shifts.json: re-read when its status moved, or every 10 minutes
+    const prev = S().apps?.mandarin?._shifts;
+    if (!prev || prev._status !== drive.mandarin._modified || Date.now() - (prev._read || 0) > 10 * 60000) {
+      try { const sh = await G.readHubFile(root, 'mandarin', 'shifts.json'); if (sh?.days) drive.mandarin = { ...drive.mandarin, _shifts: { days: sh.days, me: sh.me || null, updatedAt: sh.updatedAt || '', _status: drive.mandarin._modified, _read: Date.now() } }; else if (prev) drive.mandarin = { ...drive.mandarin, _shifts: prev }; }
+      catch (e) { console.warn('mandarin shifts', e.message); if (prev) drive.mandarin = { ...drive.mandarin, _shifts: prev }; }
+    } else drive.mandarin = { ...drive.mandarin, _shifts: prev };
+  }
   store.update(s => ({ ...s, apps: drive }), { remote: false, silent: true });
   ingestApps();
   return maps;
 }
 // What the apps report becomes history (numbers, progress) so habits can follow them and aims can read them
 function ingestApps() {
-  const s = S(), next = M.recordMetrics(s, mergedApps());
+  const s = store.get(), next = M.recordMetrics(s, mergedApps());
   if (next !== s) store.update(() => next, { silent: true });
 }
 async function syncCalendar(force) {
@@ -839,12 +847,13 @@ function renderToday() {
   const cz = CZ.custom(S());   // Customise › Today: hidden cards never show; pinned ones always lead, open
   const add = (el, score, label) => { if (el && !cz.today.hidden.includes(label)) ranked.push({ el, score: score + (cz.today.pinned.includes(label) ? 1000 : 0), label }); };
   add(shiftBoard(info, md), working ? 92 : soon ? 60 : 30, 'Shift board');
-  add(CHU.updatesCard({ today: true }), 100, 'Schedule update');
+  const mdLive = MD.live(S());   // Mandarin briefs schedule updates, nurse postings and contract dates itself now
+  if (!mdLive) add(CHU.updatesCard({ today: true }), 100, 'Schedule update');
   for (const c of DU.todayCards(now)) add(c.el, c.score, c.label);
   // people-ui scores its own card: the evening "tomorrow's postings not set" nudge stays above the fold (beta T04-05)
-  add(PU.todayCard(), PU.todayScore(working), 'Nurses');
+  if (!mdLive) add(PU.todayCard(), PU.todayScore(working), 'Nurses');
   add(MU.inboxPanel(3), 96, 'From your apps');   // things sent in (postings, swaps, tasks) wait on Today too, not only in Mind
-  add(RU.todayCard(), 80, 'Contract dates');
+  if (!mdLive) add(RU.todayCard(), 80, 'Contract dates');
   if (!wide) add(planCard(now), 70, 'Plan');   // the wide cockpit has its own Plan column
   add(CU.todayCard(), CU.todayScore(), 'Home');   // an overdue chore moves above Plan (beta T05-29)
   add(MU.mindCard(), 58, 'Mind');
@@ -927,7 +936,7 @@ function customiseCard() {
   const ns = S().settings?.nurseStaffing || {}, seat = (k, id) => (ns[k] || {})[id] ?? (N.TYPICAL[k] || {})[id] ?? '';
   return h('div', { class: 'card cz' }, h('div', { class: 'title' }, 'Customise'), h('div', { class: 'tiny dim' }, 'Synced to all your devices.'),
     sec('Tabs', 'order, hide, start tab', ...[...c.tabs.order].map(id => tabRow(CZ.TABS.find(t => t[0] === id))), h('div', { class: 'cz-row' }, h('span', { class: 'grow small' }, 'Open on'), h('select', { 'aria-label': 'Open on', onChange: (e) => set('start', e.target.value) }, CZ.TABS.filter(([id]) => !c.tabs.hidden.includes(id)).map(([id, l]) => h('option', { value: id, selected: c.start === id }, l))))),
-    sec('Work', 'which sections show', h('div', { class: 'chips' }, CZ.WORK_SEGS.map(([id, l]) => chip(!c.workSegs.hidden.includes(id), l, () => set('workSegs', { hidden: CZ.toggleIn(c.workSegs.hidden, id) }))))),
+    sec('Work', 'which sections show', h('div', { class: 'chips' }, CZ.WORK_SEGS.filter(([id]) => !MD.live(S()) || id === 'home').map(([id, l]) => chip(!c.workSegs.hidden.includes(id), l, () => set('workSegs', { hidden: CZ.toggleIn(c.workSegs.hidden, id) }))))),
     sec('Today', 'hide or pin cards, how many stay open', h('div', { class: 'tiny dim' }, 'Tap to hide · ★ to pin to the top'), ...CZ.TODAY_CARDS.map(l => h('div', { class: 'cz-row' }, h('span', { class: 'grow' }, l), chip(c.today.pinned.includes(l), '★', () => set('today', { pinned: CZ.toggleIn(c.today.pinned, l) }), { 'aria-label': `Pin ${l}` }), chip(!c.today.hidden.includes(l), c.today.hidden.includes(l) ? 'Hidden' : 'Shown', () => set('today', { hidden: CZ.toggleIn(c.today.hidden, l) })))),
       h('div', { class: 'cz-row' }, h('span', { class: 'grow small' }, 'Cards open before "More for today"'), h('input', { type: 'number', min: 1, max: 12, value: c.today.top, 'aria-label': 'Cards open', class: 'cz-num', onChange: (e) => set('today', { top: +e.target.value }) }))),
     sec('Briefing', 'which lines the morning card shows', h('div', { class: 'chips' }, CZ.BRIEF_LINES.map(([id, l]) => id === 'shift' ? chip(true, `${l} (always)`, () => {}, { disabled: true }) : chip(!c.brief.off.includes(id), l, () => set('brief', { off: CZ.toggleIn(c.brief.off, id) }))))),
@@ -1386,7 +1395,22 @@ function noteCard(date) {
 
 // ---------------- ROTA ----------------
 let workSegDefault = 'calendar';
+function mandarinPanel() {
+  const s = S(), st = mergedApps().mandarin || {}, days = MD.nextDays(s), go = (url) => window.open(url, '_blank', 'noopener');
+  const fmt = (d) => { const dt = new Date(d.date + 'T12:00'); return `${DAY_SHORT[dt.getDay()]} ${dt.getDate()}`; };
+  const line = (d) => d.kind === 'work' ? `${d.code}${d.site ? ' · ' + d.site : ''}${d.start ? ` · ${d.start}–${d.end}` : ''}` : d.kind === 'leave' ? (d.label || 'Leave') : d.kind === 'unknown' ? 'not on the rota' : 'Off';
+  return [h('div', { class: 'card' }, h('div', { class: 'title' }, '🍊 Mandarin'), h('div', { class: 'small' }, st.summary || 'Your rotas, nurses, swaps, leave and career live in Mandarin now.'),
+      h('div', { class: 'row wrap', style: { marginTop: '8px', gap: '6px' } }, h('button', { class: 'btn primary', onClick: () => go(MD.SITE) }, 'Open Mandarin'),
+        ...(st.actions || []).map(x => h('button', { class: 'btn sm', onClick: () => go(x.url) }, x.label)))),
+    days.length ? h('div', { class: 'card' }, h('div', { class: 'title' }, 'Your next days'), ...days.map(d => h('div', { class: 'row' }, h('span', { class: 'small', style: { width: '4.5em' } }, fmt(d)), h('span', { class: `small grow ${d.kind === 'work' ? '' : 'dim'}` }, line(d), d.corrected ? ' · changed' : '')))) : h('div', { class: 'card tiny dim' }, 'Mandarin has not shared your shifts yet. Open it once while online.'),
+    h('div', { class: 'tiny dim', style: { margin: '6px 2px' } }, 'Citrus still reads the rota files in Drive › Rotas for Today, Plan and Social; changes you make in Mandarin show here after it syncs.')];
+}
 function renderWork() {
+  if (MD.live(S())) {   // Mandarin owns the work now: Citrus shows what it publishes + opens it; Home stays here until Calamansi
+    const seg = rt.workSeg === 'home' && !CZ.custom(S()).workSegs.hidden.includes('home') ? 'home' : 'mandarin';
+    const bar = h('div', { class: 'seg work-seg', role: 'tablist' }, [['mandarin', 'Mandarin'], ['home', 'Home']].filter(([id]) => id === 'mandarin' || !CZ.custom(S()).workSegs.hidden.includes(id)).map(([id, l]) => h('button', { class: seg === id ? 'active' : '', role: 'tab', 'aria-selected': seg === id ? 'true' : 'false', onClick: () => { rt.workSeg = id; render(); } }, l)));
+    return [h('h1', {}, 'Work'), bar, ...[seg === 'home' ? CU.renderHome() : mandarinPanel()].flat()];
+  }
   const SEG = CZ.visibleWorkSegs(S()), want = rt.workSeg || workSegDefault, seg = SEG.some(([id]) => id === want) ? want : SEG[0][0];   // hidden segments (Customise) are skipped
   const bar = h('div', { class: 'seg work-seg', role: 'tablist' }, SEG.map(([id, l]) => h('button', { class: seg === id ? 'active' : '', role: 'tab', 'aria-selected': seg === id ? 'true' : 'false', onClick: () => { rt.workSeg = id; render(); window.scrollTo(0, 0); } }, l)));
   const body = seg === 'team' ? PU.renderDirectory() : seg === 'nurses' ? PU.renderNurses() : seg === 'home' ? CU.renderHome() : seg === 'career' ? RU.renderCareer() : renderRota();

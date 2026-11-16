@@ -1,4 +1,5 @@
 // Work → Calendar: month report (with a shareable picture of your month), leave planner, and richer swap options in the cover sheet.
+import * as MD from './mandarin.js';
 import { h, toast, keyOf, fromKey, addDays, startOfDay, DAY_SHORT, MONTHS } from './util.js';
 import * as P from './plans.js';
 import * as L from './labor.js';
@@ -115,6 +116,7 @@ export function leaveSheet() {
       e ? h('div', { class: 'card lp-eval' }, h('div', { class: 'lw-stats' }, [stat(e.days, 'days'), stat(e.noRota === e.days ? '?' : e.covered, 'shifts replaced'), stat(e.noRota === e.days ? '?' : e.nights, 'nights'), e.leftAfter != null ? stat(e.leftAfter, 'days left after') : null].filter(Boolean)),
         verdicts(e).map(([k, t]) => h('div', { class: `lw-flag ${k}` }, t)),
         e.shortNotice ? null : h('div', { class: 'tiny dim' }, `Ask for it in writing by ${fd(e.noticeBy)}: the employer sets leave dates, with 30 days’ notice, and may refuse for work needs.`)) : null,
+      MD.live(ctx.S()) ? h('div', { class: 'row wrap', style: { marginTop: '10px' } }, h('button', { class: 'btn primary grow', onClick: () => window.open(MD.link(ctx.S(), 'leave'), '_blank', 'noopener') }, 'Mark this leave in Mandarin'), h('div', { class: 'tiny dim' }, 'Mandarin owns your rota and leave now; Citrus shows it here after it syncs.')) :
       h('div', { class: 'row wrap', style: { marginTop: '10px' } }, h('button', { class: 'btn primary grow', disabled: fresh ? null : '', onClick: () => {
         const r = P.applyLeave(ctx.S(), fromKey(v.from), fromKey(v.to)); if (!r.days) return toast('Those days are already leave');
         ctx.update(() => r.state); toast(`${plural(r.days, 'day')} marked as leave in your rota${r.already ? ` · ${r.already} already planned` : ''}`); box.close(); ctx.render(); } }, fresh ? `Mark ${plural(fresh, 'day')} as leave in my rota` : 'Already leave')),

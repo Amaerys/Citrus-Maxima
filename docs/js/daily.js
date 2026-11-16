@@ -1,5 +1,6 @@
 // Today: morning briefing, evening wind-down, how-did-the-day-feel log with what it learns, and a study planner around your shifts. Pure functions (no DOM).
 import { briefOn } from './custom.js';
+import { live as mandarinLive } from './mandarin.js';
 import { keyOf, fromKey, addDays, startOfDay } from './util.js';
 import { dayInfo, myDay } from './model.js';
 import * as N from './nurses.js';
@@ -51,7 +52,8 @@ export function briefing(s, now = new Date()) {
   const ce = X.contractEnds(s, day, 7); if (ce.length) out.push({ icon: '📄', text: `Nurse contract ending: ${ce.slice(0, 2).map(c => fn(c)).join(', ')}` });
   // Settings › Customise › Briefing switches lines off; the shift line always stays
   const ID_OF = { '👥': 'team', '💉': 'nurses', '🧭': 'nurses', '🏠': 'home', '✅': 'tasks', '🎂': 'birthdays', '⏱': 'hours', '📄': 'contract' };
-  return out.filter(l => !ID_OF[l.icon] || briefOn(s, ID_OF[l.icon]));
+  const mdl = mandarinLive(s);   // nurse and contract lines come from Mandarin's own brief now
+  return out.filter(l => !ID_OF[l.icon] || (briefOn(s, ID_OF[l.icon]) && !(mdl && (ID_OF[l.icon] === 'nurses' || ID_OF[l.icon] === 'contract'))));
 }
 
 /** One honest nurse line from nurses.workingWithMe (D03): "likely" only with posting history behind it; otherwise its shared summary. */
