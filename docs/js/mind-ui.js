@@ -631,6 +631,8 @@ function launcher() {
 }
 /** Plan's goal sections (Aims, Year): the same views, shown in the Plan tab. */
 export function goalsView(which) { const body = (which === 'year' ? yearView : aimsView)(); return [h('div', { class: `mind-body seg-${which}` }, ...[body].flat(2).filter(Boolean))]; }
+let libraryOverride = null;   // Sudachi live: the Library section shows its panel instead (set by app.js)
+export function setLibraryOverride(fn) { libraryOverride = fn; }
 export function renderMind() {
   if (ui.seg === 'aims' || ui.seg === 'year') { const w = ui.seg; ui.seg = 'overview'; setTimeout(() => ctx.go?.('plan', w), 0); }   // old links to Aims/Year open Plan
   const i = SEGS.findIndex(x => x[0] === ui.seg), cur = SEGS[i < 0 ? 0 : i], step = (d) => { ui.seg = SEGS[(Math.max(i, 0) + d + SEGS.length) % SEGS.length][0]; ctx.render(); window.scrollTo(0, 0); };
@@ -639,7 +641,7 @@ export function renderMind() {
     h('button', { class: 'mn-step', 'aria-label': 'Previous section', onClick: () => step(-1) }, '‹'),
     h('button', { class: 'mn-main', 'aria-haspopup': 'dialog', 'aria-label': `${cur[1]} — change section`, onClick: launcher }, h('span', { class: 'mn-ic' }, cur[2]), h('span', { class: 'mn-txt' }, h('b', {}, cur[1]), h('small', {}, segSub(cur[0]))), pending && cur[0] !== 'overview' ? h('span', { class: 'pill-n' }, pending) : null, h('span', { class: 'mn-grid', 'aria-hidden': 'true' }, h('i'), h('i'), h('i'), h('i'))),
     h('button', { class: 'mn-step', 'aria-label': 'Next section', onClick: () => step(1) }, '›'));
-  const body = { overview, tasks: tasksView, habits: habitsView, aims: aimsView, reflect: reflectView, year: yearView, library: renderLibrary, notes: renderNotes }[ui.seg]();
+  const body = { overview, tasks: tasksView, habits: habitsView, aims: aimsView, reflect: reflectView, year: yearView, library: () => (libraryOverride ? libraryOverride() : renderLibrary()), notes: renderNotes }[ui.seg]();
   ui.pop = '';   // the enter animation plays once
   return [seg, h('div', { class: `mind-body seg-${ui.seg}` }, ...body.flat().filter(Boolean))];
 }

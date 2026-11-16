@@ -32,6 +32,7 @@ import * as MD from './mandarin.js';
 import * as CL from './clementine.js';
 import * as KA from './calamansi.js';
 import * as BG from './bergamot.js';
+import * as SD from './sudachi.js';
 import { h, toast, safeUrl, keyOf, fromKey, addDays, startOfDay, sameDay, fmtDate, fmtDateShort, fmtTime, fmtMin, fmtDur, relDay, pad2, DAY_SHORT, DAY_NAMES, MONTHS, telLink, firstName, atMin, minsOf, uid } from './util.js';
 
 // ---------------- runtime state (not persisted) ----------------
@@ -163,6 +164,7 @@ function show(view) {
 }
 
 function render() {
+  MU.setLibraryOverride(SD.live(S()) ? sudachiPanel : null);   // Sudachi owns the library once it reports in
   { const c = CZ.custom(S()); setTiming(c.social); applyTabs(c); }   // your Customise choices first: tabs, free-time hours
   ingestApps();   // numbers the apps report become history before anything is drawn
   const fn = { today: renderToday, rota: renderWork, plan: renderPlan, mind: () => (BG.live(S()) ? bergamotView() : MU.renderMind()), social: () => (CL.live(S()) ? clementinePanel() : SU.renderSocial()), apps: renderApps, more: renderMore }[rt.view] || renderToday;
@@ -860,6 +862,7 @@ function renderToday() {
   if (!wide) add(planCard(now), 70, 'Plan');   // the wide cockpit has its own Plan column
   if (KA.live(S())) { const k = calamansiToday(); add(k, KA.chores(S()).some(c => c.late > 0) ? 75 : 55, 'Home'); } else add(CU.todayCard(), CU.todayScore(), 'Home');   // an overdue chore moves above Plan (beta T05-29)
   add(BG.live(S()) ? bergamotToday() : MU.mindCard(), 58, 'Mind');
+  if (SD.live(S())) add(sudachiToday(), 26, 'Media');
   if (info.hasRota) add(onCallCard(info), working ? 40 : 22, 'On call');
   ranked.sort((x, y) => y.score - x.score);
   const TOP = cz.today.top + ranked.filter(r => cz.today.pinned.includes(r.label)).length, top = ranked.slice(0, TOP), rest = ranked.slice(TOP);
@@ -1421,6 +1424,21 @@ function clementineToday() {
 }
 // ───────── Calamansi (Home, Kitchen & daily life) is live: Home shows what it publishes; chores are written only there
 // ───────── Bergamot (journal, notes, tasks, habits) is live: Mind shows what it publishes; Library stays here until Sudachi
+// ───────── Sudachi (media) is live: Library shows what it publishes; media is written only there
+function sudachiPanel() {
+  const s = S(), st = mergedApps().sudachi || {}, go = (url) => window.open(url, '_blank', 'noopener'), wk = SD.countLine(SD.week(s)), mo = SD.countLine(SD.month(s)), on = SD.now(s), pk = SD.pick(s), gl = SD.goals(s);
+  return [h('div', { class: 'card' }, h('div', { class: 'title' }, '🟢 Sudachi'), h('div', { class: 'small' }, st.summary || 'Your books, shows, films and games live in Sudachi now.'),
+      h('div', { class: 'row wrap', style: { marginTop: '8px', gap: '6px' } }, h('button', { class: 'btn primary', onClick: () => go(`${SD.SITE}?do=log&from=citrus`) }, 'Log something'), h('button', { class: 'btn', onClick: () => go(`${SD.SITE}?from=citrus`) }, 'Open Sudachi'), ...(st.actions || []).filter(x => x.id !== 'log').map(x => h('button', { class: 'btn sm', onClick: () => go(x.url) }, x.label)))),
+    pk ? h('div', { class: 'card' }, h('div', { class: 'title' }, `Pick for today${pk.label ? ` · ${pk.label}` : ''}`), h('div', { class: 'small' }, pk.title, pk.minutes ? h('span', { class: 'dim' }, ` · ~${pk.minutes} min`) : null), pk.why ? h('div', { class: 'tiny dim' }, pk.why) : null) : null,
+    on.length ? h('div', { class: 'card' }, h('div', { class: 'title' }, 'Currently on'), ...on.map(m => h('div', { class: 'row' }, h('span', { class: 'small grow' }, m.title), h('span', { class: 'tiny dim' }, m.total ? `${m.progress}/${m.total}` : m.progress ? String(m.progress) : '')))) : null,
+    wk || mo || gl.length ? h('div', { class: 'card' }, h('div', { class: 'title' }, 'Counts'), wk ? h('div', { class: 'small' }, `This week: ${wk}`) : null, mo ? h('div', { class: 'small' }, `This month: ${mo}`) : null, gl.length ? h('div', { class: 'tiny dim' }, gl.map(g => `${g.kind} ${g.done}/${g.target}`).join(' · ')) : null) : null,
+    h('div', { class: 'tiny dim', style: { margin: '6px 2px' } }, 'Sudachi updates this when it syncs. Log, rate and import there.')].filter(Boolean);
+}
+function sudachiToday() {
+  const s = S(), pk = SD.pick(s), on = SD.now(s)[0]; if (!pk && !on) return null;
+  return h('div', { class: 'card' }, h('div', { class: 'row' }, h('div', { class: 'title grow' }, '🟢 Media'), h('button', { class: 'btn sm ghost', onClick: () => window.open(`${SD.SITE}?do=today&from=citrus`, '_blank', 'noopener') }, 'Open')),
+    pk ? h('div', { class: 'small' }, `Pick: ${pk.title}${pk.minutes ? ` (~${pk.minutes} min)` : ''}`) : null, on ? h('div', { class: 'small dim' }, `On: ${on.title}${on.total ? ` ${on.progress}/${on.total}` : ''}`) : null);
+}
 function bergamotView() {
   const seg = rt.mindSeg === 'library' ? 'library' : 'bergamot', bar = h('div', { class: 'seg work-seg', role: 'tablist' }, [['bergamot', 'Bergamot'], ['library', 'Library']].map(([id, l]) => h('button', { class: seg === id ? 'active' : '', role: 'tab', 'aria-selected': seg === id ? 'true' : 'false', onClick: () => { rt.mindSeg = id; render(); } }, l)));
   if (seg === 'library') { MU.setSeg('library'); return [h('h1', {}, 'Mind'), bar, ...MU.renderMind().slice(1)]; }
