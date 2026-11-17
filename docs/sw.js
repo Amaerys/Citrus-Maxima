@@ -1,5 +1,5 @@
 // Citrus Maxima service worker: precached app shell, network-first with a short timeout, Google Fonts cached for offline.
-const CACHE = 'citrus-maxima-v37';
+const CACHE = 'citrus-maxima-v38';
 const FONTS = 'citrus-fonts-v1';   // kept across releases: font files are immutable, no need to fetch them again
 const FONT_CSS = 'https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=Pixelify+Sans:wght@500;700&family=Source+Sans+3:wght@400;600;700&family=JetBrains+Mono:wght@500&display=swap';
 // Without these the app cannot start offline: install fails (and the old worker stays) if one is missing.
@@ -7,7 +7,7 @@ const CORE = ['./', './index.html', './css/app.css', './js/app.js', './js/util.j
 // Everything else in docs/js (test/D17.mjs checks this list against the folder). Fetched one by one so a
 // file that was renamed or merged away does not block the install; it just is not cached.
 const JS = ['apps-ui', 'backup-check', 'board', 'career-ui', 'career', 'changes-ui', 'changes', 'chores-cal', 'chores-ui', 'chores', 'custom', 'daily-ui', 'daily',
-  'extras-ui', 'extras', 'google', 'inbound', 'labor-ui', 'labor', 'media-ui', 'media', 'mind-ui', 'mind-viz', 'mind', 'mandarin', 'clementine', 'calamansi', 'bergamot', 'sudachi', 'model', 'nurse-board', 'nurses',
+  'extras-ui', 'extras', 'google', 'inbound', 'labor-ui', 'labor', 'media-ui', 'media', 'mind-ui', 'mind-viz', 'mind', 'mandarin', 'clementine', 'calamansi', 'bergamot', 'sudachi', 'registry', 'model', 'nurse-board', 'nurses',
   'people-logic', 'people-ui', 'plan-view', 'planner', 'plans-ui', 'plans', 'rota-codes', 'rota-parser', 'social-ui', 'social', 'store-alerts', 'store', 'today-model', 'xlsx-lite'];
 const ASSETS = [...JS.map(f => `./js/${f}.js`), './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png'];
 const NET_TIMEOUT = 2500;   // on weak signal ("lie-fi") serve the cached shell after 2.5 s instead of hanging on the fetch

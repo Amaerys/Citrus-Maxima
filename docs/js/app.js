@@ -33,6 +33,7 @@ import * as CL from './clementine.js';
 import * as KA from './calamansi.js';
 import * as BG from './bergamot.js';
 import * as SD from './sudachi.js';
+import * as REG from './registry.js';
 import { h, toast, safeUrl, keyOf, fromKey, addDays, startOfDay, sameDay, fmtDate, fmtDateShort, fmtTime, fmtMin, fmtDur, relDay, pad2, DAY_SHORT, DAY_NAMES, MONTHS, telLink, firstName, atMin, minsOf, uid } from './util.js';
 
 // ---------------- runtime state (not persisted) ----------------
@@ -251,7 +252,7 @@ async function syncApps(only = null) {
   const root = S().settings.driveFolder;
   let drive = { ...(S().apps || {}) }, maps = null;
   if (only) { for (const [fileId, app] of only) { const st = await G.readStatusFile(fileId, app); if (st) drive[app] = st; } }
-  else { const r = await G.listAppStatus(root); drive = r.apps; maps = { fileToApp: r.fileToApp, folderToApp: r.folderToApp }; }
+  else { const r = await G.listAppStatus(root, REG.APPS.map(x => x.id)); drive = r.apps; maps = { fileToApp: r.fileToApp, folderToApp: r.folderToApp }; }
   const local = localAppStatuses();                 // apps on this site that can't reach Drive themselves: mirror them up
   for (const [name, st] of Object.entries(local)) {
     const d = drive[name];
@@ -317,6 +318,8 @@ async function refreshAll(manual, { full = false } = {}) {
       plan.apps ? step('apps', async () => { maps = await syncApps(); }) : plan.appFiles?.size ? step('apps', () => syncApps(plan.appFiles)) : null,
       step('calendar', () => syncCalendar(manual || plan.full)),
     ]);
+    // Drive layout (Settings › Drive): tag every app folder, move the ones whose apps are ready, refresh Citrus/00 Hub/Map.json — once a day
+    if (S().settings.driveOrganise && plan.full && Date.now() - (S().settings.driveOrganisedAt || 0) > 20 * 3600000) await step('organise', () => organiseNow({ quiet: true }));
     // 3. queued calendar writes, unsaved local changes, shift mirror
     await step('outbox', flushOutbox);
     if (rt.saveDirty) await step('save', saveStateNow);
@@ -1361,14 +1364,8 @@ function moveBlock(k, b, isSuggestion = false) {
 }
 
 // Known apps: display defaults when a status file does not carry them
-const APP_META = {
-  yuzu: { title: 'Yuzu', icon: '🍋', color: '#f2d34b', url: 'https://yuzu-cards.github.io/Yuzu/' },
-  mephisto: { title: 'Mephisto', icon: '🇩🇪', color: '#c58cff', url: 'https://mephisto-deutsch.github.io/Mephisto/' },
-  orange: { title: 'Orange', icon: '🍊', color: '#ff7a1a', url: 'https://orange-fitness.github.io/Orange/' },
-  sinus: { title: 'Sinus', icon: '💓', color: '#ff5f6d', url: 'https://sinus-ekg.github.io/Sinus-EKG/' },
-  kumquat: { title: 'Kumquat', icon: '📊', color: '#ff6a13', url: 'https://kumquat-evidence.github.io/Kumquat/' },
-  embergine: { title: 'Embergine', icon: '🔥', color: '#f26a1b', url: 'https://embergine.github.io/embergine/' },
-};
+// the family's names, icons and sites come from registry.js (every app in the Citrus project)
+const APP_META = Object.fromEntries(REG.APPS.filter(x => !x.noApp && x.id !== 'citrus' && x.url).map(x => [x.id, { title: x.title, icon: x.icon, color: x.color, url: x.url }]));
 function appMeta(name, st = {}) {
   const key = String(st.app || name || '').toLowerCase();
   const m = APP_META[key] || {};
@@ -1952,6 +1949,33 @@ function appInfos() {
     return { name, st, has, meta, ageMin, fresh: ageMin != null && ageMin <= 36 * 60, done: doneOn(st, today), doneBefore: !!st.today?.done && !doneOn(st, today), asks, minutes, waiting, url: launchUrl(name, st, null) };
   });
 }
+// ───────── Drive: one Citrus folder at the top of My Drive (owner, 17/11/2026) — tag first, move later (registry.js, G.organiseDrive)
+async function organiseNow({ quiet = false } = {}) {
+  const rep = await G.organiseDrive(S().settings.driveFolder, REG, S().apps || {});
+  store.update(s => ({ ...s, settings: { ...s.settings, driveOrganise: true, driveOrganisedAt: Date.now(), driveMap: { at: Date.now(), moved: rep.map.apps.filter(a => a.moved).map(a => a.id), waiting: rep.waiting.map(w => ({ id: w.id, waitingFor: w.waitingFor })), missing: rep.missing } } }), { silent: quiet });
+  saveWatch(null);   // folders moved or were tagged: the next sync looks everything up again
+  if (!quiet) toast(`Drive organised: ${rep.tagged.length} tagged, ${rep.moved.length} moved${rep.waiting.length ? `, ${rep.waiting.length} waiting for their app` : ''}`, 'ok');
+  return rep;
+}
+function driveCard() {
+  const s = S(), m = s.settings.driveMap, signed = G.isSignedIn(), name = (id) => REG.byId(id)?.title || id;
+  return h('div', { class: 'card' }, h('div', { class: 'title' }, 'Drive layout'),
+    h('div', { class: 'small' }, 'One "Citrus" folder at the top of your Drive, with every app in its area: 00 Hub, Work, Life, Learning (Medicine, Languages, Science, Tech), Handoffs, Archive. Citrus/00 Hub has Map.json and a README that list every folder, what it holds and who reads it.'),
+    h('div', { class: 'tiny dim', style: { marginTop: '4px' } }, 'Apps find their folders by a tag, so folders move only when their app (and every app that reads them) is ready. Nothing is deleted.'),
+    m ? h('div', { class: 'small', style: { marginTop: '8px' } }, `In place: ${m.moved.length ? m.moved.map(name).join(', ') : 'none yet'}`) : null,
+    m?.waiting?.length ? h('div', { class: 'tiny dim' }, `Waiting: ${m.waiting.map(w => `${name(w.id)}${w.waitingFor?.length ? ` (for ${w.waitingFor.map(name).join(', ')})` : ''}`).join(' · ')}`) : null,
+    h('div', { class: 'row wrap', style: { marginTop: '8px' } }, h('button', { class: 'btn primary', disabled: signed ? null : '', onClick: async (e) => { e.currentTarget.disabled = true; try { await organiseNow(); } catch (err) { toast(err.message, 'err'); } render(); } }, m ? 'Organise again' : 'Organise my Drive'),
+      m ? h('span', { class: 'tiny dim' }, `Last run ${new Date(s.settings.driveOrganisedAt).toLocaleString('en-GB', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} · runs daily`) : null));
+}
+// every app in the family, by area (registry.js), with whether it reports to Citrus yet
+function directoryCard() {
+  const apps = mergedApps();
+  return h('details', { class: 'card', open: true }, h('summary', {}, h('b', {}, 'All your apps')),
+    ...REG.directory().map(area => h('div', { class: 'dir-area' }, h('div', { class: 'tiny dim', style: { margin: '8px 0 2px' } }, area.title),
+      h('div', { class: 'dir-grid' }, ...area.apps.map(a => { const st = apps[a.id], live = !!st, url = safeUrl(st?.url) || a.url;
+        return h(url ? 'a' : 'div', { class: `dir-app ${live ? 'live' : 'quiet'}`, ...(url ? { href: `${url}${url.includes('?') ? '&' : '?'}from=citrus`, target: '_blank', rel: 'noopener' } : {}), style: { '--c': a.color }, title: a.blurb },
+          h('span', { class: 'ic' }, a.icon), h('span', { class: 'grow' }, h('b', {}, a.title), h('span', { class: 'tiny dim' }, live ? (st.summary || 'reporting').slice(0, 60) : a.url ? 'not reporting yet' : 'not online yet'))); })))));
+}
 function renderApps() {
   const apps = mergedApps(), info = appInfos();
   const need = info.find(i => i.fresh && !i.done && (i.minutes || i.waiting)) || info.find(i => i.fresh) || info[0];
@@ -1978,7 +2002,7 @@ function renderApps() {
       (st.pending || []).length ? [h('div', { class: 'ad-h' }, 'Waiting on you'), h('div', { class: 'tags' }, (st.pending || []).slice(0, 8).map(p => h('span', { class: 'chip' }, String(p).slice(0, 60))))] : null,
       (st.metrics || []).length ? [h('div', { class: 'ad-h' }, 'Numbers it reports'), h('div', { class: 'tags' }, st.metrics.slice(0, 6).map(m => h('span', { class: 'chip' }, `${m.label || m.key}: ${m.value}${m.unit ? ' ' + m.unit : ''}`)))] : null);
   })();
-  return [h('h1', {}, 'Apps'), hero, detail, MU.receivedCard(), issuesCard(apps),
+  return [h('h1', {}, 'Apps'), hero, detail, directoryCard(), MU.receivedCard(), issuesCard(apps),
     h('details', { class: 'card how' }, h('summary', {}, 'How the apps talk to Citrus'),
       h('div', { class: 'small muted' }, 'Each app writes hub/<app>/status.json to Drive › My Apps › hub (summary, what it needs today as “asks”, pending items, numbers, deep links). Citrus places the asks in your plan around shifts, keeps the numbers as history for habits and objectives, and writes hub/citrus/plan.json back for the apps. A star glows when its app reported in the last 36 hours; a solid ring means done today, a dashed one that the app has gone quiet; the small number is items waiting.'))];
 }
@@ -1997,6 +2021,7 @@ function renderMore() {
       signed ? h('button', { class: 'btn', onClick: () => { G.signOut(); saveWatch(null); render(); } }, 'Sign out') : h('button', { class: 'btn primary', onClick: async () => { try { if (cid.value.trim() !== s.settings.clientId) { store.update(x => ({ ...x, settings: { ...x.settings, clientId: cid.value.trim() } }), { remote: false }); await G.init(cid.value.trim()); } await G.signIn({ renew: G.wasSignedIn() }).catch(() => G.signIn()); toast('Signed in', 'ok'); refreshAll(true); } catch (e) { toast(e.message, 'err'); } } }, G.wasSignedIn() ? 'Reconnect Google' : 'Sign in with Google'),
       signed ? h('button', { class: 'btn', onClick: () => refreshAll(true) }, '↻ Sync now') : null),
     signed ? h('div', { class: 'small muted', style: { marginTop: '8px' } }, `${s.google.email || 'signed in'}${s.google.lastSync ? ` · last sync ${new Date(s.google.lastSync).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}` : ''}`) : null));
+  if (signed) out.push(driveCard());
   if (signed) {
     const cals = rt.calendars;
     out.push(h('div', { class: 'card' }, h('div', { class: 'title' }, 'Calendars to show'),

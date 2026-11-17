@@ -375,15 +375,134 @@ export async function changesSince(tokenStr, maxPages = 20) {
 // ════════════════════════════════════════ the hub
 const P = (root) => ({ rotas: [root, 'Rotas'], hub: [root, 'hub'], citrus: [root, 'hub', 'citrus'], backups: [root, 'hub', 'citrus', 'backups'] });
 
+// ════════════════════════════════════════ folders found by tag (Citrus Drive layout, 17/11/2026)
+// Every app folder carries appProperties.citrusApp = <id>; category folders carry citrusArea = <id>. A tag survives moves and renames,
+// so Citrus (and every app that adopts it) finds a folder wherever it is. The old path stays the fallback until the folder is tagged.
+const tagCache = new Map();   // 'app:<id>' / 'area:<id>' → folder id ('' = looked, none), checked once per session
+async function taggedFolders(key, values) {
+  const out = {}, want = values.filter(v => !tagCache.has(`${key}:${v}`));
+  for (let i = 0; i < want.length; i += 20) {
+    const part = want.slice(i, i + 20), qs = part.map(v => `appProperties has { key='${key === 'app' ? 'citrusApp' : 'citrusArea'}' and value='${q(v)}' }`).join(' or ');
+    const p = new URLSearchParams({ q: `mimeType = '${FOLDER}' and trashed = false and (${qs})`, fields: 'files(id,name,parents,appProperties,createdTime,description)', pageSize: '200', spaces: 'drive' });
+    const j = await gfetch(`${DRIVE}/files?${p}`);
+    const files = (j.files || []).sort((a, b) => (a.createdTime || '').localeCompare(b.createdTime || ''));
+    for (const v of part) { const f = files.find(x => x.appProperties?.[key === 'app' ? 'citrusApp' : 'citrusArea'] === v); tagCache.set(`${key}:${v}`, f ? f.id : ''); if (f) { verified.add(f.id); tagMeta.set(f.id, f); } }
+  }
+  for (const v of values) out[v] = tagCache.get(`${key}:${v}`) || '';
+  return out;
+}
+const tagMeta = new Map();
+export async function taggedApp(id) { return (await taggedFolders('app', [id]))[id] || ''; }
+export async function taggedApps(list) { return taggedFolders('app', list); }
+export function forgetTags() { tagCache.clear(); }
+/** Citrus's own folder (state, plan, backups): by tag, else My Apps/hub/citrus. */
+async function citrusDir(root, { create = true } = {}) { return (await taggedApp('citrus')) || ensurePath(P(root).citrus, { create }); }
+async function backupsDir(root, { create = true } = {}) { const t = await taggedApp('citrus'); return t ? ensureChild(t, 'backups', create) : ensurePath(P(root).backups, { create }); }
+async function rotasDir(root, { create = true } = {}) { return (await taggedApp('rotas')) || ensurePath(P(root).rotas, { create }); }
+/** A sub-folder by name under a known folder id (cached like paths). */
+async function ensureChild(parentId, name, create = true) {
+  const key = `#${parentId}/${name}`;
+  if (ids[key] && await exists(ids[key])) return ids[key];
+  const found = (await list(parentId, { name, folders: true })).sort((a, b) => (a.createdTime || '').localeCompare(b.createdTime || ''))[0];
+  const id = found ? found.id : create ? await mkdir(name, parentId) : null;
+  if (id) { ids[key] = id; verified.add(id); persistIds(); }
+  return id;
+}
+/** An app's folder: by tag, else hub/<app>. */
+export async function appDir(root, app, { create = false } = {}) { return (await taggedApp(app)) || ensurePath([...P(root).hub, app], { create }); }
+
+async function patchMeta(id, body, params = '') {
+  return gfetch(`${DRIVE}/files/${encodeURIComponent(id)}?fields=id,name,parents,appProperties${params}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+}
+async function putText(folderId, name, text, mime = 'text/markdown') {
+  const { file } = await findFile(folderId, name);
+  if (file && file.appProperties?.h === fingerprint({ text })) return { id: file.id, skipped: true };
+  const boundary = 'citrus' + Date.now().toString(36);
+  const meta = file ? { appProperties: { h: fingerprint({ text }) } } : { name, parents: [folderId], mimeType: mime, appProperties: { h: fingerprint({ text }) } };
+  const payload = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: ${mime}; charset=UTF-8\r\n\r\n${text}\r\n--${boundary}--`;
+  return gfetch(`${UPLOAD}/files${file ? '/' + encodeURIComponent(file.id) : ''}?uploadType=multipart&fields=id`, { method: file ? 'PATCH' : 'POST', headers: { 'Content-Type': `multipart/related; boundary=${boundary}` }, body: payload });
+}
+
+/**
+ * Organise Drive into Citrus/ (owner, 17/11/2026), "tag first, move later":
+ *  1. Citrus/ and its area folders exist (tagged citrusArea).
+ *  2. Every app folder that exists (by tag, else its old place under My Apps) gets tagged citrusApp.
+ *  3. A folder moves (and takes its new name) only when R.readyToMove says its app and all its readers find folders by tag.
+ *  4. Citrus/00 Hub/Map.json + README.md describe every app, where it is, what it holds, who reads it.
+ *  5. The old "Citrus Maxima" folder (fallback only) goes to Archive; "My Apps" too once nothing is left in it.
+ * Nothing is deleted. `apps` = raw statuses by id. Returns a report.
+ */
+export async function organiseDrive(root, R, apps = {}, { move = true, dry = false } = {}) {
+  const rep = { created: [], tagged: [], moved: [], waiting: [], archived: [], missing: [] };
+  forgetTags();
+  // 1. root + areas
+  const areaIds = await taggedFolders('area', ['_root', ...R.AREAS.map(a => a.id), ...R.AREAS.flatMap(a => a.path.length > 1 ? [`_${a.path[0]}`] : [])]);
+  let top = areaIds._root;
+  if (!top && !dry) { top = await mkdir(R.ROOT, 'root', 'Everything your Citrus apps keep on Drive. See 00 Hub › README.md.'); await patchMeta(top, { appProperties: { citrusArea: '_root' } }); rep.created.push(R.ROOT); tagCache.set('area:_root', top); }
+  const areaDir = async (a) => {
+    if (areaIds[a.id]) return areaIds[a.id];
+    let parent = top;
+    if (a.path.length > 1) {   // Learning/Medicine: the Learning folder is shared by several areas
+      const pk = `_${a.path[0]}`, study = R.AREAS.find(x => x.path.length === 1 && x.path[0] === a.path[0]);
+      parent = areaIds[pk] || (study && areaIds[study.id]) || '';
+      if (!parent && !dry) { parent = await mkdir(a.path[0], top); await patchMeta(parent, { appProperties: { citrusArea: study ? study.id : pk } }); areaIds[pk] = parent; if (study) areaIds[study.id] = parent; rep.created.push(a.path[0]); }
+    }
+    if (dry) return '';
+    const id = await mkdir(a.path[a.path.length - 1], parent, a.blurb || ''); await patchMeta(id, { appProperties: { citrusArea: a.id } }); areaIds[a.id] = id; rep.created.push(a.path.join('/')); return id;
+  };
+  for (const a of R.AREAS) if (a.path.length === 1) await areaDir(a);
+  for (const a of R.AREAS) if (a.path.length > 1) await areaDir(a);
+  // 2. find + tag every app folder
+  const tagged = await taggedFolders('app', R.APPS.map(a => a.id)), found = {};
+  for (const a of R.APPS) {
+    let id = tagged[a.id];
+    if (!id) {
+      id = await ensurePath([root, ...a.legacy], { create: false });
+      if (id && !dry) { await patchMeta(id, { appProperties: { citrusApp: a.id } }); tagCache.set(`app:${a.id}`, id); rep.tagged.push(a.id); }
+    }
+    if (!id) { rep.missing.push(a.id); continue; }
+    const m = await fileMeta(id, 'id,name,parents');
+    found[a.id] = { id, name: m?.name, parents: m?.parents || [], path: '' };
+  }
+  // 3. move what is ready (owners first, so a folder that lives inside another app's folder has somewhere to go)
+  const order = [...R.APPS].sort((a, b) => (a.inside ? 1 : 0) - (b.inside ? 1 : 0));
+  for (const a of order) {
+    const f = found[a.id]; if (!f) continue;
+    const target = R.targetPath(a), name = target[target.length - 1];
+    const parentId = a.inside ? (found[a.inside]?.moved ? found[a.inside].id : '') : areaIds[a.area];
+    if (f.parents.includes(parentId) && f.name === name) { f.moved = true; continue; }
+    const r = R.readyToMove(a, apps);
+    if (!move || !r.ok || !parentId) { rep.waiting.push({ id: a.id, waitingFor: r.ok ? (parentId ? [] : [a.inside]) : r.waiting }); continue; }
+    if (!dry) await patchMeta(f.id, { name, description: a.blurb || '' }, `&addParents=${encodeURIComponent(parentId)}&removeParents=${encodeURIComponent(f.parents.join(','))}`);
+    f.moved = true; f.parents = [parentId]; f.name = name; rep.moved.push(a.id);
+  }
+  for (const a of R.APPS) if (found[a.id]) found[a.id].path = found[a.id].moved ? [R.ROOT, ...R.targetPath(a)].join('/') : [root, ...a.legacy].join('/');
+  // 5. archive leftovers (moves only; nothing deleted)
+  if (!dry && areaIds.archive) {
+    for (const stray of ['Citrus Maxima']) for (const f of await list('root', { name: stray, folders: true })) { await patchMeta(f.id, {}, `&addParents=${encodeURIComponent(areaIds.archive)}&removeParents=${encodeURIComponent((f.parents || []).join(','))}`); rep.archived.push(stray); }
+    const mine = await ensurePath([root], { create: false });
+    if (mine && R.APPS.every(a => !found[a.id] || found[a.id].moved)) {
+      const hub = await ensurePath(P(root).hub, { create: false }), hubKids = hub ? await list(hub, {}) : [], kids = await list(mine, {});
+      if (!hubKids.length && kids.every(k => k.id === hub)) { const pm = await fileMeta(mine, 'id,parents'); await patchMeta(mine, { name: `${root} (old layout)` }, `&addParents=${encodeURIComponent(areaIds.archive)}&removeParents=${encodeURIComponent((pm?.parents || []).join(','))}`); rep.archived.push(root); forgetFolders(); }
+    }
+  }
+  // 4. the map
+  const map = R.buildMap(found, apps);
+  if (!dry && areaIds.hub) { await putJson(areaIds.hub, 'Map.json', map, { omit: ['updatedAt'] }); await putText(areaIds.hub, 'README.md', R.readme(map)); }
+  rep.map = map;
+  return rep;
+}
+
+
 /** Folder ids Citrus watches in the changes feed. */
 export async function watchedFolders(root) {
-  const [rotas, hub, citrus] = await Promise.all([ensurePath(P(root).rotas), ensurePath(P(root).hub), ensurePath(P(root).citrus)]);
+  const [rotas, hub, citrus] = await Promise.all([rotasDir(root), ensurePath(P(root).hub, { create: false }), citrusDir(root)]);
   return { rotas, hub, citrus };
 }
 
 // Rotas: every spreadsheet (Google Sheets are exported as xlsx)
 export async function listRotaFiles(root) {
-  const id = await ensurePath(P(root).rotas);
+  const id = await rotasDir(root);
   const files = await list(id, { extra: `(mimeType='${XLSX}' or mimeType='${GSHEET}' or name contains '.xlsx')` });
   return files.map(f => ({ ...f, size: +f.size || 0, folderId: id }));
 }
@@ -392,7 +511,7 @@ export async function downloadRota(f) {
   return downloadFile(f.id);
 }
 export async function uploadRota(root, name, blob, fileId = null) {
-  const dir = await ensurePath(P(root).rotas);
+  const dir = await rotasDir(root);
   const boundary = 'citrus' + Date.now().toString(36);
   const meta = fileId ? { name } : { name, parents: [dir], mimeType: XLSX };
   const body = new Blob([`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: ${XLSX}\r\n\r\n`, blob, `\r\n--${boundary}--`]);
@@ -402,25 +521,28 @@ export async function uploadRota(root, name, blob, fileId = null) {
 }
 
 /** Every app's status.json under hub/ (read in parallel). Also returns where each one lives, for the changes feed. */
-export async function listAppStatus(root) {
-  const hub = await ensurePath(P(root).hub);
-  const folders = await list(hub, { folders: true });
+export async function listAppStatus(root, known = []) {
+  // tagged app folders first (wherever they live now), then anything still sitting in the old hub/ folder
+  const tagged = known.length ? await taggedApps(known) : {}, byFolder = new Map();
+  for (const [app, id] of Object.entries(tagged)) if (id && app !== 'citrus') byFolder.set(id, { id, app });
+  const hub = await ensurePath(P(root).hub, { create: false });
+  if (hub) for (const f of await list(hub, { folders: true })) { if (f.name === 'citrus' || byFolder.has(f.id)) continue; const app = f.appProperties?.citrusApp || f.name.toLowerCase(); if (app === 'citrus') continue; if (!Object.values(tagged).includes(f.id)) byFolder.set(f.id, { id: f.id, app, name: f.name }); }
   const apps = {}, fileToApp = {}, folderToApp = {};
-  await Promise.all(folders.filter(f => f.name !== 'citrus').map(async (f) => {
-    const app = f.name.toLowerCase();
-    folderToApp[f.id] = app; ids[`${root}/hub/${f.name}`] = f.id; verified.add(f.id);
+  await Promise.all([...byFolder.values()].map(async (f) => {
+    const app = f.app;
+    folderToApp[f.id] = app; if (f.name) ids[`${root}/hub/${f.name}`] = f.id; verified.add(f.id);
     try {
       const { file, twins } = await findFile(f.id, 'status.json'); if (!file) return;
       for (const t of twins) { trash(t.id).then(() => { stats.healed = (stats.healed || 0) + 1; }).catch(() => {}); }   // an app's own writer raced: newest wins, older twin to the trash (restorable 30 days)
       const data = await readJsonFile(file); if (data) { apps[app] = { ...data, _modified: file.modifiedTime, _folder: app }; fileToApp[file.id] = app; }
-    } catch (e) { console.warn('status', f.name, e.message); }
+    } catch (e) { console.warn('status', f.app, e.message); }
   }));
   persistIds();
   return { apps, fileToApp, folderToApp };
 }
 /** Another app's public hub file (e.g. hub/mandarin/shifts.json). Read only: Citrus never writes into another app's folder. */
 export async function readHubFile(root, app, name) {
-  const dir = await ensurePath([...P(root).hub, app], { create: false }); if (!dir) return null;
+  const dir = await appDir(root, app); if (!dir) return null;
   const { file } = await findFile(dir, name); return file ? readJsonFile(file) : null;
 }
 /** One status file by id (after the changes feed said it moved). */
@@ -428,13 +550,13 @@ export async function readStatusFile(fileId, app) {
   const meta = await fileMeta(fileId, 'id,modifiedTime,trashed'); if (!meta || meta.trashed) return null;
   const data = await readJsonFile({ id: fileId }); return data ? { ...data, _modified: meta.modifiedTime, _folder: app } : null;
 }
-export async function uploadAppStatus(root, app, obj) { const dir = await ensurePath([root, 'hub', app.toLowerCase()]); return putJson(dir, 'status.json', obj, { omit: [] }); }
-export async function writePlan(root, plan) { const dir = await ensurePath(P(root).citrus); return putJson(dir, 'plan.json', plan, { healTwins: true }); }
+export async function uploadAppStatus(root, app, obj) { const dir = await appDir(root, app.toLowerCase(), { create: true }); return putJson(dir, 'status.json', obj, { omit: [] }); }
+export async function writePlan(root, plan) { const dir = await citrusDir(root); return putJson(dir, 'plan.json', plan, { healTwins: true }); }
 
 // ── Citrus's own state: read with its revision, written only if nobody else wrote it since
 let seenState = null;   // {id, rev, modifiedTime} of the state.json we last read or wrote
 export async function loadRemoteState(root) {
-  const dir = await ensurePath(P(root).citrus);
+  const dir = await citrusDir(root);
   const { file, twins } = await findFile(dir, 'state.json');
   if (!file) { seenState = null; return null; }
   for (const t of twins) trash(t.id).catch(() => {});
@@ -459,7 +581,7 @@ export async function remoteStateMoved() {
   catch (e) { if (e.status === 404) return true; throw e; }
 }
 export async function saveRemoteState(root, state, { force = false } = {}) {
-  const dir = await ensurePath(P(root).citrus);
+  const dir = await citrusDir(root);
   if (!force && await remoteStateMoved()) { const e = new GoogleError('Another device saved first.', { status: 409 }); e.conflict = true; throw e; }
   const rev = `${Date.now().toString(36)}.${Math.random().toString(36).slice(2, 7)}`;
   const r = await putJson(dir, 'state.json', state, { props: { rev }, fileId: seenState?.id || null, always: force });
@@ -470,7 +592,7 @@ export function seenStateRev() { return seenState?.rev || ''; }
 
 // ── daily backups of state.json: hub/citrus/backups/state-YYYY-MM-DD.json, the newest 14 kept
 export async function backupDaily(root, state, dayKey) {
-  const dir = await ensurePath(P(root).backups);
+  const dir = await backupsDir(root);
   const name = `state-${dayKey}.json`;
   if (ids[`backup:${name}`]) return false;
   const existing = await list(dir, { extra: "name contains 'state-'" });
@@ -481,7 +603,7 @@ export async function backupDaily(root, state, dayKey) {
   return true;
 }
 export async function listBackups(root) {
-  const dir = await ensurePath(P(root).backups, { create: false }); if (!dir) return [];
+  const dir = await backupsDir(root, { create: false }); if (!dir) return [];
   return (await list(dir, { extra: "name contains 'state-'" })).sort((a, b) => b.name.localeCompare(a.name)).map(f => ({ id: f.id, name: f.name, date: f.name.slice(6, 16), size: +f.size || 0 }));
 }
 export async function readBackup(id) { return readJsonFile({ id }); }

@@ -1769,3 +1769,11 @@ nav.tabs .rail-only { display: none; }
 .place-note { opacity: .8; }
 
 nav.tabs button[hidden] { display: none !important; }
+
+/* Apps › All your apps (registry) */
+.dir-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
+.dir-app { display: flex; gap: 8px; align-items: center; padding: 6px 8px; border-radius: 10px; border: 1px solid var(--line, rgba(127,127,127,.25)); text-decoration: none; color: inherit; min-width: 0; border-left: 3px solid var(--c); }
+.dir-app .ic { font-size: 1.2em; }
+.dir-app .grow { display: flex; flex-direction: column; min-width: 0; }
+.dir-app .grow > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dir-app.quiet { opacity: .7; }
