@@ -107,6 +107,16 @@ const str = (v, d = '') => (typeof v === 'string' ? v : typeof v === 'number' ? 
 /** A clean copy of a state: every collection has the right container type, records that are not objects are dropped, and the
  *  few fields the views read without checking (rota people and days, plan ids, goal numbers, rule numbers) are repaired.
  *  Unknown top-level keys are kept as they are. `report.fixed` counts records dropped, `report.repaired` fields quietly put back in shape. Never throws. */
+// Data each app now owns. Once you finish the hand-over for an app (Settings › Your apps' data), settings.handedOver[app] is set and
+// Citrus stops keeping its copy on every device: the keys below are emptied whenever a state is cleaned, so another device's old copy
+// can't bring them back through a merge. A safety copy goes to Drive first (Citrus/00 Hub/Citrus/handed-over-<date>.json).
+export const HANDOVER = {
+  mandarin: ['jobs', 'offers', 'posts', 'rotaChanges'],
+  clementine: ['friends', 'outings', 'polls', 'wishlist', 'treats', 'contacts'],
+  calamansi: ['chores'],
+  bergamot: ['tasks', 'habits', 'habitLog', 'reflections', 'memos', 'dayLog', 'reminders'],
+  sudachi: ['media', 'mediaMeta'],
+};
 export function sanitize(input, report = { fixed: 0, notes: [] }) {
   const s = isObj(input) ? { ...input } : {};
   // `fixed`: records dropped (worth telling the user); `repaired`: fields put back in shape, quietly (old or odd but not lost)
@@ -186,6 +196,8 @@ export function sanitize(input, report = { fixed: 0, notes: [] }) {
   if (s.outbox !== undefined) { if (!Array.isArray(s.outbox)) { fix('outbox'); delete s.outbox; } else if (!s.outbox.every(isObj)) { fix('outbox[]'); s.outbox = s.outbox.filter(isObj); } }
   if (s.google !== undefined && !isObj(s.google)) { fix('google'); delete s.google; }
   if (s.updatedAt !== undefined && !Number.isFinite(s.updatedAt)) { s.updatedAt = Number.isFinite(+s.updatedAt) ? +s.updatedAt : 0; }
+  const ho = isObj(s.settings?.handedOver) ? s.settings.handedOver : null;
+  if (ho) for (const [app, keys] of Object.entries(HANDOVER)) if (ho[app]) for (const k of keys) if (s[k] !== undefined && Object.keys(s[k] || {}).length) s[k] = {};
   return s;
 }
 

@@ -130,12 +130,17 @@ async function gfetch(url, opts = {}) {
   let res, msg = '';
   for (let attempt = 0; ; attempt++) {
     stats.requests++;
-    try { res = await fetch(url, { ...opts, cache: 'no-store', headers: { ...(opts.headers || {}), Authorization: `Bearer ${token.access_token}` } }); }
+    // every request has a deadline (the family cloud model, Sudachi 1.4): a hung connection must never freeze syncing until the app is reopened
+    const size = opts.body ? (opts.body.byteLength ?? String(opts.body).length) : 0, ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = ctl ? setTimeout(() => ctl.abort(), opts.timeout || (size > 200000 ? 120000 : 30000)) : null;
+    try { res = await fetch(url, { ...opts, timeout: undefined, signal: ctl?.signal, cache: 'no-store', headers: { ...(opts.headers || {}), Authorization: `Bearer ${token.access_token}` } }); }
     catch (e) {
+      clearTimeout(timer); const late = e?.name === 'AbortError'; if (late) stats.timeouts = (stats.timeouts || 0) + 1;
       // a dropped connection: repeat requests that are safe to send twice, for ~25 s
       if ((SAFE.test(method) || opts.retrySafe) && attempt < 5) { stats.retries++; await backoff(attempt); continue; }
-      fail('Network error'); throw new GoogleError('Google couldn\'t be reached — the connection dropped.', { network: true, retryable: true });
+      fail(late ? 'Timed out' : 'Network error'); throw new GoogleError(late ? 'Google took too long to answer — Citrus tries again shortly.' : 'Google couldn\'t be reached — the connection dropped.', { network: true, retryable: true });
     }
+    clearTimeout(timer);
     msg = '';
     if (res.status === 403 || res.status === 429) { try { const j = await res.clone().json(); msg = `${j?.error?.message || ''} ${(j?.error?.errors || []).map(x => x.reason).join(' ')}`; } catch {} }
     const slowDown = res.status === 429 || (res.status === 403 && /rate ?limit|quota|userRateLimitExceeded|rateLimitExceeded/i.test(msg));
@@ -395,6 +400,8 @@ const tagMeta = new Map();
 export async function taggedApp(id) { return (await taggedFolders('app', [id]))[id] || ''; }
 export async function taggedApps(list) { return taggedFolders('app', list); }
 export function forgetTags() { tagCache.clear(); }
+/** A safety copy next to Citrus's state (e.g. the data handed over to the apps that now own it). Never overwritten: a new name each time. */
+export async function writeCitrusCopy(root, name, obj) { const dir = await citrusDir(root); return putJson(dir, name, obj, { always: true }); }
 /** Citrus's own folder (state, plan, backups): by tag, else My Apps/hub/citrus. */
 async function citrusDir(root, { create = true } = {}) { return (await taggedApp('citrus')) || ensurePath(P(root).citrus, { create }); }
 async function backupsDir(root, { create = true } = {}) { const t = await taggedApp('citrus'); return t ? ensureChild(t, 'backups', create) : ensurePath(P(root).backups, { create }); }

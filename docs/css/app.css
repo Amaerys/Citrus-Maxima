@@ -1777,3 +1777,8 @@ nav.tabs button[hidden] { display: none !important; }
 .dir-app .grow { display: flex; flex-direction: column; min-width: 0; }
 .dir-app .grow > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dir-app.quiet { opacity: .7; }
+
+/* Across your apps */
+.across .across-app { margin-top: 6px; }
+.across .chip.ok { border-color: var(--good, #4cc27a); }
+.across .chip.bad { border-color: var(--bad, #ff5f6d); }

@@ -21,16 +21,16 @@ g.put('old.json', g.path(['Citrus Maxima', 'Apps']), { x: 1 });
   const a2 = g.mkdir('Archive', top.id); a2.appProperties = { citrusArea: 'archive' }; a2.createdTime = new Date(Date.now() + 1000).toISOString();
   g.put('note.txt', a2.id, 'keep me', 'text/plain'); }
 const browser = await chromium.launch();
-async function device(label) {
+async function device(label, local = null) {
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block' }); await g.attach(ctx);
   const page = await ctx.newPage(); page.errors = []; page.on('pageerror', e => page.errors.push(e.message)); page.on('dialog', d => d.accept());
   await page.clock.setFixedTime(at); const fixed = at.getTime();
-  await page.addInitScript(({ fixed }) => { if (sessionStorage.getItem('__s')) return; sessionStorage.setItem('__s', '1'); localStorage.setItem('citrus.google', JSON.stringify({ access_token: 'tok', exp: fixed + 3600e3, email: 'tester@example.com' })); }, { fixed });
+  await page.addInitScript(({ fixed, local }) => { if (sessionStorage.getItem('__s')) return; sessionStorage.setItem('__s', '1'); localStorage.setItem('citrus.google', JSON.stringify({ access_token: 'tok', exp: fixed + 3600e3, email: 'tester@example.com' })); if (local) localStorage.setItem('citrus.state.v1', JSON.stringify(local)); }, { fixed, local });
   await page.goto(URL0); await page.waitForSelector('#view-today.active');
   await page.waitForFunction(() => JSON.parse(localStorage.getItem('citrus.state.v1') || '{}')?.google?.lastSync > 0, null, { timeout: 15000 }).catch(() => {}); await sleep(1500);
   return page;
 }
-const A = await device('A');
+const A = await device('A', { version: 1, updatedAt: 5, me: { name: 'Dr Test', id: '' }, settings: {}, media: { m1: { id: 'm1', kind: 'book', title: 'A Test Book', status: 'done', at: 5 } } });
 await A.click('#btnMore'); await sleep(300);
 check(await A.locator('.card:has-text("Drive layout")').count() === 1, 'Settings has the Drive layout card');
 await A.evaluate(() => { const b = [...document.querySelectorAll('.card button')].find(x => /Organise my Drive/.test(x.textContent)); b.click(); b.disabled = false; b.click(); }); await sleep(3000);   // two taps at once
@@ -54,6 +54,12 @@ check(g.path(['My Apps'], false), 'My Apps kept while apps still live there');
 // a second run changes nothing
 const n0 = g.files.size; await A.click('.card:has-text("Drive layout") button:has-text("Organise again")'); await sleep(2000);
 check(g.files.size === n0, `running again creates nothing new (${g.files.size - n0} new)`);
+// hand-over: Sudachi reports, so Citrus offers to stop keeping its old media copy; a safety copy goes to Drive first
+await A.click('#btnMore'); await sleep(300);
+{ const card = A.locator('.card:has-text("Your apps\' data")'); check(await card.count() === 1 && /Sudachi/.test(await card.innerText()), 'hand-over card lists Sudachi');
+  await card.locator('button:has-text("Hand over")').click(); await sleep(2500);
+  const copy = [...g.files.values()].find(f => /^handed-over-/.test(f.name) && !f.trashed); check(copy && /A Test Book/.test(copy.content.toString()), 'safety copy of the handed-over data on Drive');
+  const st = await A.evaluate(() => JSON.parse(localStorage.getItem('citrus.state.v1'))); check(!Object.keys(st.media || {}).length && st.settings.handedOver?.sudachi, 'Citrus no longer keeps the media copy'); }
 check(A.errors.length === 0, 'no page errors (A) ' + A.errors.join(' | '));
 // a fresh device: no cached ids, finds its state and Sudachi's moved status by tag
 const B = await device('B');

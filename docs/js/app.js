@@ -34,6 +34,7 @@ import * as KA from './calamansi.js';
 import * as BG from './bergamot.js';
 import * as SD from './sudachi.js';
 import * as REG from './registry.js';
+import * as IN from './insights.js';
 import { h, toast, safeUrl, keyOf, fromKey, addDays, startOfDay, sameDay, fmtDate, fmtDateShort, fmtTime, fmtMin, fmtDur, relDay, pad2, DAY_SHORT, DAY_NAMES, MONTHS, telLink, firstName, atMin, minsOf, uid } from './util.js';
 
 // ---------------- runtime state (not persisted) ----------------
@@ -204,7 +205,7 @@ function scheduleRemoteSave() {
   rt.saveDirty = true;
   clearTimeout(saveTimer);
   if (!G.isSignedIn() || !rt.online) return;   // stays dirty: the next sync saves it
-  saveTimer = setTimeout(() => saveStateNow().catch(e => console.warn('remote save failed', e.message)), 2500);
+  saveTimer = setTimeout(() => withDriveLock(() => saveStateNow()).catch(e => console.warn('remote save failed', e.message)), 2500);
 }
 function flushRemoteSave() { if (rt.saveDirty && G.isSignedIn() && rt.online) { clearTimeout(saveTimer); saveStateNow().catch(() => {}); } }
 async function saveStateNow() {
@@ -282,7 +283,15 @@ async function syncCalendar(force) {
   rt.calendarAt = Date.now();
 }
 
-async function refreshAll(manual, { full = false } = {}) {
+/** Only one tab talks to Drive at a time (Web Locks, as in the family cloud model); a second tab's sync is skipped, not queued. */
+function withDriveLock(fn, { wait = true } = {}) {
+  if (!navigator.locks?.request) return fn(true);
+  return navigator.locks.request('citrus-drive', wait ? {} : { ifAvailable: true }, (lock) => fn(!!lock));
+}
+function refreshAll(manual, opts = {}) {
+  return withDriveLock((got) => { if (!got) { if (manual) toast('Another Citrus window is syncing'); return; } return refreshAllNow(manual, opts); }, { wait: false });
+}
+async function refreshAllNow(manual, { full = false } = {}) {
   if (!rt.online && manual) { toast('Offline — Citrus syncs when you are back online'); return; }   // the real problem first (beta T09-25)
   if (!G.isSignedIn()) { if (manual) toast(G.wasSignedIn() ? 'Google needs a tap to reconnect' : S().settings.clientId ? 'Sign in to Google in Settings' : 'Add your Google client ID in Settings'); render(); return; }
   if (!rt.online) { if (manual) toast('You are offline'); return; }
@@ -860,7 +869,8 @@ function renderToday() {
   for (const c of DU.todayCards(now)) add(c.el, c.score, c.label);
   // people-ui scores its own card: the evening "tomorrow's postings not set" nudge stays above the fold (beta T04-05)
   if (!mdLive) add(PU.todayCard(), PU.todayScore(working), 'Nurses');
-  add(MU.inboxPanel(3), 96, 'From your apps');   // things sent in (postings, swaps, tasks) wait on Today too, not only in Mind
+  add(MU.inboxPanel(3), 96, 'From your apps');
+  add(acrossCard({ compact: true }), IN.behind(S()).length ? 62 : 30, 'Across your apps');   // things sent in (postings, swaps, tasks) wait on Today too, not only in Mind
   if (!mdLive) add(RU.todayCard(), 80, 'Contract dates');
   if (!wide) add(planCard(now), 70, 'Plan');   // the wide cockpit has its own Plan column
   if (KA.live(S())) { const k = calamansiToday(); add(k, KA.chores(S()).some(c => c.late > 0) ? 75 : 55, 'Home'); } else add(CU.todayCard(), CU.todayScore(), 'Home');   // an overdue chore moves above Plan (beta T05-29)
@@ -1761,6 +1771,7 @@ function renderPlan() {
   if (!Object.keys(s.rotas).length || !s.me) out.push(h('div', { class: 'banner' }, h('span', { class: 'grow' }, !Object.keys(s.rotas).length ? 'No rota loaded, so every day is planned as a free day. Import your rota first.' : 'Pick your row in Settings › Me so the plan can work around your shifts.'),
     h('button', { class: 'btn sm', onClick: () => show(!Object.keys(s.rotas).length ? 'rota' : 'more') }, !Object.keys(s.rotas).length ? 'Import' : 'Settings')));
   out.splice(1, 0, segBar);
+  { const ac = acrossCard(); if (ac) out.push(ac); }
   out.push(planWeekCard(days, now));
   const rv = reviewCard(); if (rv) out.push(rv);
   out.push(h('div', { class: 'plan-days' }, ...days.map(d => planDayCard(d, now))));
@@ -1949,6 +1960,46 @@ function appInfos() {
     return { name, st, has, meta, ageMin, fresh: ageMin != null && ageMin <= 36 * 60, done: doneOn(st, today), doneBefore: !!st.today?.done && !doneOn(st, today), asks, minutes, waiting, url: launchUrl(name, st, null) };
   });
 }
+// ───────── Hand-over: Citrus stops keeping copies of data other apps now own (no redundancy, a much smaller state.json)
+function handoverCard() {
+  const s = S(), pend = IN.handoverPending(s), done = Object.keys(s.settings.handedOver || {});
+  if (!pend.length && !done.length) return null;
+  const name = (id) => REG.byId(id)?.title || id, kb = (b) => b > 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1e3))} KB`;
+  return h('div', { class: 'card' }, h('div', { class: 'title' }, "Your apps' data"),
+    pend.length ? h('div', { class: 'small' }, 'Citrus still keeps its old copy of data these apps now own. Handing it over makes every sync lighter and leaves one copy of each thing:') : h('div', { class: 'small' }, 'Every app owns its own data; Citrus keeps none twice.'),
+    ...pend.map(p => h('div', { class: 'row' }, h('span', { class: 'small grow' }, name(p.app)), h('span', { class: 'tiny dim' }, `${p.count} item${p.count === 1 ? '' : 's'} · ${kb(p.bytes)}`))),
+    done.length ? h('div', { class: 'tiny dim', style: { marginTop: '4px' } }, `Handed over: ${done.map(name).join(', ')}`) : null,
+    pend.length ? h('div', { class: 'row wrap', style: { marginTop: '8px' } }, h('button', { class: 'btn primary', disabled: G.isSignedIn() ? null : '', onClick: async (e) => {
+      e.currentTarget.disabled = true;
+      try {
+        const apps = pend.map(p => p.app), part = IN.handoverPart(S(), apps), name = `handed-over-${keyOf(new Date())}-${Date.now().toString(36)}.json`;
+        await G.writeCitrusCopy(S().settings.driveFolder, name, { citrusHandover: 1, at: new Date().toISOString(), apps, note: 'What Citrus kept for these apps before handing over. Each app already has its own copy.', data: part });
+        store.update(st => ({ ...st, ...Object.fromEntries(apps.flatMap(a => IN.HANDOVER[a]).map(k => [k, {}])), settings: { ...st.settings, handedOver: { ...(st.settings.handedOver || {}), ...Object.fromEntries(apps.map(a => [a, Date.now()])) } } }));   // other devices empty theirs on their next merge (store.sanitize)
+        toast(`Handed over to ${apps.map(name).join(', ')} · a safety copy is in Citrus/00 Hub/Citrus`, 'ok');
+      } catch (err) { toast(`Not handed over: ${err.message}`, 'err'); }
+      render();
+    } }, 'Hand over'), h('span', { class: 'tiny dim' }, 'A safety copy goes to Drive first.')) : null);
+}
+// ───────── Across your apps: this week against each app's goals, what is behind, and how your shifts move the numbers
+function dayKindOf(k) {
+  const s = S(), d = fromKey(k); if (!d) return '';
+  const prev = dayInfo(s, addDays(d, -1)).mine, cur = dayInfo(s, d).mine;
+  if (prev?.shift?.type === 'N' && cur?.shift?.type !== 'N') return 'postnight';
+  if (!cur) return 'off';
+  return cur.shift?.type === 'N' ? 'night' : 'day';
+}
+function acrossCard({ compact = false } = {}) {
+  const s = S(), wk = IN.week(s), late = IN.behind(s), memo = new Map(), fx = IN.shiftEffects(s, (k) => { if (!memo.has(k)) memo.set(k, dayKindOf(k)); return memo.get(k); });
+  if (!wk.length) return null;
+  const val = (r) => `${Math.round(r.v * 10) / 10}${r.goal && !r.lower ? `/${r.goal}` : ''}${r.unit && r.unit !== 'h' && r.unit.length < 4 ? r.unit : r.unit === 'h' ? 'h' : ''}`;
+  if (compact) return h('div', { class: 'card' }, h('div', { class: 'row' }, h('div', { class: 'title grow' }, 'Across your apps'), h('button', { class: 'btn sm ghost', onClick: () => { rt.planSeg = 'week'; rt.showAcross = true; show('plan'); } }, 'More')),
+    late.length ? h('div', { class: 'small' }, `Behind: ${late.slice(0, 3).map(r => `${r.area} · ${r.label} ${val(r)}`).join(' · ')}`) : h('div', { class: 'small' }, 'Everything is on track this week ✓'),
+    fx[0] ? h('div', { class: 'tiny dim' }, IN.effectLine(fx[0])) : null);
+  return h('div', { class: 'card across' }, h('div', { class: 'title' }, 'Across your apps · this week'),
+    ...wk.map(g => h('div', { class: 'across-app' }, h('div', { class: 'tiny dim' }, g.area),
+      h('div', { class: 'chips' }, ...g.rows.map(r => h('span', { class: `chip ${r.ok === false ? 'bad' : r.ok ? 'ok' : ''}`, title: r.date }, `${r.label} ${val(r)}${r.ok ? ' ✓' : ''}`))))),
+    fx.length ? h('div', { style: { marginTop: '8px' } }, h('div', { class: 'tiny dim' }, 'With your shifts (last 60 days)'), ...fx.map(e => h('div', { class: 'small' }, IN.effectLine(e)))) : h('div', { class: 'tiny dim', style: { marginTop: '8px' } }, 'Shift patterns appear once your apps have a few weeks of history.'));
+}
 // ───────── Drive: one Citrus folder at the top of My Drive (owner, 17/11/2026) — tag first, move later (registry.js, G.organiseDrive)
 async function organiseNow({ quiet = false } = {}) {
   if (!S().settings.driveOrganise) store.update(s => ({ ...s, settings: { ...s.settings, driveOrganise: true } }), { silent: true });   // an interrupted first run carries on at the next full sync
@@ -2024,6 +2075,7 @@ function renderMore() {
       signed ? h('button', { class: 'btn', onClick: () => refreshAll(true) }, '↻ Sync now') : null),
     signed ? h('div', { class: 'small muted', style: { marginTop: '8px' } }, `${s.google.email || 'signed in'}${s.google.lastSync ? ` · last sync ${new Date(s.google.lastSync).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}` : ''}`) : null));
   if (signed) out.push(driveCard());
+  { const hc = handoverCard(); if (hc) out.push(hc); }
   if (signed) {
     const cals = rt.calendars;
     out.push(h('div', { class: 'card' }, h('div', { class: 'title' }, 'Calendars to show'),
