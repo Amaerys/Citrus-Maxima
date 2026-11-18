@@ -98,7 +98,7 @@ export function normalizeStatus(st, fallbackName = '') {
   }).filter(Boolean);
 
   return {
-    app, title: str(st.title, 40), icon: iconOf(st.icon), color: /^#[0-9a-f]{3,8}$/i.test(st.color || '') ? st.color : '', url: safeUrl(st.url || st.extra?.url),
+    app, title: str(st.title, 40), icon: iconOf(st.icon), color: /^#[0-9a-f]{3,8}$/i.test(st.color || '') ? st.color : '', url: safeUrl(st.url || st.extra?.url), logo: /^https:/.test(safeUrl(st.logo)) ? safeUrl(st.logo) : '',
     summary: str(st.summary), updatedAt, asks, pending, metrics, progress, inbox, actions, issues,
     next: st.next && typeof st.next === 'object' ? { title: str(st.next.title, 80), minutes: Math.max(0, +st.next.minutes || 0) } : null,
     today,

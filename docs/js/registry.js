@@ -49,6 +49,10 @@ export const APPS = [
   A('yuzu-data', 'Yuzu collection', 'Flashcards - Yuzu/collection & media', 'study', { icon: '🗂️', color: '#f2d34b', legacy: ['Yuzu'], owner: 'yuzu', inside: 'yuzu', readers: ['mephisto'], files: ['collection/', 'media/', 'backups/'], blurb: 'Cards, media, inbox', noApp: true }),
   A('handoff', 'Clinical reasoning inbox', 'Clinical reasoning inbox', 'handoffs', { icon: '🔁', color: '#9aa0b1', legacy: ['hub', 'handoff'], owner: 'buffer', readers: [], files: ['buffer_handoff*.json'], blurb: 'Cases Buffer leaves for the reasoning app', noApp: true }),
 ];
+// Each app's own logo: the 192 px icon every app in the family ships at <site>/icons/icon-192.png (its manifest icon).
+// A status.json may name another (logo). Where it fails to load, the emoji above shows instead.
+for (const a of APPS) if (!a.logo && a.url) a.logo = `${a.url}icons/icon-192.png`;
+
 export const byId = (id) => APPS.find(a => a.id === id) || null;
 /** Apps (not shared folders) for the Apps tab, grouped by area in layout order. */
 export function directory() {

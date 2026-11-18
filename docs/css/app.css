@@ -1782,3 +1782,12 @@ nav.tabs button[hidden] { display: none !important; }
 .across .across-app { margin-top: 6px; }
 .across .chip.ok { border-color: var(--good, #4cc27a); }
 .across .chip.bad { border-color: var(--bad, #ff5f6d); }
+/* App logos (apps-ui.appGlyph): the real icon over the emoji, which stays as the fallback */
+.ag { position: relative; display: inline-grid; place-items: center; width: 1.3em; height: 1.3em; line-height: 1; vertical-align: middle; flex: none; }
+.ag > img { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 26%; object-fit: cover; opacity: 0; transition: opacity .2s; }
+.ag.ok > img { opacity: 1; } .ag.ok > .ag-fb { visibility: hidden; }
+.app-av .ag, .ad-head .ic .ag, .ibx-ic .ag { width: 100%; height: 100%; } .app-av .ag > img, .ad-head .ic .ag > img, .ibx-ic .ag > img { border-radius: inherit; }
+.app-av:has(.ag.ok), .ad-head .ic:has(.ag.ok), .ibx-ic:has(.ag.ok) { overflow: hidden; padding: 0; }
+.c-chip .ag { width: 18px; height: 18px; } .dir-app .ic .ag { width: 28px; height: 28px; }
+.c-node .c-logo { pointer-events: none; } .c-node.has-logo .c-icon { opacity: 0; } .c-node.stale .c-logo { filter: grayscale(.6); opacity: .85; }
+@media (prefers-reduced-motion: reduce) { .ag > img { transition: none; } }

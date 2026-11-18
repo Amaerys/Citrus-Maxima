@@ -5,6 +5,7 @@ import { h, toast, keyOf, fromKey, addDays, startOfDay, fmtDate, relDay, DAY_SHO
 import { weekStartOf } from './planner.js';
 import * as M from './mind.js';
 import { ring, spark, bars, heat, radar, tree } from './mind-viz.js';
+import { appGlyph } from './apps-ui.js';
 import * as L from './media.js';
 import { initMedia, logReadingSheet, renderLibrary, renderNotes, mediaSearchItems, quickNote, quickLog } from './media-ui.js';
 
@@ -165,7 +166,7 @@ function inboxCard(limit = 4) {
 export const inboxPanel = inboxCard;
 export function inboxRow(p) {
   const it = p.item, meta = ctx.appMeta?.(p.app) || {};
-  return h('div', { class: 'ibx' }, h('span', { class: 'ibx-ic', style: { '--c': meta.color || 'var(--orange)' } }, meta.icon || '⚡'),
+  return h('div', { class: 'ibx' }, h('span', { class: 'ibx-ic', style: { '--c': meta.color || 'var(--orange)' } }, meta.icon || meta.logo ? appGlyph(meta.icon, meta.logo, meta.title) : '⚡'),
     h('div', { class: 'grow' }, h('div', { class: 'mtitle' }, it.title), it.type === 'posting' ? h('div', { class: 'tiny dim' }, `${it.postings.map(x => x.nurse).join(', ')}${it.from ? ` · from ${it.from}` : ''}`) : it.type === 'swap' ? h('div', { class: 'tiny dim' }, `${it.date}: you work ${it.code || 'nothing (off)'}${it.with ? ` · swapped with ${it.with}` : ''}`) : null, h('div', { class: 'msub' }, h('span', {}, meta.title || p.app), it.date ? h('span', {}, dueLabel(it.date)) : null, it.minutes ? h('span', {}, `${it.minutes}m`) : null, h('span', {}, it.type))),
     h('button', { class: 'btn sm primary', onClick: () => acceptProposal(p) }, (it.type === 'task' || it.type === 'note') && S().apps?.bergamot ? 'Got it' : it.type === 'event' ? 'Add event' : it.type === 'posting' ? 'Add as heard' : it.type === 'swap' ? 'Apply swap' : it.type === 'nurse' ? 'Apply' : 'Take'), h('button', { class: 'btn sm ghost', 'aria-label': 'Dismiss', onClick: () => up(s => M.dismissInbox(s, p.ref)) }, '✕'));
 }
@@ -582,7 +583,7 @@ export function receivedCard() {
 function recvBlock(app, list) {
   const meta = ctx.appMeta?.(app) || {};
   const val = (m) => `${m.goal ? `${m.last}/${m.goal}` : m.last}${m.unit ? (m.unit === '%' ? '%' : ` ${m.unit}`) : ''}`;
-  return h('div', { class: 'recv' }, h('div', { class: 'recv-h' }, h('span', { style: { color: meta.color } }, meta.icon || '⚡'), h('b', {}, meta.title || app)),
+  return h('div', { class: 'recv' }, h('div', { class: 'recv-h' }, h('span', { style: { color: meta.color } }, meta.icon || meta.logo ? appGlyph(meta.icon, meta.logo, meta.title) : '⚡'), h('b', {}, meta.title || app)),
     list.slice(0, 6).map(m => h('div', { class: 'recv-m' }, h('span', { class: 'grow' }, m.label), h('span', { class: 'recv-v' }, val(m)),
       h('span', { class: 'recv-s' }, spark(m.dates.slice(-14).map(d => m.cells[d].v), { w: 60, h: 18, fill: false, color: meta.color || 'var(--orange)' })))));
 }

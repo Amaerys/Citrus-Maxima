@@ -9,7 +9,7 @@ import * as PV from './plan-view.js';
 import { normalizeStatus, validateStatus, CONTRACT } from './inbound.js';
 import * as M from './mind.js';
 import * as MU from './mind-ui.js';
-import { constellation, appTabs } from './apps-ui.js';
+import { constellation, appTabs, appGlyph } from './apps-ui.js';
 import { boardModel, overlapModel } from './board.js';
 import * as SU from './social-ui.js';
 import * as CU from './chores-ui.js';
@@ -666,7 +666,7 @@ function actionChips(app, st, limit = 4) {
 }
 function actionsCard(apps) {
   const rows = Object.entries(apps).filter(([, st]) => (st.actions || []).length); if (!rows.length) return null;
-  return h('div', { class: 'card' }, h('div', { class: 'title' }, 'Jump straight in'), rows.map(([name, st]) => { const m = appMeta(name, st); return h('div', { class: 'jump' }, h('div', { class: 'recv-h' }, h('span', { style: { color: m.color } }, m.icon), h('b', {}, m.title)), actionChips(name, st, 6)); }));
+  return h('div', { class: 'card' }, h('div', { class: 'title' }, 'Jump straight in'), rows.map(([name, st]) => { const m = appMeta(name, st); return h('div', { class: 'jump' }, h('div', { class: 'recv-h' }, h('span', { style: { color: m.color } }, appGlyph(m.icon, m.logo, m.title)), h('b', {}, m.title)), actionChips(name, st, 6)); }));
 }
 
 // ---------------- alarms: Google Calendar pop-up reminders (your phone rings them even when Citrus is closed) ----------------
@@ -1293,7 +1293,7 @@ function blockRow(b, date, dayLabel = '') {
 function blockOpen(b) {
   if (/^app:(task|habit)-/.test(b.goalId || '')) return null;
   const app = b.app || guessApp(b.title); if (!app) return null; const st = mergedApps()[app] || {}, url = launchUrl(app, st, (st.actions || [])[0]), m = appMeta(app, st);
-  return url ? h('button', { class: 'btn sm ghost pl-open', title: `Open ${m.title}`, 'aria-label': `Open ${m.title}`, onClick: () => launch(app, (st.actions || [])[0]?.id) }, m.icon || '▸', h('span', { class: 'pl-open-t' }, m.title), ' ▸') : null;
+  return url ? h('button', { class: 'btn sm ghost pl-open', title: `Open ${m.title}`, 'aria-label': `Open ${m.title}`, onClick: () => launch(app, (st.actions || [])[0]?.id) }, m.icon || m.logo ? appGlyph(m.icon, m.logo, m.title) : '▸', h('span', { class: 'pl-open-t' }, m.title), ' ▸') : null;
 }
 const dayWord = (k) => { const r = relDay(fromKey(k)); return r === 'Today' || r === 'Tomorrow' ? r.toLowerCase() : fmtDateShort(fromKey(k)); };
 async function acceptBlock(k, b, { silent = false } = {}) {
@@ -1375,12 +1375,13 @@ function moveBlock(k, b, isSuggestion = false) {
 
 // Known apps: display defaults when a status file does not carry them
 // the family's names, icons and sites come from registry.js (every app in the Citrus project)
-const APP_META = Object.fromEntries(REG.APPS.filter(x => !x.noApp && x.id !== 'citrus' && x.url).map(x => [x.id, { title: x.title, icon: x.icon, color: x.color, url: x.url }]));
+const APP_META = Object.fromEntries(REG.APPS.filter(x => !x.noApp && x.id !== 'citrus' && x.url).map(x => [x.id, { title: x.title, icon: x.icon, logo: x.logo, color: x.color, url: x.url }]));
+const safeLogo = (u) => (/^https:/.test(safeUrl(u)) ? safeUrl(u) : '');
 function appMeta(name, st = {}) {
   const key = String(st.app || name || '').toLowerCase();
   const m = APP_META[key] || {};
   const mind = /^task-/.test(key) ? '◆' : /^habit-/.test(key) ? '●' : '';
-  return { key, title: st.title || m.title || name, icon: st.icon || m.icon || mind || (name[0] || '?').toUpperCase(), color: st.color || m.color || '#9aa0b1', url: safeUrl(st.url || st.extra?.url) || m.url || '' };
+  return { key, title: st.title || m.title || name, icon: st.icon || m.icon || mind || (name[0] || '?').toUpperCase(), color: st.color || m.color || '#9aa0b1', url: safeUrl(st.url || st.extra?.url) || m.url || '', logo: st.logo || m.logo || '' };
 }
 function appsCard() {
   const age = (min) => min == null ? 'time unreadable' : min < 2 ? 'just now' : ago(min);
@@ -1388,7 +1389,7 @@ function appsCard() {
     .sort((a, b) => (a.done ? 1 : 0) - (b.done ? 1 : 0) || b.minutes - a.minutes);
   return h('div', { class: 'card apps-today' }, h('div', { class: 'title' }, 'Your apps'),
     h('div', { class: 'list' }, ...rows.map(({ name, st, meta, minutes, done, asks, ageMin, url }) => h('div', { class: 'item' },
-      h('div', { class: 'avatar app-av', style: { '--c': meta.color }, 'aria-hidden': 'true' }, meta.icon),
+      h('div', { class: 'avatar app-av', style: { '--c': meta.color }, 'aria-hidden': 'true' }, appGlyph(meta.icon, meta.logo, meta.title)),
       h('div', { class: 'grow' },
         h('div', { class: 'name row' }, meta.title,
           done ? h('span', { class: 'chip off mini' }, 'done today') : minutes ? h('span', { class: 'chip mini' }, `~${minutes} min`) : null),
@@ -2027,7 +2028,7 @@ function directoryCard() {
     ...REG.directory().map(area => h('div', { class: 'dir-area' }, h('div', { class: 'tiny dim', style: { margin: '8px 0 2px' } }, area.title),
       h('div', { class: 'dir-grid' }, ...area.apps.map(a => { const st = apps[a.id], live = !!st, url = safeUrl(st?.url) || a.url;
         return h(url ? 'a' : 'div', { class: `dir-app ${live ? 'live' : 'quiet'}`, ...(url ? { href: `${url}${url.includes('?') ? '&' : '?'}from=citrus`, target: '_blank', rel: 'noopener' } : {}), style: { '--c': a.color }, title: a.blurb },
-          h('span', { class: 'ic' }, a.icon), h('span', { class: 'grow' }, h('b', {}, a.title), h('span', { class: 'tiny dim' }, live ? (st.summary || 'reporting').slice(0, 60) : a.url ? 'not reporting yet' : 'not online yet'))); })))));
+          h('span', { class: 'ic' }, appGlyph(a.icon, safeLogo(st?.logo) || a.logo, a.title)), h('span', { class: 'grow' }, h('b', {}, a.title), h('span', { class: 'tiny dim' }, live ? (st.summary || 'reporting').slice(0, 60) : a.url ? 'not reporting yet' : 'not online yet'))); })))));
 }
 function renderApps() {
   const apps = mergedApps(), info = appInfos();
@@ -2037,16 +2038,16 @@ function renderApps() {
   const pick = (name) => { appSel = name; render(); };
   const hero = h('div', { class: 'card constel' },
     h('div', { class: 'c-stats' }, [[`${reporting}/${info.length}`, 'reporting'], [totalMin ? fmtDur(totalMin) : '–', 'asked today'], [totalWait || '–', 'items waiting']].map(([v, l]) => h('div', {}, h('b', {}, String(v)), h('span', {}, l)))),
-    constellation(info.map(i => ({ key: i.name, icon: i.meta.icon, color: i.meta.color, badge: i.waiting, fresh: i.fresh, done: i.done, label: i.meta.title })), appSel, pick),
+    constellation(info.map(i => ({ key: i.name, icon: i.meta.icon, logo: i.meta.logo, color: i.meta.color, badge: i.waiting, fresh: i.fresh, done: i.done, label: i.meta.title })), appSel, pick),
     // one keyboard picker (roving tabindex, arrow keys); the stars above are a pointer shortcut only (beta T09-06, T09-23)
-    appTabs(info.map(i => ({ key: i.name, icon: i.meta.icon, color: i.meta.color, title: i.meta.title, fresh: i.fresh })), appSel, pick, 'app-panel'));
+    appTabs(info.map(i => ({ key: i.name, icon: i.meta.icon, logo: i.meta.logo, color: i.meta.color, title: i.meta.title, fresh: i.fresh })), appSel, pick, 'app-panel'));
   const detail = !cur ? null : (() => {
     const { st, meta } = cur;
     const status = cur.done ? 'Done today' : cur.fresh ? `Updated ${ago(cur.ageMin)}${cur.doneBefore ? ' · done on an earlier day' : ''}`
       : cur.has && cur.ageMin == null ? 'Reporting, but its time is unreadable' : cur.ageMin == null ? 'Not reporting yet' : `Quiet for ${ago(cur.ageMin).replace(' ago', '')}`;
     const counts = [cur.minutes ? `${fmtDur(cur.minutes)} asked today` : '', cur.waiting ? `${cur.waiting} item${cur.waiting === 1 ? '' : 's'} waiting` : ''].filter(Boolean).join(' · ');
     return h('div', { class: `card app-detail ${cur.fresh ? '' : 'stale'}`, id: 'app-panel', role: 'tabpanel', 'aria-labelledby': `app-tab-${String(cur.name).replace(/[^\w-]/g, '_')}`, style: { '--c': meta.color, '--c-soft': meta.color + '26' } },
-      h('div', { class: 'ad-head' }, h('div', { class: 'ic', 'aria-hidden': 'true' }, meta.icon), h('div', { class: 'grow' }, h('div', { class: 'nm' }, meta.title), h('div', { class: `ad-status ${cur.done ? 'ok' : cur.fresh ? '' : 'dim'}` }, h('i', {}), status), counts ? h('div', { class: 'tiny muted' }, counts) : null),
+      h('div', { class: 'ad-head' }, h('div', { class: 'ic', 'aria-hidden': 'true' }, appGlyph(meta.icon, meta.logo, meta.title)), h('div', { class: 'grow' }, h('div', { class: 'nm' }, meta.title), h('div', { class: `ad-status ${cur.done ? 'ok' : cur.fresh ? '' : 'dim'}` }, h('i', {}), status), counts ? h('div', { class: 'tiny muted' }, counts) : null),
         cur.url ? h('a', { class: 'btn primary', href: cur.url, target: '_blank', rel: 'noopener' }, 'Open ▸') : null),
       st.summary || st.next?.title ? h('div', { class: 'ad-sum' }, st.summary || st.next.title) : null,
       !cur.has ? h('div', { class: 'dim small' }, 'Open it once and sign in with Google. It will then write its status to Drive, and Citrus picks it up here.') : null,

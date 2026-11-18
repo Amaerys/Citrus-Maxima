@@ -1,0 +1,28 @@
+// App logos: the Apps tab shows each app's own icon-192.png, and the emoji where a logo fails. Run: node test/logos.mjs
+import { chromium } from '/opt/npm-tools/node_modules/playwright/index.mjs';
+import http from 'node:http'; import fs from 'node:fs'; import path from 'node:path';
+const here = path.dirname(new URL(import.meta.url).pathname), root = path.resolve(here, '../docs');
+const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.svg': 'image/svg+xml', '.png': 'image/png' };
+const server = http.createServer((req, res) => { let p = path.join(root, decodeURIComponent(req.url.split('?')[0])); if (p.endsWith('/')) p += 'index.html'; if (!fs.existsSync(p)) { res.writeHead(404); return res.end(); } res.writeHead(200, { 'content-type': mime[path.extname(p)] || 'application/octet-stream' }); fs.createReadStream(p).pipe(res); }).listen(0);
+await new Promise(r => server.on('listening', r)); const URL0 = `http://localhost:${server.address().port}/index.html`;
+let bad = 0; const check = (c, m) => { if (!c) { bad++; console.log('  ✗', m); } else console.log('  ✓', m); }; const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const png = fs.readFileSync(path.join(root, 'icons/icon-192.png'));
+const T = '2026-11-15T08:00:00Z', st = (app, title) => ({ app, title, summary: 'ok', updatedAt: T });
+const state = { apps: { mandarin: st('mandarin', 'Mandarin'), clementine: st('clementine', 'Clementine'), sudachi: st('sudachi', 'Sudachi') } };
+const browser = await chromium.launch(); const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block' }); const p = await ctx.newPage(); const errs = []; p.on('pageerror', e => errs.push(String(e)));
+const hits = [];
+await ctx.route(/github\.io\/.*icons\/icon-192\.png$/, (r) => { const u = r.request().url(); hits.push(u); return /sudachi/.test(u) ? r.fulfill({ status: 404, body: '' }) : r.fulfill({ status: 200, contentType: 'image/png', body: png }); });
+await p.clock.install({ time: new Date(2026, 10, 15, 11, 0) });
+await p.addInitScript((s) => { if (!localStorage.getItem('citrus.state.v1')) localStorage.setItem('citrus.state.v1', JSON.stringify(s)); }, state);
+await p.goto(URL0); await sleep(800);
+await p.click('nav.tabs button[data-view=apps]').catch(() => p.evaluate(() => { location.hash = '#apps'; })); await sleep(1200);
+const nodes = await p.$$eval('.c-node', ns => ns.map(n => ({ k: n.dataset.key, logo: n.classList.contains('has-logo'), img: !!n.querySelector('image') })));
+check(nodes.find(n => n.k === 'mandarin')?.logo, 'Mandarin star shows its logo');
+const su = nodes.find(n => n.k === 'sudachi'); check(su && !su.logo && !su.img, 'Sudachi logo failed: the emoji stays, no broken image');
+check(hits.some(u => u === 'https://mandarin-work.github.io/Mandarin/icons/icon-192.png'), 'logo url is <site>/icons/icon-192.png');
+check(await p.locator('.c-chip .ag.ok img').count() >= 2, 'chips carry the logos');
+check(await p.locator('.ad-head .ic .ag').count() === 1, 'detail card header has the logo');
+check(await p.locator('.dir-app .ic .ag.ok').count() >= 2, 'All your apps uses the logos');
+await p.screenshot({ path: '/tmp/claude-0/-home-claude/a1f5476a-0219-5c7e-9801-fd990059411a/scratchpad/logos.png', fullPage: true });
+check(errs.length === 0, 'no page errors ' + errs.join(' | '));
+await browser.close(); server.close(); console.log(bad ? `${bad} FAILED` : 'logos ok'); process.exit(bad ? 1 : 0);

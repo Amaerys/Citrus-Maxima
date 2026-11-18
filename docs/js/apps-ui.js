@@ -16,6 +16,17 @@ export function appIcon(icon, title = '') {
   const m = words.length > 1 ? words[0][0] + words[1][0] : words[0].slice(0, 2);
   return words.length > 1 ? m.toUpperCase() : m[0].toUpperCase() + m.slice(1).toLowerCase();
 }
+// An app's real logo (its icon-192.png) with the emoji/monogram underneath: the logo fades in once it loads and is dropped if it
+// fails (offline, an app without one), so nothing ever shows a broken image. Decorative: the app's name is always next to it.
+export function appGlyph(icon, logo, title = '') {
+  const fb = h('span', { class: 'ag-fb' }, appIcon(icon, title));
+  if (!logo) return h('span', { class: 'ag' }, fb);
+  const wrap = h('span', { class: 'ag' }, fb), img = h('img', { src: logo, alt: '', loading: 'lazy', decoding: 'async', referrerpolicy: 'no-referrer', draggable: 'false' });
+  img.addEventListener('load', () => wrap.classList.add('ok'));
+  img.addEventListener('error', () => img.remove());
+  if (img.complete && img.naturalWidth) wrap.classList.add('ok');
+  wrap.append(img); return wrap;
+}
 const isMono = (s) => /^[A-Za-z0-9?]{1,2}$/.test(s);
 // Monograms that collide ("Atlas Notes" and "Amber Notes" both "AN") try other letter pairs from the title until unique.
 function uniqueIcons(nodes) {
@@ -59,6 +70,14 @@ export function constellation(nodes, sel, onPick) {
       svg('circle', { r: r + 10, class: 'c-halo' }), svg('circle', { r: r + 4, class: 'c-track' }),
       svg('circle', { r: r + 4, class: 'c-arc', 'stroke-dasharray': `${nd.done ? circ : nd.fresh ? circ * 0.72 : 0} ${circ}`, transform: 'rotate(-90)' }),
       svg('circle', { r, class: 'c-body' }), (() => { const fs = Math.round(r * (mono ? 0.72 : 0.92)); const t = svg('text', { class: `c-icon ${mono ? 'mono' : ''}`, 'text-anchor': 'middle', y: (fs * 0.34).toFixed(1), 'font-size': fs }); t.textContent = icon; return t; })());
+    // the app's own logo over the emoji, clipped to the star: shown once loaded, removed if it fails
+    if (nd.logo) {
+      const id = `c-clip-${i}`, d = r * 2 - 2;
+      const img = svg('image', { href: nd.logo, x: -d / 2, y: -d / 2, width: d, height: d, 'clip-path': `url(#${id})`, class: 'c-logo', preserveAspectRatio: 'xMidYMid slice' });
+      img.addEventListener('load', () => g.classList.add('has-logo'));
+      img.addEventListener('error', () => img.remove());
+      g.append(svg('clipPath', { id }, svg('circle', { r: r - 1 })), img);
+    }
     g.firstChild.textContent = nd.label;
     if (nd.badge) {
       const br = R < 16 ? 7 : 9, txt = nd.badge > 99 ? '99+' : String(nd.badge);
@@ -81,7 +100,7 @@ export function appTabs(items, sel, onPick, panelId = 'app-panel') {
   const tabs = items.map(it => h('button', {
     class: `c-chip ${it.key === sel ? 'on' : ''} ${it.fresh ? '' : 'stale'}`, style: { '--c': it.color }, role: 'tab', id: `app-tab-${String(it.key).replace(/[^\w-]/g, '_')}`,
     'aria-selected': it.key === sel ? 'true' : 'false', 'aria-controls': panelId, tabindex: it.key === sel ? '0' : '-1', dataset: { key: it.key }, onClick: () => onPick(it.key),
-  }, h('span', { 'aria-hidden': 'true' }, appIcon(it.icon, it.title)), it.title));
+  }, h('span', { 'aria-hidden': 'true' }, appGlyph(it.icon, it.logo, it.title)), it.title));
   if (tabs.length && !items.some(it => it.key === sel)) tabs[0].tabIndex = 0;
   const list = h('div', { class: 'c-chips', role: 'tablist', 'aria-label': 'Your apps' }, tabs);
   list.addEventListener('keydown', (e) => {
