@@ -15,6 +15,11 @@ g.seed({ apps: { mandarin: st('mandarin'), sudachi: st('sudachi', { drive: { byT
 g.put('state.json', g.path(['My Apps', 'hub', 'citrus']), { me: { name: 'Dr Test' }, settings: {} });
 g.put('cards.json', g.path(['My Apps', 'Yuzu', 'collection']), { n: 1 });
 g.put('old.json', g.path(['Citrus Maxima', 'Apps']), { x: 1 });
+// a twin area folder left by an earlier race (two runs at once): it must be merged away, its contents kept
+{ const top = g.mkdir('Citrus', 'root'); top.appProperties = { citrusArea: '_root' };
+  const a1 = g.mkdir('Archive', top.id); a1.appProperties = { citrusArea: 'archive' };
+  const a2 = g.mkdir('Archive', top.id); a2.appProperties = { citrusArea: 'archive' }; a2.createdTime = new Date(Date.now() + 1000).toISOString();
+  g.put('note.txt', a2.id, 'keep me', 'text/plain'); }
 const browser = await chromium.launch();
 async function device(label) {
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block' }); await g.attach(ctx);
@@ -28,7 +33,9 @@ async function device(label) {
 const A = await device('A');
 await A.click('#btnMore'); await sleep(300);
 check(await A.locator('.card:has-text("Drive layout")').count() === 1, 'Settings has the Drive layout card');
-await A.click('.card:has-text("Drive layout") button:has-text("Organise my Drive")'); await sleep(2500);
+await A.evaluate(() => { const b = [...document.querySelectorAll('.card button')].find(x => /Organise my Drive/.test(x.textContent)); b.click(); b.disabled = false; b.click(); }); await sleep(3000);   // two taps at once
+{ const arch = [...g.files.values()].filter(f => f.name === 'Archive' && !f.trashed); check(arch.length === 1 && [...g.files.values()].some(f => f.name === 'note.txt' && f.parents.includes(arch[0].id)), 'twin area folder merged into the oldest, its file kept'); }
+{ const counts = {}; for (const f of g.files.values()) if (!f.trashed && f.mimeType.includes('folder') && f.appProperties?.citrusArea) counts[f.appProperties.citrusArea] = (counts[f.appProperties.citrusArea] || 0) + 1; check(Object.values(counts).every(n => n === 1), 'two taps at once make no twin folders ' + JSON.stringify(counts)); }
 const tree = g.tree().join('\n');
 const has = (re) => re.test(tree);
 check(has(/📁 Citrus\n/) && has(/📁 00 Hub/) && has(/📁 Work/) && has(/📁 Life/) && has(/📁 Learning/) && has(/📁 Medicine/) && has(/📁 Handoffs/) && has(/📁 Archive/), 'Citrus/ tree with its areas');

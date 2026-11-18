@@ -157,5 +157,5 @@ export function createFakeGoogle({ email = 'tester@example.com' } = {}) {
     for (const e of events) { const ev = { id: id('ev'), status: 'confirmed', ...e }; calendars.get('primary').events.set(ev.id, ev); }
   }
 
-  return { attach, seed, files, calendars, log, faults, tree, readJsonAt, path, put, touch, find };
+  return { attach, seed, mkdir, files, calendars, log, faults, tree, readJsonAt, path, put, touch, find };
 }

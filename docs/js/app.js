@@ -1951,10 +1951,11 @@ function appInfos() {
 }
 // ───────── Drive: one Citrus folder at the top of My Drive (owner, 17/11/2026) — tag first, move later (registry.js, G.organiseDrive)
 async function organiseNow({ quiet = false } = {}) {
+  if (!S().settings.driveOrganise) store.update(s => ({ ...s, settings: { ...s.settings, driveOrganise: true } }), { silent: true });   // an interrupted first run carries on at the next full sync
   const rep = await G.organiseDrive(S().settings.driveFolder, REG, S().apps || {});
-  store.update(s => ({ ...s, settings: { ...s.settings, driveOrganise: true, driveOrganisedAt: Date.now(), driveMap: { at: Date.now(), moved: rep.map.apps.filter(a => a.moved).map(a => a.id), waiting: rep.waiting.map(w => ({ id: w.id, waitingFor: w.waitingFor })), missing: rep.missing } } }), { silent: quiet });
+  store.update(s => ({ ...s, settings: { ...s.settings, driveOrganise: true, driveOrganisedAt: Date.now(), driveMap: { at: Date.now(), moved: rep.map.apps.filter(a => a.moved).map(a => a.id), waiting: rep.waiting.map(w => ({ id: w.id, waitingFor: w.waitingFor })), missing: rep.missing, errors: rep.errors.slice(0, 8) } } }), { silent: quiet });
   saveWatch(null);   // folders moved or were tagged: the next sync looks everything up again
-  if (!quiet) toast(`Drive organised: ${rep.tagged.length} tagged, ${rep.moved.length} moved${rep.waiting.length ? `, ${rep.waiting.length} waiting for their app` : ''}`, 'ok');
+  if (!quiet) toast(`Drive organised: ${rep.tagged.length} tagged, ${rep.moved.length} moved${rep.waiting.length ? `, ${rep.waiting.length} waiting for their app` : ''}${rep.errors.length ? ` · ${rep.errors.length} problem${rep.errors.length === 1 ? '' : 's'} (see Drive layout)` : ''}`, rep.errors.length ? 'err' : 'ok');
   return rep;
 }
 function driveCard() {
@@ -1963,6 +1964,7 @@ function driveCard() {
     h('div', { class: 'small' }, 'One "Citrus" folder at the top of your Drive, with every app in its area: 00 Hub, Work, Life, Learning (Medicine, Languages, Science, Tech), Handoffs, Archive. Citrus/00 Hub has Map.json and a README that list every folder, what it holds and who reads it.'),
     h('div', { class: 'tiny dim', style: { marginTop: '4px' } }, 'Apps find their folders by a tag, so folders move only when their app (and every app that reads them) is ready. Nothing is deleted.'),
     m ? h('div', { class: 'small', style: { marginTop: '8px' } }, `In place: ${m.moved.length ? m.moved.map(name).join(', ') : 'none yet'}`) : null,
+    m?.errors?.length ? h('div', { class: 'tiny bad' }, `Last run: ${m.errors.join(' · ')}`) : null,
     m?.waiting?.length ? h('div', { class: 'tiny dim' }, `Waiting: ${m.waiting.map(w => `${name(w.id)}${w.waitingFor?.length ? ` (for ${w.waitingFor.map(name).join(', ')})` : ''}`).join(' · ')}`) : null,
     h('div', { class: 'row wrap', style: { marginTop: '8px' } }, h('button', { class: 'btn primary', disabled: signed ? null : '', onClick: async (e) => { e.currentTarget.disabled = true; try { await organiseNow(); } catch (err) { toast(err.message, 'err'); } render(); } }, m ? 'Organise again' : 'Organise my Drive'),
       m ? h('span', { class: 'tiny dim' }, `Last run ${new Date(s.settings.driveOrganisedAt).toLocaleString('en-GB', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} · runs daily`) : null));

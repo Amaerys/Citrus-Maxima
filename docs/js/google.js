@@ -432,11 +432,28 @@ async function putText(folderId, name, text, mime = 'text/markdown') {
  *  5. The old "Citrus Maxima" folder (fallback only) goes to Archive; "My Apps" too once nothing is left in it.
  * Nothing is deleted. `apps` = raw statuses by id. Returns a report.
  */
-export async function organiseDrive(root, R, apps = {}, { move = true, dry = false } = {}) {
-  const rep = { created: [], tagged: [], moved: [], waiting: [], archived: [], missing: [] };
+let organising = null;   // one run at a time: the button and the daily step must never race (17/11: two runs made twin area folders)
+export function organiseDrive(...args) { if (!organising) organising = organiseRun(...args).finally(() => { organising = null; }); return organising; }
+async function organiseRun(root, R, apps = {}, { move = true, dry = false } = {}) {
+  const rep = { created: [], tagged: [], moved: [], waiting: [], archived: [], missing: [], merged: [], errors: [] };
   forgetTags();
   // 1. root + areas
   const areaIds = await taggedFolders('area', ['_root', ...R.AREAS.map(a => a.id), ...R.AREAS.flatMap(a => a.path.length > 1 ? [`_${a.path[0]}`] : [])]);
+  // twins of a tagged area folder (an earlier race): keep the oldest, move anything inside the others into it, trash the empty twins
+  if (!dry) {
+    const keys = ['_root', ...R.AREAS.map(a => a.id)], qs = keys.map(v => `appProperties has { key='citrusArea' and value='${q(v)}' }`);
+    for (let i = 0; i < qs.length; i += 20) {
+      const p = new URLSearchParams({ q: `mimeType = '${FOLDER}' and trashed = false and (${qs.slice(i, i + 20).join(' or ')})`, fields: 'files(id,name,appProperties,createdTime)', pageSize: '200', spaces: 'drive' });
+      const all = (await gfetch(`${DRIVE}/files?${p}`)).files || [];
+      for (const v of keys) {
+        const same = all.filter(f => f.appProperties?.citrusArea === v).sort((a, b) => (a.createdTime || '').localeCompare(b.createdTime || ''));
+        for (const twin of same.slice(1)) {
+          try { for (const kid of await list(twin.id, {})) await patchMeta(kid.id, {}, `&addParents=${encodeURIComponent(same[0].id)}&removeParents=${encodeURIComponent(twin.id)}`); await trash(twin.id); rep.merged.push(v); }
+          catch (e) { rep.errors.push(`area ${v}: ${e.message}`); }
+        }
+      }
+    }
+  }
   let top = areaIds._root;
   if (!top && !dry) { top = await mkdir(R.ROOT, 'root', 'Everything your Citrus apps keep on Drive. See 00 Hub › README.md.'); await patchMeta(top, { appProperties: { citrusArea: '_root' } }); rep.created.push(R.ROOT); tagCache.set('area:_root', top); }
   const areaDir = async (a) => {
@@ -455,14 +472,16 @@ export async function organiseDrive(root, R, apps = {}, { move = true, dry = fal
   // 2. find + tag every app folder
   const tagged = await taggedFolders('app', R.APPS.map(a => a.id)), found = {};
   for (const a of R.APPS) {
-    let id = tagged[a.id];
-    if (!id) {
-      id = await ensurePath([root, ...a.legacy], { create: false });
-      if (id && !dry) { await patchMeta(id, { appProperties: { citrusApp: a.id } }); tagCache.set(`app:${a.id}`, id); rep.tagged.push(a.id); }
-    }
-    if (!id) { rep.missing.push(a.id); continue; }
-    const m = await fileMeta(id, 'id,name,parents');
-    found[a.id] = { id, name: m?.name, parents: m?.parents || [], path: '' };
+    try {   // one app's folder failing never stops the rest; the error is kept in the report (and on the Drive layout card)
+      let id = tagged[a.id];
+      if (!id) {
+        id = await ensurePath([root, ...a.legacy], { create: false });
+        if (id && !dry) { await patchMeta(id, { appProperties: { citrusApp: a.id } }); tagCache.set(`app:${a.id}`, id); rep.tagged.push(a.id); }
+      }
+      if (!id) { rep.missing.push(a.id); continue; }
+      const m = await fileMeta(id, 'id,name,parents');
+      found[a.id] = { id, name: m?.name, parents: m?.parents || [], path: '' };
+    } catch (e) { rep.errors.push(`${a.id}: ${e.message}`); }
   }
   // 3. move what is ready (owners first, so a folder that lives inside another app's folder has somewhere to go)
   const order = [...R.APPS].sort((a, b) => (a.inside ? 1 : 0) - (b.inside ? 1 : 0));
@@ -473,8 +492,10 @@ export async function organiseDrive(root, R, apps = {}, { move = true, dry = fal
     if (f.parents.includes(parentId) && f.name === name) { f.moved = true; continue; }
     const r = R.readyToMove(a, apps);
     if (!move || !r.ok || !parentId) { rep.waiting.push({ id: a.id, waitingFor: r.ok ? (parentId ? [] : [a.inside]) : r.waiting }); continue; }
-    if (!dry) await patchMeta(f.id, { name, description: a.blurb || '' }, `&addParents=${encodeURIComponent(parentId)}&removeParents=${encodeURIComponent(f.parents.join(','))}`);
-    f.moved = true; f.parents = [parentId]; f.name = name; rep.moved.push(a.id);
+    try {
+      if (!dry) await patchMeta(f.id, { name, description: a.blurb || '' }, `&addParents=${encodeURIComponent(parentId)}&removeParents=${encodeURIComponent(f.parents.join(','))}`);
+      f.moved = true; f.parents = [parentId]; f.name = name; rep.moved.push(a.id);
+    } catch (e) { rep.errors.push(`move ${a.id}: ${e.message}`); }
   }
   for (const a of R.APPS) if (found[a.id]) found[a.id].path = found[a.id].moved ? [R.ROOT, ...R.targetPath(a)].join('/') : [root, ...a.legacy].join('/');
   // 5. archive leftovers (moves only; nothing deleted)
