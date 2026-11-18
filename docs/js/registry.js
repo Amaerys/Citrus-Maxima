@@ -19,13 +19,14 @@ export const AREAS = [
 ];
 const areaOf = (id) => AREAS.find(a => a.id === id);
 
-// readers: apps that open this folder besides its owner. '*' = every app (shared files such as plan.json and the rotas).
+// readers: apps that open this folder besides its owner (checked 18/11/2026 against each app's notes: Bassiet reads only its own folder and
+// the Yuzu inbox; Mephisto reads plan.json from the never-created hub/scheduler, so neither holds the shared folders back). '*' = every app.
 // legacy: where the folder is today ([] under the Drive folder setting, normally "My Apps").
 const A = (id, title, folder, area, extra = {}) => ({ id, title, folder, area, legacy: ['hub', id], readers: ['citrus', 'bergamot'], ...extra });
 export const APPS = [
-  A('citrus', 'Citrus', 'Citrus', 'hub', { icon: '🍊', color: '#ff8a1f', url: 'https://amaerys.github.io/Citrus-Maxima/', readers: ['*'], files: ['state.json', 'plan.json', 'backups/'], blurb: 'Your plan, goals and the hub' }),
-  A('claude', 'Claude inbox', 'Claude', 'hub', { icon: '✨', color: '#c58cff', url: '', readers: ['*'], files: ['status.json'], blurb: 'Things Claude sends you to accept', noApp: true }),
-  A('rotas', 'Rotas', 'Rotas', 'work', { icon: '📅', color: '#8fb3ff', legacy: ['Rotas'], readers: ['*'], files: ['*.xlsx'], blurb: 'Monthly rota spreadsheets', noApp: true }),
+  A('citrus', 'Citrus', 'Citrus', 'hub', { icon: '🍊', color: '#ff8a1f', url: 'https://amaerys.github.io/Citrus-Maxima/', readers: ['mandarin', 'clementine', 'calamansi', 'bergamot', 'sudachi', 'yuzu', 'orange', 'embergine', 'sinus', 'kumquat', 'buffer', 'galen', 'atls', 'lime', 'zest'], files: ['state.json', 'plan.json', 'backups/'], blurb: 'Your plan, goals and the hub' }),
+  A('claude', 'Claude inbox', 'Claude', 'hub', { icon: '✨', color: '#c58cff', url: '', readers: ['mandarin', 'bergamot'], files: ['status.json'], blurb: 'Things Claude sends you to accept', noApp: true }),
+  A('rotas', 'Rotas', 'Rotas', 'work', { icon: '📅', color: '#8fb3ff', legacy: ['Rotas'], readers: ['mandarin', 'orange', 'yuzu'], files: ['*.xlsx'], blurb: 'Monthly rota spreadsheets', noApp: true }),
   A('mandarin', 'Mandarin', 'Mandarin', 'work', { icon: '🍊', color: '#ff8a1f', url: 'https://mandarin-work.github.io/Mandarin/', readers: ['citrus', 'bergamot', 'clementine', 'calamansi', 'sudachi'], files: ['state.json', 'status.json', 'shifts.json'], blurb: 'Rotas, roster, nurses, leave, career' }),
   A('clementine', 'Clementine', 'People - Clementine', 'life', { icon: '🍊', color: '#ff6a3d', url: 'https://clementine-social.github.io/Clementine/', readers: ['citrus', 'bergamot', 'mandarin'], files: ['state.json', 'status.json', 'contacts.json'], blurb: 'Contacts, friends, outings' }),
   A('calamansi', 'Calamansi', 'Home & Kitchen - Calamansi', 'life', { icon: '🍋', color: '#9fd94a', url: 'https://calamansi-food.github.io/Calamansi/', files: ['state.json', 'status.json'], blurb: 'Chores, recipes, meals, bills, car' }),
